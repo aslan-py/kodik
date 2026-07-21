@@ -1,0 +1,19 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 80
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes — неиспользуемые импорты, undefined names
+    "I",    # isort — порядок импортов
+    "B",    # flake8-bugbear — мутабельные дефолты, голые except и т.д.
+    "UP",   # pyupgrade — актуальный синтаксис Python 3.12+
+    "C4",   # flake8-comprehensions
+    "RUF",  # ruff-specific rules
+]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"

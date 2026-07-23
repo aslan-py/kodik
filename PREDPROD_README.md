@@ -7,7 +7,7 @@
 
 ## План работы с ветками
 
-Так как нас всего двое, процесс простой. В качестве трекера задач используем: https://ru.yougile.com/?ysclid=mru8hisvq9183002331
+Так как нас всего двое, процесс простой. В качестве трекера задач используем: https://timon15.kaiten.ru/space/691698/boards
 
 ### Схема веток и защита
 
@@ -22,21 +22,44 @@
 ### Процесс разработки
 
 ```bash
-git checkout develop        # переходим на ветку develop
-git pull origin develop     # подтягиваем изменения
-git checkout -b Oleg/my-task  # создаём свою feature-ветку
-# ... пишешь код ...
+# 1. Переходишь на develop
+git checkout develop
+
+# 2. Запуливаешь свежие изменения
+git pull origin develop
+
+# 3. Переходишь на свою ветку (или создаёшь её)
+git checkout -b Oleg/my-task
+# или если ветка уже существует:
+git checkout Oleg/my-task
+
+# ... пишешь код в своей ветке ...
+
+# 4. Закоммитить все изменения
 git add .
-git commit -m "..."
-git push origin Oleg/my-task  # пушишь свою ветку
+git commit -m "Описание изменения"
+
+# 5. Мержишь develop в свою ветку
+git merge develop
+
+# Если были конфликты — решаешь их в редакторе, потом:
+git add .
+git commit -m "Merge develop into Oleg/my-task"
+
+# 6. Пушишь свою ветку на GitHub
+git push origin Oleg/my-task
 ```
+
+Если при merge конфликтов не было — git автоматически создал merge commit, можешь сразу на шаг 6 (push). `git add` и `git commit` нужны только если конфликты были.
+
+Потом создаёшь **Pull Request** на GitHub, вторая сторона review и мержит в `develop`.
 
 ### Процесс review и merge в develop
 
 1. На GitHub создаёшь **Pull Request** (`Oleg/my-task` → `develop`)
 2. CI автоматически запускает проверку (ruff, тесты)
 3. Второй разработчик **смотрит код и одобряет** (или просит изменения)
-4. После одобрения второй разработчик делает **Merge** в `develop`
+4. После одобрения второй разработчик делает **Merge** в `develop` (GitHub автоматически удалит feature-ветку)
 
 ### Процесс merge в main
 
@@ -80,4 +103,69 @@ pre-commit run ruff --all-files
 # Запустить только форматирование
 pre-commit run ruff-format --all-files
 ```
+
+## Поднятие разработческого окружения (Docker)
+
+### 4. Инициализация контейнеров
+
+```bash
+# Копируем шаблон переменных окружения
+cp .env.example .env
+
+# Поднимаем все контейнеры (Postgres, Redis, pgAdmin, Redis Commander)
+docker compose up -d
+```
+
+После запуска должны подняться 4 сервиса:
+- `kodik_postgres` — основная БД (порт 5432)
+- `kodik_redis` — кэш и message broker (порт 6379)
+- `kodik_pgadmin` — веб-интерфейс к Postgres (порт 5050)
+- `kodik_redis_commander` — веб-интерфейс к Redis (порт 8081)
+
+Проверить статус:
+```bash
+docker compose ps
+```
+
+### 5. Просмотр данных в Postgres через pgAdmin
+
+1. Откройте браузер и перейдите на **http://localhost:5050**
+2. Введите кредсы (из `.env`):
+   - Email: `admin@main.ru`
+   - Пароль: `kodik_pgadmin_dev_2026`
+3. После входа нажмите **Add New Server** в левой панели
+4. На вкладке **General** введите имя: `kodik_postgres`
+5. На вкладке **Connection** введите:
+   - Host name: `postgres` (имя сервиса в docker-compose)
+   - Port: `5432`
+   - Username: `kodik_admin` (из `.env`)
+   - Password: `kodik_dev_pass_2026` (из `.env`)
+   - Database: `kodik_db` (из `.env`)
+6. Нажмите **Save** — сервер добавлен, можете смотреть таблицы и выполнять SQL-запросы
+
+### 6. Просмотр данных в Redis через Redis Commander
+
+1. Откройте браузер и перейдите на **http://localhost:8081**
+2. Никаких кредсов не нужно — интерфейс сразу откроется
+3. Видите все ключи Redis, их типы (string, list, hash, set), значения
+4. Можете редактировать ключи прямо в UI
+
+### 7. Остановка окружения
+
+```bash
+# Остановить контейнеры (данные сохранятся в volumes)
+docker compose down
+
+# Остановить и удалить volumes (БД будет чистая при следующем up)
+docker compose down -v
+```
+
+### Быстрые ссылки для разработчика
+
+| Сервис | URL | Кредсы |
+|--------|-----|--------|
+| **pgAdmin** | http://localhost:5050 | admin@example.com / kodik_pgadmin_dev_2026 |
+| **Redis Commander** | http://localhost:8081 | — (не нужны) |
+| **Postgres** (прямое подключение) | localhost:5432 | kodik_admin / kodik_dev_pass_2026 |
+| **Redis** (прямое подключение) | localhost:6379 | пароль: kodik_dev_redis_pass_2026 |
 

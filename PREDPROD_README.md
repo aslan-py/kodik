@@ -77,7 +77,8 @@ cd kodik
 ### 2. Установить инструменты разработки
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt  # Тут чисто линтеры и прекомит
+pip install -r requirements.txt
 ```
 
 ### 3. Активировать pre-commit хуки (один раз)

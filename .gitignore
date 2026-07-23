@@ -1,5 +1,5 @@
-/ABOUT_PROJECT
 .mypy_cache
 .claude
 .env
 test_file.txt
+/venv

@@ -7,7 +7,7 @@
 
 ## План работы с ветками
 
-Так как нас всего двое, процесс простой. В качестве трекера задач используем: https://timon15.kaiten.ru/space/691698/boards
+В качестве трекера задач используем: https://timon15.kaiten.ru/space/691698/boards
 
 ### Схема веток и защита
 
@@ -165,8 +165,8 @@ docker compose down -v
 
 | Сервис | URL | Кредсы |
 |--------|-----|--------|
-| **pgAdmin** | http://localhost:5050 | admin@example.com / kodik_pgadmin_dev_2026 |
+| **pgAdmin** | http://localhost:5050 | admin@main.ru / password |
 | **Redis Commander** | http://localhost:8081 | — (не нужны) |
-| **Postgres** (прямое подключение) | localhost:5432 | kodik_admin / kodik_dev_pass_2026 |
-| **Redis** (прямое подключение) | localhost:6379 | пароль: kodik_dev_redis_pass_2026 |
+| **Postgres** (прямое подключение) | localhost:5432 | admin / password |
+| **Redis** (прямое подключение) | localhost:6379 | пароль: password |
 

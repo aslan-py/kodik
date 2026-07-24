@@ -170,3 +170,5 @@ docker compose down -v
 | **Postgres** (прямое подключение) | localhost:5432 | admin / password |
 | **Redis** (прямое подключение) | localhost:6379 | пароль: password |
 
+### По работе с БД и миграциями смотри alembic\README.md
+- Быстрая команда применения миграций, но только после того как поднимешь контейнер с БД `alembic upgrade head` - без неё у тебя БД будут пустыми

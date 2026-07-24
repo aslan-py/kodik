@@ -133,15 +133,15 @@ docker compose ps
 1. Откройте браузер и перейдите на **http://localhost:5050**
 2. Введите кредсы (из `.env`):
    - Email: `admin@main.ru`
-   - Пароль: `kodik_pgadmin_dev_2026`
+   - Пароль: `password`
 3. После входа нажмите **Add New Server** в левой панели
 4. На вкладке **General** введите имя: `kodik_postgres`
 5. На вкладке **Connection** введите:
    - Host name: `postgres` (имя сервиса в docker-compose)
    - Port: `5432`
-   - Username: `kodik_admin` (из `.env`)
-   - Password: `kodik_dev_pass_2026` (из `.env`)
-   - Database: `kodik_db` (из `.env`)
+   - Username: `admin` (POSTGRES_USER из `.env`)
+   - Password: `password` (POSTGRES_PASSWORD из `.env`)
+   - Database: `kodik_db` (POSTGRES_DB из `.env`)
 6. Нажмите **Save** — сервер добавлен, можете смотреть таблицы и выполнять SQL-запросы
 
 ### 6. Просмотр данных в Redis через Redis Commander

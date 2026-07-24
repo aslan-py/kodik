@@ -24,6 +24,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -130,16 +131,24 @@ class SearchTask(Base, Mixin, ActiveMixin):
     )
 
     __table_args__ = (
+        # Ловит дубли задач с ЗАДАННЫМ триггером (trigger_id NOT NULL).
         UniqueConstraint(
             'competitor_id',
             'source_id',
             'trigger_id',
             name='uq_search_task_config',
         ),
+        # Ловит дубли задач БЕЗ триггера (trigger_id IS NULL): обычный UNIQUE
+        # их не видит, т.к. в Postgres NULL != NULL. Partial unique index
+        # закрывает именно этот случай.
+        Index(
+            'uq_search_task_no_trigger',
+            'competitor_id',
+            'source_id',
+            unique=True,
+            postgresql_where=text('trigger_id IS NULL'),
+        ),
     )
-    # ВНИМАНИЕ: в Postgres NULL != NULL, поэтому строки с trigger_id=NULL
-    # этот constraint от дублей НЕ защитит. Полная защита — partial unique
-    # index с COALESCE(trigger_id, 0), добавить в Alembic-миграции.
 
 
 class RawItem(Base, Mixin):

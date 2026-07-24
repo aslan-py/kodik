@@ -1,4 +1,20 @@
-sqlalchemy>=2.0,<3.0
-alembic>=1.13,<2.0
-asyncpg>=0.30,<1.0
-python-dotenv>=1.0,<2.0
+# ===== Database =====
+sqlalchemy>=2.0,<3.0      # ORM для работы с БД
+alembic>=1.13,<2.0        # управление миграциями БД
+asyncpg>=0.30,<1.0        # асинхронный драйвер для Postgres
+python-dotenv>=1.0,<2.0   # загрузка переменных из .env
+
+# ===== Web API =====
+fastapi>=0.104,<1.0       # фреймворк для REST API
+pydantic>=2.0,<3.0        # валидация и сериализация данных
+pydantic-settings>=2.0,<3.0  # типизированный конфиг из .env
+
+# ===== Server =====
+uvicorn>=0.24,<1.0        # ASGI-сервер для FastAPI
+
+# ===== Cache & Message Broker =====
+redis>=5.0,<6.0           # клиент Redis (синхронный, для Celery)
+aioredis>=2.0,<3.0        # асинхронный клиент Redis (для кэширования)
+
+# ===== Task Queue =====
+celery>=5.3,<6.0          # распределённая очередь задач

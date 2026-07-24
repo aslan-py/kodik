@@ -17,6 +17,7 @@ RawItem ActiveMixin не использует — вместо флага у н�
 Nullability берётся из аннотации Mapped: Mapped[str] -> NOT NULL,
 Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 """
+
 import enum
 from datetime import UTC, datetime
 
@@ -37,7 +38,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from core.database import ActiveMixin, Base, Mixin
 
 
-class RawItemStatus(str, enum.Enum):
+class RawItemStatus(enum.StrEnum):
     """Статус снимка (выгрузки) в raw_item.
 
     new/changed = новая строка (история версий); error = сбой сбора.
@@ -63,8 +64,7 @@ class Trigger(Base, Mixin, ActiveMixin):
         String(128),
         unique=True,
         comment=(
-            'Само поисковое слово/навык '
-            '(например, Юрист, Python, Django, Суд)'
+            'Само поисковое слово/навык (например, Юрист, Python, Django, Суд)'
         ),
     )
 
@@ -125,8 +125,7 @@ class SearchTask(Base, Mixin, ActiveMixin):
     trigger_id: Mapped[int | None] = mapped_column(
         ForeignKey('trigger.id', ondelete='RESTRICT'),
         comment=(
-            'По какому слову ищем '
-            '(опционально, NULL = парсим источник в лоб)'
+            'По какому слову ищем (опционально, NULL = парсим источник в лоб)'
         ),
     )
 
@@ -181,8 +180,7 @@ class RawItem(Base, Mixin):
     content_hash: Mapped[str | None] = mapped_column(
         String(64),
         comment=(
-            'Хэш от JSON контента для сверки через Redis. '
-            'NULL при status=error'
+            'Хэш от JSON контента для сверки через Redis. NULL при status=error'
         ),
     )
     raw_data: Mapped[dict | None] = mapped_column(
@@ -202,8 +200,7 @@ class RawItem(Base, Mixin):
     source_request_url: Mapped[str | None] = mapped_column(
         String(512),
         comment=(
-            'Ссылка на оригинальный веб-запрос парсера. '
-            'NULL при ранней ошибке'
+            'Ссылка на оригинальный веб-запрос парсера. NULL при ранней ошибке'
         ),
     )
     error_message: Mapped[str | None] = mapped_column(

@@ -11,6 +11,7 @@
 Используется парсерами, Celery-тасками, скриптами напрямую.
 FastAPI-обвязка (Depends) добавляется отдельно в api/deps.py.
 """
+
 import re
 from collections.abc import AsyncGenerator
 
@@ -57,7 +58,10 @@ class ActiveMixin:
     is_active: Mapped[bool] = mapped_column(
         default=True,
         server_default=text('true'),
-        comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем',
+        comment=(
+            'Мягкое выключение записи: не участвует в выборках, '
+            'из БД не удаляем'
+        ),
     )
 
 

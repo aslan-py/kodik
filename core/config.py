@@ -7,6 +7,7 @@ host, port, db) берутся из переменных POSTGRES_*, а database
 
 Используется везде: database.py (engine), Alembic (env.py), воркеры.
 """
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

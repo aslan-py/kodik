@@ -7,8 +7,8 @@
 env.py трогать не нужно.
 """
 
-import src.bp1  # noqa: F401 — Trigger, Competitor, Source, SearchTask, RawItem
-# import src.bp2
+import src.bp1
+import src.bp2  # noqa: F401 — Region, BlackDomain, StopWord, TopicLimit, NormalizedItem
 # import src.bp3
 # import src.bp4
 # import src.bp5

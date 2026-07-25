@@ -9,6 +9,7 @@
 
 В качестве трекера задач используем: https://timon15.kaiten.ru/space/691698/boards
 Вот тут смотри план нашей базы данных  https://dbdiagram.io/d/6a5a1979067336e1de9aafbb
+Оставлю тут первоисточник городов РФ https://github.com/pensnarik/russian-cities ( или более расширенный на всякий случай https://github.com/arbaev/russia-cities)
 
 ### Схема веток и защита
 

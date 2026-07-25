@@ -666,10 +666,16 @@ Table raw_item {
 
 // 6. Справочник регионов (нормализация: сырое имя -> красивое имя). Зона разработчика
 Table region {
-  id int [pk, increment, note: "Уникальный ID региона"]
-  name_raw varchar [not null, unique, note: "Как приходит в данных: 'Калуга', 'г. Калуга'. КЛЮЧ ПОИСКА при нормализации"]
-  name_display varchar [not null, note: "Красивое имя для витрины/карты: 'Калуга'. По нему группируем в дашборде"]
-  macro_region varchar [null, note: "Федеральный округ: ЦФО, ЮФО — для карты рынка"]
+  id           int     [pk, increment, note: "Уникальный ID региона"]
+  name_display varchar [not null, unique, note: "Каноническое имя для витрины и карты: 'Волгоград'. По нему группируем в дашборде"]
+  name_aliases text[]  [null, note: "Варианты написания в нижнем регистре: ['волгоград', 'г. волгоград', 'г волгоград']. Lookup: lower(:raw) = ANY(name_aliases). GIN-индекс ix_region_name_aliases"]
+  macro_region varchar [null, note: "Федеральный округ: Сибирский, Южный и т.д."]
+  latitude     float   [null, note: "Широта центра региона (WGS-84), для карты рынка"]
+  longitude    float   [null, note: "Долгота центра региона (WGS-84), для карты рынка"]
+
+  indexes {
+    name_aliases [type: gin, name: "ix_region_name_aliases", note: "Быстрый поиск по ANY(name_aliases)"]
+  }
 }
 
 // 7. Справочник чёрных доменов (публикаторы, которых выкидываем целиком). Зона аналитика

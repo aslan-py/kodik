@@ -18,4 +18,3 @@ aioredis>=2.0,<3.0        # асинхронный клиент Redis (для к
 
 # ===== Task Queue =====
 celery>=5.3,<6.0          # распределённая очередь задач
-data>=jfgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg

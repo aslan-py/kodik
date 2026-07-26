@@ -18,12 +18,10 @@ Nullability берётся из аннотации Mapped: Mapped[str] -> NOT NU
 Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 """
 
-import enum
 from datetime import UTC, datetime
 
 from sqlalchemy import (
     DateTime,
-    Enum,
     ForeignKey,
     Index,
     String,
@@ -36,19 +34,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import ActiveMixin, Base, Mixin
-
-
-class RawItemStatus(enum.StrEnum):
-    """Статус снимка (выгрузки) в raw_item.
-
-    new/changed = новая строка (история версий); error = сбой сбора.
-    Если хэш совпал (ничего не изменилось) — новую строку НЕ создаём и статус
-    НЕ трогаем, только обновляем updated_at у последней строки.
-    """
-
-    new = 'new'
-    changed = 'changed'
-    error = 'error'
+from core.enums import RawItemStatus, raw_item_status
 
 
 class Trigger(Base, Mixin, ActiveMixin):
@@ -169,7 +155,7 @@ class RawItem(Base, Mixin):
         ),
     )
     status: Mapped[RawItemStatus] = mapped_column(
-        Enum(RawItemStatus, name='raw_item_status'),
+        raw_item_status,
         default=RawItemStatus.new,
         server_default=text("'new'"),
         comment=(

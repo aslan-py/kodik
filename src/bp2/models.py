@@ -16,13 +16,11 @@ Nullability — только через аннотацию Mapped: Mapped[str] -
 Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 """
 
-import enum
 from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     Date,
     DateTime,
-    Enum,
     Float,
     ForeignKey,
     Index,
@@ -39,54 +37,18 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import ActiveMixin, Base, Mixin
-
-# ============================================================================
-#  Enums
-# ============================================================================
-
-
-class StopType(enum.StrEnum):
-    """Тип записи в таблице stop_word."""
-
-    stop_word = 'stop_word'
-    stop_topic = 'stop_topic'
-    false_positive = 'false_positive'
-
-
-class LimitScope(enum.StrEnum):
-    """Разрез агрегации для антишум-лимита."""
-
-    competitor = 'competitor'
-    source = 'source'
-    media = 'media'
-    region = 'region'
-
-
-class LimitWindow(enum.StrEnum):
-    """Временное окно для антишум-лимита."""
-
-    run = 'run'
-    day = 'day'
-    week = 'week'
-
-
-class NormStatus(enum.StrEnum):
-    """Статус нормализованного события."""
-
-    ok = 'ok'
-    rejected = 'rejected'
-
-
-class RejectReason(enum.StrEnum):
-    """Причина отсева нормализованного события."""
-
-    black_domain = 'black_domain'
-    stop_word = 'stop_word'
-    stop_topic = 'stop_topic'
-    false_positive = 'false_positive'
-    noise_limit = 'noise_limit'
-    parse_error = 'parse_error'
-
+from core.enums import (
+    LimitScope,
+    LimitWindow,
+    NormStatus,
+    RejectReason,
+    StopType,
+    limit_scope,
+    limit_window,
+    norm_status,
+    reject_reason_t,
+    stop_type,
+)
 
 # ============================================================================
 #  Справочники BP-2
@@ -184,7 +146,7 @@ class StopWord(Base, Mixin, ActiveMixin):
         ),
     )
     type: Mapped[StopType] = mapped_column(
-        Enum(StopType, name='stop_type'),
+        stop_type,
         comment=(
             'stop_word — стоп-слово; stop_topic — стоп-тема; '
             'false_positive — ложное срабатывание'
@@ -210,7 +172,7 @@ class TopicLimit(Base, Mixin, ActiveMixin):
     """
 
     scope: Mapped[LimitScope] = mapped_column(
-        Enum(LimitScope, name='limit_scope'),
+        limit_scope,
         comment=(
             'По какой группе считаем долю: competitor / source / media / region'
         ),
@@ -223,7 +185,7 @@ class TopicLimit(Base, Mixin, ActiveMixin):
         ),
     )
     window: Mapped[LimitWindow] = mapped_column(
-        Enum(LimitWindow, name='limit_window'),
+        limit_window,
         default=LimitWindow.week,
         server_default=sa_text("'week'"),
         comment='Окно подсчёта: run — один прогон, day — сутки, week — неделя',
@@ -325,13 +287,13 @@ class NormalizedItem(Base, Mixin):
         ),
     )
     status: Mapped[NormStatus] = mapped_column(
-        Enum(NormStatus, name='norm_status'),
+        norm_status,
         default=NormStatus.ok,
         server_default=sa_text("'ok'"),
         comment='ok → идут в BP-3; rejected → помечены, не удаляем',
     )
     reject_reason: Mapped[RejectReason | None] = mapped_column(
-        Enum(RejectReason, name='reject_reason_t'),
+        reject_reason_t,
         comment='Причина отсева. NULL для status=ok',
     )
     created_at: Mapped[datetime] = mapped_column(

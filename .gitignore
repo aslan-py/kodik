@@ -3,3 +3,6 @@
 .env
 test_file.txt
 /venv
+gg.py
+__pycache__/
+.ruff_cache

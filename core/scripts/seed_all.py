@@ -27,7 +27,6 @@ clear_data (он чистит данные, справочники оставл�
 import asyncio
 import hashlib
 import json
-import re
 import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -59,6 +58,7 @@ from src.bp1.models import (  # noqa: E402
     Source,
     Trigger,
 )
+from src.bp2.dedup import make_dedup_key  # noqa: E402
 from src.bp2.models import (  # noqa: E402
     BlackDomain,
     NormalizedItem,
@@ -224,9 +224,9 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'нарушения закона о защите прав пассажиров ',
                 'text': '<p>Проверка показала&nbsp;нарушения. '
                 '&laquo;Топ-Сервис&raquo; получил представление.</p>',
-                'date': '25.06.2026',
+                'published_at': '25.06.2026',
                 'region': 'Калуга',
-                'media': 'Big-news.ru, Москва',
+                'media_name': 'Big-news.ru, Москва',
             },
             {
                 'url': 'https://big-news.ru/kaluga/12046',
@@ -234,18 +234,18 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'пассажиров ж/д транспорта',
                 'text': 'Продолжение темы&mdash;прокуратура выявила '
                 'нарушения у перевозчика.',
-                'date': '25 июня 2026 г.',
+                'published_at': '25 июня 2026 г.',
                 'region': '  калуга ',
-                'media': 'Big-news.ru, Москва',
+                'media_name': 'Big-news.ru, Москва',
             },
             {
                 'url': 'https://www.cnews.ru/news/2026/06/24/conf',
                 'title': 'Конференция CNews &laquo;Оптимизация цифровой '
                 'инфраструктуры 2026&raquo;',
                 'text': 'Топ-Сервис выступил партнёром конференции.',
-                'date': '24.06.2026',
+                'published_at': '24.06.2026',
                 'region': 'Москва',
-                'media': 'CNews.ru',
+                'media_name': 'CNews.ru',
             },
         ],
     ),
@@ -258,9 +258,9 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'смягчили меру пресечения',
                 'text': 'Суд смягчил меру пресечения фигуранту, связанному '
                 'с МУП &laquo;Школьное питание&raquo;.',
-                'date': '25.06.2026',
+                'published_at': '25.06.2026',
                 'region': 'Нефтеюганск',
-                'media': 'Рамблер/новости',
+                'media_name': 'Рамблер/новости',
             },
         ],
     ),
@@ -272,27 +272,27 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'title': 'Как волгоградские  предприниматели развивают '
                 'социальный бизнес',
                 'text': 'Среди участников — сеть &laquo;Виво Маркет&raquo;.',
-                'date': '25.06.2026',
+                'published_at': '25.06.2026',
                 'region': 'Волгоград',
-                'media': 'V1.ru, Волгоград',
+                'media_name': 'V1.ru, Волгоград',
             },
             {
                 'url': 'https://www.forbes.ru/biznes/456-den',
                 'title': 'День широко распахнутых дверей '
                 'и кешбэк во&nbsp;благо',
                 'text': '<b>Виво Маркет</b> провёл акцию для покупателей.',
-                'date': '27.06.2026',
+                'published_at': '27.06.2026',
                 'region': 'ВОЛГОГРАД',
-                'media': 'Forbes, Москва',
+                'media_name': 'Forbes, Москва',
             },
             {
                 'url': 'https://volgaprom.expert/news/789',
                 'title': 'VR-очки, дегустация, карта желаний: ярмарка '
                 'вакансий Волгограда',
                 'text': 'Виво Маркет представил стенд на ярмарке.',
-                'date': '23.06.2026',
+                'published_at': '23.06.2026',
                 'region': 'г. Волгоград',
-                'media': 'ВолгаПромЭксперт',
+                'media_name': 'ВолгаПромЭксперт',
             },
         ],
     ),
@@ -303,44 +303,44 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'url': 'https://argumenti.ru/irkutsk/2026/06/35let',
                 'title': '35 лет со вкусом и качеством от Комбината питания',
                 'text': 'Предприятие отмечает юбилей.',
-                'date': '24.06.2026',
+                'published_at': '24.06.2026',
                 'region': 'Иркутск',
-                'media': 'Аргументы недели',
+                'media_name': 'Аргументы недели',
             },
             {
                 'url': 'https://www.kp.ru/irkutsk/recipe',
                 'title': 'Поделитесь рецептом',
                 'text': 'Комбинат питания запустил конкурс рецептов.',
-                'date': '23.06.2026',
+                'published_at': '23.06.2026',
                 'region': 'иркутск',
-                'media': 'КП-Иркутск',
+                'media_name': 'КП-Иркутск',
             },
             {
                 'url': 'https://irksib.ru/2026/06/22/kuhnya',
                 'title': 'Детская молочная кухня Иркутска: роботизация '
                 'и поставки с сентября',
                 'text': 'Модернизация производства детского питания.',
-                'date': '2026-06-22',
+                'published_at': '2026-06-22',
                 'region': 'Иркутск ',
-                'media': 'Irksib.ru',
+                'media_name': 'Irksib.ru',
             },
             {
                 'url': 'https://dairynews.today/irkutsk/assort',
                 'title': 'Детская молочная кухня Иркутска расширяет '
                 'ассортимент',
                 'text': 'В линейке появились новые позиции.',
-                'date': '22.06.26',
+                'published_at': '22.06.26',
                 'region': 'Иркутск',
-                'media': 'ДэйриНьюс',
+                'media_name': 'ДэйриНьюс',
             },
             {
                 'url': 'https://tokmedia.ru/tn-angara',
                 'title': 'Иркутское предприятие ТН-Ангара внедрит '
                 'бережливые технологии',
                 'text': 'Оптимизация процессов на производстве.',
-                'date': '26 июня 2026',
+                'published_at': '26 июня 2026',
                 'region': 'Иркутск',
-                'media': 'Ток Медиа',
+                'media_name': 'Ток Медиа',
             },
         ],
     ),
@@ -352,17 +352,17 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'title': 'Сургут готовит реформу школьного питания: '
                 '55%&nbsp;еды выбрасывается',
                 'text': 'Власти обсуждают проблему пищевых отходов.',
-                'date': '23.06.2026',
+                'published_at': '23.06.2026',
                 'region': 'Сургут',
-                'media': 'Сургутская трибуна',
+                'media_name': 'Сургутская трибуна',
             },
             {
                 'url': 'https://siapress.ru/news/pitanie',
                 'title': 'В школах Сургута хотят изменить систему питания',
                 'text': 'Обсуждается новая модель организации питания.',
-                'date': '23.06.2026',
+                'published_at': '23.06.2026',
                 'region': 'Сургут ',
-                'media': 'СИА-Пресс',
+                'media_name': 'СИА-Пресс',
             },
         ],
     ),
@@ -374,9 +374,9 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'title': 'С начала года свыше 600 школьников посетили '
                 'городские предприятия',
                 'text': 'Экскурсии организованы департаментом питания.',
-                'date': '22.06.2026',
+                'published_at': '22.06.2026',
                 'region': 'Казань',
-                'media': 'kzn.ru',
+                'media_name': 'kzn.ru',
             },
         ],
     ),
@@ -387,9 +387,9 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'url': 'https://spb.bezformata.com/stolovye',
                 'title': 'В Петербурге определили лучшие школьные столовые',
                 'text': 'Комбинат &laquo;Охта&raquo; вошёл в число лучших.',
-                'date': '23.06.2026',
+                'published_at': '23.06.2026',
                 'region': 'СПб',
-                'media': 'БезФормата СПб',
+                'media_name': 'БезФормата СПб',
             },
         ],
     ),
@@ -402,9 +402,9 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'url': 'https://critics24.com/kiev/gubernator',
                 'title': '&laquo;Ночной губернатор&raquo; вызван на допрос',
                 'text': 'Скандальная публикация о деятельности компании.',
-                'date': '22.06.2026',
+                'published_at': '22.06.2026',
                 'region': 'Украина',
-                'media': 'critics24.com (Киев)',
+                'media_name': 'critics24.com (Киев)',
             },
         ],
     ),
@@ -416,26 +416,26 @@ ARTICLES: list[tuple[str, list[dict]]] = [
                 'title': 'Глава Самары проверил ход реконструкции '
                 'коммунальных сетей',
                 'text': 'Работы ведёт СКС.',
-                'date': '25.06.2026',
+                'published_at': '25.06.2026',
                 'region': 'Самара',
-                'media': 'samadm.ru',
+                'media_name': 'samadm.ru',
             },
             {
                 'url': 'https://63.ru/text/gorod/2026/06/23/torez',
                 'title': 'В Самаре закрыто движение по ул. Мориса Тореза',
                 'text': 'Причина — ремонт сетей СКС.',
-                'date': '23.06.2026',
+                'published_at': '23.06.2026',
                 'region': 'самара',
-                'media': '63.ru',
+                'media_name': '63.ru',
             },
             {
                 'url': 'https://samara450.ru/dolg',
                 'title': 'Более 1,5 млрд руб. долга накопили жители '
                 'Самары за воду',
                 'text': 'Задолженность перед ресурсником СКС.',
-                'date': '25.06.2026',
+                'published_at': '25.06.2026',
                 'region': 'Самара',
-                'media': 'Самара 450',
+                'media_name': 'Самара 450',
             },
         ],
     ),
@@ -670,18 +670,6 @@ def make_aliases(name: str) -> list[str]:
     """Стандартные псевдонимы города в нижнем регистре."""
     n = name.lower()
     return list(dict.fromkeys([n, f'г. {n}', f'г {n}']))
-
-
-def norm(s: str) -> str:
-    """Нормализация для стабильного dedup_key (ABOUT.md, BP-2 п.4)."""
-    s = (s or '').lower()
-    s = re.sub(r'[^\w\s]', '', s)
-    return re.sub(r'\s+', ' ', s).strip()
-
-
-def make_dedup_key(competitor: str, title: str, published: str, region) -> str:
-    raw = f'{competitor}|{norm(title)}|{published}|{region or ""}'
-    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def sha256(s: str) -> str:

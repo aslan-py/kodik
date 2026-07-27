@@ -6,3 +6,5 @@ test_file.txt
 gg.py
 __pycache__/
 .ruff_cache
+my_folder
+.ipynb_checkpoints

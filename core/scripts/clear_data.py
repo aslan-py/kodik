@@ -1,18 +1,5 @@
 """Очистка ДАННЫХ пайплайна (справочники остаются).
 
-Пара к seed_all: типовой цикл теста — один раз seed_all, поработал, затем
-clear_data → seed_all, чтобы вернуть данные в исходное состояние без
-пересоздания БД.
-
-Чистит таблицы-данные в порядке, обратном FK-зависимостям:
-    action_item → alert → showcase_event → categorized_event →
-    normalized_item → raw_item → search_task
-
-Справочники (region, competitor, source, trigger, black_domain, stop_word,
-topic_limit, category, department, event_type, channel, routing_rule) НЕ
-трогаем — они наполняются один раз и правятся руками при необходимости.
-Схему и enum-типы не трогаем (этим управляет Alembic).
-
 Запуск (из любого места):
     python -m core.scripts.clear_data
 """

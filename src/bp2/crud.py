@@ -11,7 +11,7 @@
     load_stop_words          → стоп-слова / темы
     load_topic_limits        → лимиты антишума
     upsert_normalized_items  → запись с ON CONFLICT (dedup)
-    reject_over_limit        → антишум (TODO)
+    reject_over_limit        → см. antinoise.py
 
 Общий бойлерплейт вынесен в приватные помощники _scalars / _load_active.
 Сессия — в self.session (через __init__), методы её не принимают. Транзакцией
@@ -167,12 +167,3 @@ class Bp2Crud:
         else:
             stmt = stmt.on_conflict_do_nothing(index_elements=['dedup_key'])
         await self.session.execute(stmt)
-
-    async def reject_over_limit(self) -> None:
-        """Антишум: всё сверх topic_limit → rejected(noise_limit). TODO.
-
-        Агрегатный фильтр ПОСЛЕ дедупа и вставки: группировка по scope
-        (competitor/source/media/region) за окно (run/day/week), UPDATE самых
-        старых сверх max_count. Логика окон требует отдельной проработки.
-        """
-        raise NotImplementedError

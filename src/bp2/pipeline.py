@@ -12,7 +12,7 @@ raw_data (отвязка от BP-1: то же сырьё можно перера
   5. отсев по чёрным доменам — is_black_domain
   6. отсев по стоп-словам — match_stop_word (5-6 применяет apply_filters)
   7. записать пачку с дедупом (ON CONFLICT) — upsert_normalized_items (crud)
-  8. антишум: лишнее сверх лимита → rejected — reject_over_limit (crud, TODO)
+  8. антишум: лишнее сверх лимита → rejected — reject_over_limit (antinoise)
 
 Оркестратор run_bp2 открывает сессию, один раз грузит справочники и
 прогоняет шаги 1-8 в одной транзакции.
@@ -25,10 +25,12 @@ import html
 import re
 import unicodedata
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from core.database import AsyncSessionLocal
 from core.enums import NormStatus, RejectReason
 from src.bp1.models import Competitor
+from src.bp2.antinoise import reject_over_limit
 from src.bp2.constants import TextCleanup
 from src.bp2.crud import Bp2Crud
 from src.bp2.dedup import make_dedup_key
@@ -247,6 +249,8 @@ async def run_bp2() -> dict:
 
     Возвращает сводку прогона (сколько снимков и строк обработано).
     """
+    run_started_at = datetime.now(UTC)
+
     async with AsyncSessionLocal() as session:
         crud = Bp2Crud(session)
 
@@ -256,6 +260,7 @@ async def run_bp2() -> dict:
         source_map = await crud.load_source_ids()
         black_domains = await crud.load_black_domains()
         stop_words = await crud.load_stop_words()
+        topic_limits = await crud.load_topic_limits()
 
         # Шаг 1 — отобрать свежие необработанные снимки
         pending = await crud.select_pending_raw_items()
@@ -284,12 +289,23 @@ async def run_bp2() -> dict:
         await crud.upsert_normalized_items(rows)
         await session.commit()
 
-        # Шаг 8 — антишум ПОСЛЕ вставки. Пока заглушка; точку вызова ставим
-        # сразу — заработает, когда реализуем reject_over_limit.
-        try:
-            await crud.reject_over_limit()
+        # Шаг 8 — антишум: самые старые сверх лимита → rejected(noise_limit)
+        noise_rejected = 0
+        if topic_limits:
+            noise_rejected = await reject_over_limit(
+                session, topic_limits, run_started_at
+            )
             await session.commit()
-        except NotImplementedError:
-            pass
 
-        return {'pending': len(pending), 'rows': len(rows)}
+        return {
+            'pending': len(pending),
+            'rows': len(rows),
+            'noise_rejected': noise_rejected,
+        }
+
+
+# import asyncio
+
+# if __name__ == '__main__':
+#     result = asyncio.run(run_bp2())
+#     print(result)

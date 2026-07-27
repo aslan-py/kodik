@@ -1,4 +1,4 @@
-"""Тест-сид для BP-2: пересоздаёт search_task и наполняет raw_item.
+"""Тест-сид для BP-2: наполняет raw_item - т.е. итоговую таблицу после BP-1
 
 Самоочищается: перед вставкой чистит normalized_item → raw_item → search_task
 (справочники competitor/source/region/black_domain/stop_word НЕ трогает).
@@ -6,19 +6,6 @@
 
     python -m core.scripts.seed_raw_test
 
-Сценарии (что должен сделать BP-2 с каждой ЗАДАЧЕЙ):
-  new only            одиночный new                    → берём
-  new → changed       старый new + новый changed       → берём changed
-  new → changed (=CR) new и changed с ОДИНАКОВЫМ        → берём changed
-                      created_at (тай-брейк по id DESC)
-  unchanged           new с поднятым updated_at         → берём (статус тот же)
-  error               raw_data NULL                     → пропускаем
-
-changed всегда идёт ПОСЛЕ new на той же задаче (иначе changed бессмыслен).
-created_at у снимков разные (≥1 c), кроме нарочного тай-кейса.
-
-В контент отобранных снимков подложены события под все фильтры:
-ok / black_domain / stop_word / stop_topic / false_positive / parse_error.
 """
 
 import asyncio

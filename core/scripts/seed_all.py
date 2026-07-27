@@ -1,25 +1,5 @@
 """Единый сидинг тестовых данных по всему пайплайну BP-1…BP-6.
 
-Заливает БД целиком, чтобы можно было тестировать любой процесс на полной
-цепочке данных.
-
-Порядок:
-  СПРАВОЧНИКИ (идемпотентно, ON CONFLICT / count-guard):
-    region (из cities.json), competitor, source, trigger,
-    black_domain, stop_word, topic_limit, category, department,
-    event_type, channel, routing_rule
-  ДАННЫЕ (count-guard на каждую таблицу):
-    search_task → raw_item → normalized_item → categorized_event →
-    showcase_event → alert → action_item
-
-normalized_item и далее в бою производит пайплайн (BP-2…BP-5, ещё не
-достроен). Здесь фабрикуем курируемый набор, чтобы витрина/алерты/задачи
-имели связанные данные для демо и тестов.
-
-Идемпотентен: справочники не дублируются (ON CONFLICT), данные защищены
-count-guard (повторный запуск не плодит строки). Пара со скриптом
-clear_data (он чистит данные, справочники оставляет — их правят руками).
-
 Запуск (из любого места):
     python -m core.scripts.seed_all
 """

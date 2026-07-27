@@ -1,29 +1,21 @@
 from .exceptions import NotFoundError, StorageError, ValidationError
 from .interfaces import BaseDeduplicator, BaseStorage, NoOpDeduplicator
 from .models import (
-    ContentInfo,
-    ProcessingInfo,
+    MetaInfo,
     ProcessingStatus,
-    RawData,
-    RequestInfo,
-    SourceInfo,
-    StorageInfo,
-    TriggerInfo,
+    RawDataFile,
+    RawDataItem,
 )
 
 __all__ = [
     "BaseDeduplicator",
     "BaseStorage",
-    "ContentInfo",
+    "MetaInfo",
     "NoOpDeduplicator",
     "NotFoundError",
-    "ProcessingInfo",
     "ProcessingStatus",
-    "RawData",
-    "RequestInfo",
-    "SourceInfo",
+    "RawDataFile",
+    "RawDataItem",
     "StorageError",
-    "StorageInfo",
-    "TriggerInfo",
     "ValidationError",
 ]

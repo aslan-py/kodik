@@ -1,7 +1,8 @@
-"""Генерация путей для хранения файлов.
+"""Генерация путей для хранения файлов выгрузок.
 
-Формат пути: base_path/YYYY/MM/DD/trigger_{id}/raw_{id}.json
+Формат пути: base_path/YYYY/MM/DD/trigger_{id}/raw_{file_id}.json
 Директории создаются по годам/месяцам/дням для удобства навигации.
+Один файл = одна выгрузка (JSONB-формат: meta + items).
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from raw_storage.constants import (
 
 
 class PathGenerator:
-    """Генерирует пути для JSON-файлов на диске.
+    """Генерирует пути для JSONB-файлов выгрузок на диске.
 
     Использует иерархическую структуру по дате для организации файлов.
     Каждый триггер получает свою директорию.
@@ -30,28 +31,28 @@ class PathGenerator:
     def generate(
         self,
         trigger_id: str,
-        raw_id: str,
-        crawled_at: datetime | None = None,
+        file_id: str,
+        fetched_at: datetime | None = None,
     ) -> str:
-        """Сгенерировать полный путь к JSON-файлу.
+        """Сгенерировать полный путь к JSONB-файлу выгрузки.
 
         Args:
             trigger_id: ID триггера (формирует имя директории)
-            raw_id: ID записи (формирует имя файла)
-            crawled_at: Дата сбора (определяет путь YYYY/MM/DD)
+            file_id: ID файла выгрузки (формирует имя файла)
+            fetched_at: Время выгрузки (определяет путь YYYY/MM/DD)
 
         Returns:
             Строка с полным путем, например:
-            data/raw/2026/07/20/trigger_abc123/raw_def456.json
+            data/raw/2026/07/20/trigger_6318034066/raw_a1b2c3d4.json
         """
-        dt = crawled_at or datetime.now()
+        dt = fetched_at or datetime.now()
         path = (
             self._base
             / str(dt.year)
             / f"{dt.month:02d}"
             / f"{dt.day:02d}"
             / f"{TRIGGER_DIR_PREFIX}{trigger_id}"
-            / f"{RAW_FILE_PREFIX}{raw_id}{FILE_EXTENSION}"
+            / f"{RAW_FILE_PREFIX}{file_id}{FILE_EXTENSION}"
         )
         return str(path)
 

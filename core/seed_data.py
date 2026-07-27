@@ -4,13 +4,27 @@
 Заполняет таблицы: Competitor, Trigger, Source, SearchTask.
 Поддерживает идемпотентность (ON CONFLICT DO NOTHING) и dry-run режим.
 
-Запуск:
-    python scripts/seed_data.py                    # полный прогон из CSV
-    python scripts/seed_data.py --dry-run          # показать что будет сделано
-    python scripts/seed_data.py --only competitors # только конкуренты
-    python scripts/seed_data.py --clear            # очистить и заполнить заново
+Расположение: core/seed_data.py (вместе с конфигом и database.py).
+CSV-файлы лежат рядом: core/data/*.csv.
+
+Запуск (из корня проекта):
+    python -m core.seed_data                          # полный прогон из CSV
+    python -m core.seed_data --dry-run                # показать что будет сделано
+    python -m core.seed_data --only competitors       # только конкуренты
+    python -m core.seed_data --clear                  # очистить и заполнить заново
+    python -m core.seed_data --csv-dir ./custom/path  # свой путь к CSV
+
+Или напрямую:
+    python core/seed_data.py
+
+Повторный запуск безопасен — дубликаты не создаются (ON CONFLICT DO NOTHING).
 """
 
+from src.bp1.models import Competitor, Source, SearchTask, Trigger
+from core.database import AsyncSessionLocal
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy import delete, select
 import argparse
 import asyncio
 import csv
@@ -23,12 +37,6 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from core.database import AsyncSessionLocal
-from src.bp1.models import Competitor, Source, SearchTask, Trigger
 
 # Настройка логирования
 logging.basicConfig(
@@ -38,7 +46,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Путь к CSV-файлам по умолчанию
+# Путь к CSV-файлам по умолчанию (рядом со скриптом, в подпапке data/)
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parent / 'data'
 
 
@@ -86,7 +94,8 @@ def read_competitors_csv(path: Path) -> list[CompetitorRow]:
         for line_no, row in enumerate(reader, start=2):
             name = row['name'].strip()
             if not name:
-                log.warning('competitor.csv:%d — пустое name, пропуск', line_no)
+                log.warning(
+                    'competitor.csv:%d — пустое name, пропуск', line_no)
                 continue
             inn_raw = row.get('inn', '').strip()
             inn = inn_raw if inn_raw else None
@@ -168,7 +177,7 @@ async def insert_competitors(
             select(Competitor).where(Competitor.name == row.name)
         )
         if existing.scalar_one_or_none():
-            log.info('Конкурент "%s" уже существует, пропуск', row.name)
+            log.info("Конкурент '%s' уже существует, пропуск", row.name)
             continue
 
         if dry_run:
@@ -180,12 +189,12 @@ async def insert_competitors(
         session.add(obj)
         try:
             await session.flush()
-            log.info('Конкурент "%s" добавлен (id=%d)', row.name, obj.id)
+            log.info("Конкурент '%s' добавлен (id=%d)", row.name, obj.id)
             added += 1
         except IntegrityError:
             await session.rollback()
             log.warning(
-                'Конкурент "%s" — дубликат (race condition), пропуск',
+                "Конкурент '%s' — дубликат (race condition), пропуск",
                 row.name,
             )
     return added
@@ -203,7 +212,7 @@ async def insert_sources(
             select(Source).where(Source.name == row.name)
         )
         if existing.scalar_one_or_none():
-            log.info('Источник "%s" уже существует, пропуск', row.name)
+            log.info("Источник '%s' уже существует, пропуск", row.name)
             continue
 
         if dry_run:
@@ -215,12 +224,12 @@ async def insert_sources(
         session.add(obj)
         try:
             await session.flush()
-            log.info('Источник "%s" добавлен (id=%d)', row.name, obj.id)
+            log.info("Источник '%s' добавлен (id=%d)", row.name, obj.id)
             added += 1
         except IntegrityError:
             await session.rollback()
             log.warning(
-                'Источник "%s" — дубликат (race condition), пропуск',
+                "Источник '%s' — дубликат (race condition), пропуск",
                 row.name,
             )
     return added
@@ -238,7 +247,7 @@ async def insert_triggers(
             select(Trigger).where(Trigger.keyword == row.keyword)
         )
         if existing.scalar_one_or_none():
-            log.info('Триггер "%s" уже существует, пропуск', row.keyword)
+            log.info("Триггер '%s' уже существует, пропуск", row.keyword)
             continue
 
         if dry_run:
@@ -250,12 +259,12 @@ async def insert_triggers(
         session.add(obj)
         try:
             await session.flush()
-            log.info('Триггер "%s" добавлен (id=%d)', row.keyword, obj.id)
+            log.info("Триггер '%s' добавлен (id=%d)", row.keyword, obj.id)
             added += 1
         except IntegrityError:
             await session.rollback()
             log.warning(
-                'Триггер "%s" — дубликат (race condition), пропуск',
+                "Триггер '%s' — дубликат (race condition), пропуск",
                 row.keyword,
             )
     return added
@@ -280,7 +289,7 @@ async def insert_search_tasks(
         competitor = comp_result.scalar_one_or_none()
         if not competitor:
             log.error(
-                'Конкурент "%s" не найден, пропуск search_task',
+                "Конкурент '%s' не найден, пропуск search_task",
                 row.competitor_name,
             )
             continue
@@ -292,7 +301,7 @@ async def insert_search_tasks(
         source = src_result.scalar_one_or_none()
         if not source:
             log.error(
-                'Источник "%s" не найден, пропуск search_task',
+                "Источник '%s' не найден, пропуск search_task",
                 row.source_name,
             )
             continue
@@ -308,7 +317,7 @@ async def insert_search_tasks(
             trigger = trig_result.scalar_one_or_none()
             if not trigger:
                 log.error(
-                    'Триггер "%s" не найден, пропуск search_task',
+                    "Триггер '%s' не найден, пропуск search_task",
                     row.trigger_keyword,
                 )
                 continue
@@ -420,7 +429,7 @@ async def seed(
     if only:
         if only not in csv_files:
             log.error(
-                'Неизвестный тип "%s". Допустимые: %s',
+                "Неизвестный тип '%s'. Допустимые: %s",
                 only,
                 ', '.join(csv_files.keys()),
             )
@@ -506,17 +515,17 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             'Примеры:\n'
-            '  python scripts/seed_data.py\n'
-            '  python scripts/seed_data.py --dry-run\n'
-            '  python scripts/seed_data.py --only competitors\n'
-            '  python scripts/seed_data.py --clear\n'
+            '  python -m core.seed_data\n'
+            '  python -m core.seed_data --dry-run\n'
+            '  python -m core.seed_data --only competitors\n'
+            '  python -m core.seed_data --clear\n'
         ),
     )
     parser.add_argument(
         '--csv-dir',
         type=Path,
         default=_DEFAULT_DATA_DIR,
-        help='Папка с CSV-файлами (по умолчанию: scripts/data/)',
+        help='Папка с CSV-файлами (по умолчанию: core/data/)',
     )
     parser.add_argument(
         '--only',

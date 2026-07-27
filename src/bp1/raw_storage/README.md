@@ -1,6 +1,88 @@
 # raw_storage
 
-Bronze Layer модуль для хранения сырых данных в ETL-пайплайне конкурентной разведки. Надёжно сохраняет необработанные данные (HTML, JSON, PDF и т.д.) с метаданными источника, триггера и статусом обработки.
+Bronze Layer модуль для хранения сырых данных в ETL-пайплайне конкурентной разведки. Сохраняет необработанные данные (HTML, JSON и т.д.) в JSONB-формате: один файл = одна выгрузка/страница с метаданными (meta) и массивом элементов (items).
+
+## Статус: ✅ РАБОТАЕТ
+
+Пакет протестирован с реальными HTML-файлами (620 КБ каждый):
+- Сохранение 4 HTML-файлов в JSONB-формат — **успешно**
+- Загрузка и десериализация обратно — **успешно**
+- Целостность HTML-контента после цикла save/load — **подтверждена**
+- Структура JSONB (`meta` + `items`) — **корректна**
+
+## Как работать
+
+### 1. Создать выгрузку (RawDataFile)
+
+```python
+from datetime import datetime, timezone, timedelta
+from raw_storage import RawDataFile, MetaInfo, RawDataItem
+
+tz = timezone(timedelta(hours=5))
+
+batch = RawDataFile(
+    meta=MetaInfo(
+        search_task_id=1,                          # ID задачи в БД
+        source="fedresurs.ru",                     # код источника
+        competitor="ООО СИТИГРАД",                 # наименование конкурента
+        trigger="6318034066",                      # ИНН / ключевое слово
+        source_request_url="https://fedresurs.ru/company/6318034066",
+        fetched_at=datetime.now(tz),               # время выгрузки
+    ),
+    items=[
+        RawDataItem(
+            url="https://fedresurs.ru/sfactmessages/123",
+            title="Недостоверность сведений",
+            text="<!DOCTYPE html><html>...</html>",  # полный HTML
+            date="07.07.2026",
+            region=None,
+            media=None,
+            salary=None,
+        ),
+    ],
+)
+```
+
+### 2. Сохранить на диск
+
+```python
+from raw_storage import StorageFactory, RawDataRepository
+
+backend = StorageFactory.create("disk", base_path="data/raw")
+repo = RawDataRepository(storage_backend=backend)
+
+path = await repo.save(batch)
+print(f"Сохранён: {path}")
+# data/raw/2026/07/27/trigger_6318034066/raw_a1b2c3d4-....json
+```
+
+### 3. Загрузить обратно
+
+```python
+loaded = await backend.load(path)
+print(f"Элементов: {len(loaded.items)}")
+print(f"Источник: {loaded.meta.source}")
+print(f"Статус: {loaded.meta.status.value}")
+```
+
+### 4. Найти выгрузки по триггеру
+
+```python
+results = await repo.find_by_trigger("6318034066")
+for r in results:
+    print(f"{r.meta.fetched_at}: {len(r.items)} элементов")
+```
+
+### 5. Обновить статус обработки
+
+```python
+from raw_storage import ProcessingStatus
+
+await repo.update_status(
+    raw_id=batch.raw_id,
+    status=ProcessingStatus.DONE,
+)
+```
 
 ## Установка
 
@@ -12,13 +94,14 @@ pip install -r requirements.txt
 
 Требования: Python 3.12+, Pydantic 2.0+, aiofiles 23.0+.
 
-## Быстрый старт
+## Быстрый старт (полный пример)
 
 ```python
 import asyncio
+from datetime import datetime, timezone, timedelta
 from raw_storage import (
-    RawData, RawDataRepository, StorageFactory,
-    SourceInfo, TriggerInfo, RequestInfo, ContentInfo,
+    RawDataFile, RawDataItem, MetaInfo,
+    RawDataRepository, StorageFactory,
 )
 
 async def main():
@@ -26,21 +109,34 @@ async def main():
     backend = StorageFactory.create("disk", base_path="data/raw")
     repo = RawDataRepository(storage_backend=backend)
 
-    # Формируем данные
-    raw = RawData(
-        source=SourceInfo(type="web", name="kad.arbitr.ru", url="https://kad.arbitr.ru/"),
-        trigger=TriggerInfo(id="7743659519", type="inn", name="Поиск по ИНН 7743659519"),
-        request=RequestInfo(http_status=200),
-        content=ContentInfo(data=b"<html>...</html>", content_type="text/html", format="html"),
+    # Формируем выгрузку
+    tz = timezone(timedelta(hours=5))
+    batch = RawDataFile(
+        meta=MetaInfo(
+            search_task_id=1,
+            source="fedresurs.ru",
+            competitor="ООО СИТИГРАД",
+            trigger="6318034066",
+            source_request_url="https://fedresurs.ru/company/...",
+            fetched_at=datetime.now(tz),
+        ),
+        items=[
+            RawDataItem(
+                url="https://fedresurs.ru/sfactmessages/...",
+                title="Недостоверность сведений",
+                text="<!DOCTYPE html><html>...</html>",
+                date="07.07.2026",
+            ),
+        ],
     )
 
     # Сохраняем
-    path = await repo.save(raw)
+    path = await repo.save(batch)
     print(f"Сохранён: {path}")
 
     # Загружаем обратно
     loaded = await backend.load(path)
-    print(f"Чексумма: {loaded.storage.checksum_sha256[:16]}...")
+    print(f"Элементов: {len(loaded.items)}")
 
 asyncio.run(main())
 ```
@@ -62,35 +158,60 @@ backend = StorageFactory.create("disk", base_path="data/raw")
 
 ### `RawDataRepository`
 
-Репозиторий — основная точка входа для работы с данными.
+Репозиторий — основная точка входа для работы с выгрузками.
 
 | Метод | Описание |
 |-------|----------|
-| `save(raw_data) -> str` | Сохранить данные с проверкой дедупликации |
-| `find_by_id(raw_id) -> RawData` | Найти запись по UUID |
-| `find_by_trigger(trigger_id) -> list[RawData]` | Найти все записи по триггеру |
-| `find_pending() -> list[RawData]` | Найти записи со статусом PENDING |
+| `save(raw_data_file) -> str` | Сохранить выгрузку с проверкой дедупликации |
+| `find_by_id(raw_id) -> str` | Найти путь к файлу по UUID выгрузки |
+| `find_by_trigger(trigger_id) -> list[RawDataFile]` | Найти все выгрузки по триггеру |
+| `find_pending() -> list[RawDataFile]` | Найти выгрузки со статусом PENDING |
 | `update_status(raw_id, status, error?)` | Обновить статус обработки |
 | `delete(path) -> bool` | Удалить файл |
 
-### `RawData`
+### `RawDataFile`
 
-Основная модель Bronze Layer.
+Корневая модель JSONB-файла выгрузки.
 
-| Секция | Модель | Описание |
-|--------|--------|----------|
-| `source` | `SourceInfo` | Тип, имя и URL источника |
-| `trigger` | `TriggerInfo` | ID, тип, имя и ключевые слова триггера |
-| `request` | `RequestInfo` | HTTP-статус и заголовки |
-| `content` | `ContentInfo` | Байты, MIME-тип, формат, кодировка |
-| `storage` | `StorageInfo` | Путь на диске и SHA-256 чексумма |
-| `processing` | `ProcessingInfo` | Статус (PENDING → PROCESSING → DONE/ERROR) |
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `raw_id` | `UUID` | Уникальный ID файла выгрузки |
+| `meta` | `MetaInfo` | Метаданные выгрузки |
+| `items` | `list[RawDataItem]` | Массив собранных элементов |
+
+### `MetaInfo`
+
+Метаданные выгрузки — секция `meta` JSONB-файла.
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `search_task_id` | `int` | ID поисковой задачи в БД |
+| `source` | `str` | Код источника (fedresurs.ru, kad-arbitr.ru) |
+| `competitor` | `str` | Наименование конкурента |
+| `trigger` | `str` | Идентификатор триггера (ИНН, ключевое слово) |
+| `source_request_url` | `str` | URL исходного запроса к источнику |
+| `fetched_at` | `datetime` | Timestamp выгрузки |
+| `status` | `ProcessingStatus` | Статус обработки в ETL-пайплайне |
+
+### `RawDataItem`
+
+Один элемент данных внутри выгрузки — элемент массива `items`.
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `url` | `str` | URL конкретного элемента |
+| `title` | `str` | Заголовок элемента |
+| `text` | `str` | Полный текст или HTML-код элемента |
+| `date` | `str \| None` | Дата элемента |
+| `region` | `str \| None` | Регион |
+| `media` | `str \| None` | Медиа-источник |
+| `salary` | `str \| None` | Зарплата (если применимо) |
 
 ### `ProcessingStatus`
 
 | Значение | Описание |
 |----------|----------|
-| `PENDING` | Запись создана, обработка не начата |
+| `PENDING` | Выгрузка создана, обработка не начата |
 | `PROCESSING` | Идёт обработка (Silver Layer) |
 | `DONE` | Обработка завершена |
 | `ERROR` | Ошибка при обработке |
@@ -104,10 +225,10 @@ raw_storage/
 ├── factory.py               # StorageFactory
 ├── core/
 │   ├── interfaces.py        # ABC: BaseStorage, BaseDeduplicator, NoOpDeduplicator
-│   ├── models.py            # Pydantic модели (RawData и секции)
+│   ├── models.py            # Pydantic модели (RawDataFile, MetaInfo, RawDataItem)
 │   └── exceptions.py        # StorageError, NotFoundError, ValidationError
 ├── backends/
-│   └── disk_backend.py      # DiskBackend: JSON на диске (async, aiofiles)
+│   └── disk_backend.py      # DiskBackend: JSONB на диске (async, aiofiles)
 ├── services/
 │   └── repository.py        # RawDataRepository
 └── utils/
@@ -119,48 +240,61 @@ raw_storage/
 
 ### DiskBackend
 
-Данные сохраняются в JSON-файлы с иерархической структурой каталогов:
+Данные сохраняются в JSONB-файлы с иерархической структурой каталогов:
 
 ```
 data/raw/
 └── 2026/
     └── 07/
         └── 20/
-            └── trigger_7743659519/
-                └── raw_c3066f57-....json
+            └── trigger_6318034066/
+                └── raw_a1b2c3d4-....json
 ```
 
-Структура JSON-файла:
+Структура JSONB-файла:
 
 ```json
 {
-  "source": { "type": "web", "name": "kad.arbitr.ru", "url": "..." },
-  "trigger": { "id": "7743659519", "type": "inn", "name": "...", "keywords": [...] },
-  "request": { "http_status": 200, "headers": {} },
-  "content": { "data": "...", "content_type": "text/html", "format": "html", "encoding": "utf-8" },
-  "storage": { "path": "...", "checksum_sha256": "..." },
-  "processing": { "status": "pending", "cleaned_at": null, "category": null, "error": null },
-  "metadata": { "raw_id": "...", "crawled_at": "..." }
+  "meta": {
+    "search_task_id": 1,
+    "source": "fedresurs.ru",
+    "competitor": "ООО СИТИГРАД",
+    "trigger": "6318034066",
+    "source_request_url": "https://fedresurs.ru/company/...",
+    "fetched_at": "2026-07-25T23:42:59+05:00",
+    "status": "pending"
+  },
+  "items": [
+    {
+      "url": "https://fedresurs.ru/sfactmessages/...",
+      "title": "Недостоверность сведений",
+      "text": "<!DOCTYPE html><html>...</html>",
+      "date": "07.07.2026",
+      "region": null,
+      "media": null,
+      "salary": null
+    }
+  ]
 }
 ```
 
-Бинарные данные (PDF, изображения) кодируются в base64 с `encoding: "base64"`.
+Текстовые данные (HTML) сохраняются как строки UTF-8. Бинарные данные (PDF, изображения) не поддерживаются в текущей версии — для них требуется отдельный бэкенд.
 
 ## Дедупликация
 
-Модуль поддерживает дедупликацию через внедряемый `BaseDeduplicator`. По умолчанию используется `NoOpDeduplicator` (всегда `False`). Для интеграции:
+Модуль поддерживает дедупликацию через внедряемый `BaseDeduplicator`. По умолчанию используется `NoOpDeduplicator` (всегда `False`). Дедупликация выполняется по `raw_id` файла выгрузки.
 
 ```python
 from raw_storage.core.interfaces import BaseDeduplicator
 
-class ChecksumDeduplicator(BaseDeduplicator):
-    async def is_duplicate(self, checksum: str) -> bool:
+class FileIdDeduplicator(BaseDeduplicator):
+    async def is_duplicate(self, raw_id: str) -> bool:
         # Реализация: проверка по индексу или БД
         ...
 
 repo = RawDataRepository(
     storage_backend=backend,
-    deduplicator=ChecksumDeduplicator(),
+    deduplicator=FileIdDeduplicator(),
 )
 ```
 
@@ -186,4 +320,3 @@ from my_backends import S3Backend
 
 StorageFactory.register("s3", S3Backend)
 backend = StorageFactory.create("s3", bucket="my-bucket")
-```

@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from .models import RawData
+from .models import RawDataFile
 
 
 class BaseStorage(ABC):
     """Базовый абстрактный класс хранилища."""
 
     @abstractmethod
-    async def save(self, raw_data: RawData) -> str:
+    async def save(self, raw_data_file: RawDataFile) -> str:
         """Сохранить данные. Возвращает путь к файлу."""
 
     @abstractmethod
-    async def load(self, path: str) -> RawData:
+    async def load(self, path: str) -> RawDataFile:
         """Загрузить данные по пути."""
 
     @abstractmethod
@@ -35,12 +35,12 @@ class BaseDeduplicator(ABC):
     """Базовый интерфейс дедупликации."""
 
     @abstractmethod
-    async def is_duplicate(self, checksum: str) -> bool:
-        """Проверить, есть ли запись с такой чексуммой."""
+    async def is_duplicate(self, identifier: str) -> bool:
+        """Проверить, есть ли запись с таким идентификатором."""
 
 
 class NoOpDeduplicator(BaseDeduplicator):
     """Заглушка — всегда возвращает False."""
 
-    async def is_duplicate(self, checksum: str) -> bool:
+    async def is_duplicate(self, identifier: str) -> bool:
         return False

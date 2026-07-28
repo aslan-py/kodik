@@ -22,6 +22,7 @@ from decimal import Decimal
 from sqlalchemy import (
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Numeric,
     String,
@@ -40,6 +41,10 @@ class ShowcaseEvent(Base, Mixin):
     справочники (region_id → «Калуга», category_id → «PR-активность»).
     Приоритет/категория/тональность здесь — строки, а не enum: витрина
     отдаёт готовые к показу значения, а не коды.
+
+    index=True на published_at / competitor / priority / category — под
+    типовые фильтры дашборда: лента по датам, паспорт конкурента, срезы
+    по приоритетам и категориям.
     """
 
     categorized_event_id: Mapped[int] = mapped_column(
@@ -58,6 +63,7 @@ class ShowcaseEvent(Base, Mixin):
     # ---- ФАКТЫ (денормализовано: id заменены на имена через справочники) ----
     published_at: Mapped[date | None] = mapped_column(
         Date,
+        index=True,
         comment='Дата события',
     )
     title: Mapped[str] = mapped_column(
@@ -76,8 +82,17 @@ class ShowcaseEvent(Base, Mixin):
         String(64),
         comment='Федеральный округ (region.macro_region)',
     )
+    latitude: Mapped[float | None] = mapped_column(
+        Float,
+        comment='Широта центра региона (WGS-84) — метка на карте рынка',
+    )
+    longitude: Mapped[float | None] = mapped_column(
+        Float,
+        comment='Долгота центра региона (WGS-84) — метка на карте рынка',
+    )
     competitor: Mapped[str | None] = mapped_column(
         String(256),
+        index=True,
         comment='Конкурент / объект (competitor.name)',
     )
     source_url: Mapped[str | None] = mapped_column(
@@ -88,10 +103,12 @@ class ShowcaseEvent(Base, Mixin):
     # ---- СМЫСЛЫ (денормализовано, готовые к показу строки) ----
     priority: Mapped[str] = mapped_column(
         String(8),
+        index=True,
         comment='Приоритет П1..П4',
     )
     category: Mapped[str] = mapped_column(
         String(128),
+        index=True,
         comment='Категория (category.name)',
     )
     tonality: Mapped[str] = mapped_column(

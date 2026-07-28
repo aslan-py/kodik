@@ -28,7 +28,7 @@ from src.bp2.models import (
 )
 from src.bp3.models import CategorizedEvent, Category, Department
 from src.bp4.models import ShowcaseEvent
-from src.bp5.models import Alert, Channel, EventType, RoutingRule
+from src.bp5.models import Alert, Channel, EventType, RoutingRule, User
 from src.bp6.models import ActionItem
 from src.bp7.models import SourceCandidate
 
@@ -46,11 +46,15 @@ PIPELINE_ORDER = (
 )
 
 # Справочники — тоже «дети → родители». RoutingRule ссылается на event_type,
-# department и channel; SourceCandidate — на competitor; поэтому оба идут
-# первыми. Region и Competitor удаляются последними: на них смотрят данные
-# пайплайна, так что справочники сносим только после PIPELINE_ORDER.
+# user и channel; User ссылается на department; SourceCandidate — на
+# competitor. RoutingRule и SourceCandidate поэтому идут первыми, User —
+# сразу за RoutingRule (её саму уже можно удалять), но раньше Department
+# (на который User ссылается). Region и Competitor удаляются последними:
+# на них смотрят данные пайплайна, так что справочники сносим только после
+# PIPELINE_ORDER.
 DICTIONARY_ORDER = (
     RoutingRule,
+    User,
     SourceCandidate,
     EventType,
     Channel,

@@ -5,6 +5,6 @@
 core.enums.
 """
 
-from src.bp5.models import Alert, Channel, EventType, RoutingRule
+from src.bp5.models import Alert, Channel, EventType, RoutingRule, User
 
-__all__ = ['Alert', 'Channel', 'EventType', 'RoutingRule']
+__all__ = ['Alert', 'Channel', 'EventType', 'RoutingRule', 'User']

@@ -1,86 +1,61 @@
 """Этап BP-5: журнал алертов (alert).
 
-Имитирует детектор значимых событий: пробегает витрину, ищет в заголовках
-слова-маркеры из event_type.keywords и по паре (тип, приоритет) достаёт
-маршрут из routing_rule. Одно правило = одна доставка, поэтому у события
-может быть несколько строк алерта (telegram + email).
+Единственный этап, который НИЧЕГО не подделывает (как bp4): детектор
+незачем имитировать вручную, его запускает готовый конвейер BP-5. Модуль
+существует ради симметрии команд и ради clear().
 
 Запуск:
     python -m core.scripts.stages.bp5
 
-Статус проставляется по режиму доставки: instant → сразу sent (доставили),
-digest → queued (ждёт джобу-сводку). Это ровно то состояние, в котором
-журнал оказался бы после реального прогона.
+То же самое, но со своей транзакцией — прямой вызов конвейера:
+    python -c "import asyncio; from src.bp5.pipeline import run_bp5; \\
+               print(asyncio.run(run_bp5()))"
 
-Требует залитой витрины (stages/bp4) и справочников BP-5.
+Требует залитой витрины (stages/bp4) и справочников BP-5 (event_type,
+channel, user, routing_rule). Инкрементален: повторный запуск без clear
+ничего не продублирует.
 """
 
-from datetime import UTC, datetime
-
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.enums import AlertStatus, DeliveryMode, PriorityLevel
 from core.scripts.stages.cascade import clear_from
-from src.bp4.constants import PRIORITY_FROM_DISPLAY
 from src.bp4.models import ShowcaseEvent
-from src.bp5.models import Alert, EventType, RoutingRule
+from src.bp5.models import Alert
+from src.bp5.pipeline import sync_alerts
 
 
 async def seed(session: AsyncSession) -> int:
-    """Прогнать витрину через детектор и записать журнал доставок."""
-    # keywords хранятся строкой через запятую — разбираем в список один раз.
-    event_types = [
-        (row.id, [kw.strip().lower() for kw in row.keywords.split(',')])
-        for row in (await session.execute(select(EventType))).scalars()
-    ]
-    routes: dict[tuple[int, PriorityLevel], list[RoutingRule]] = {}
-    for rule in (await session.execute(select(RoutingRule))).scalars():
-        routes.setdefault((rule.event_type_id, rule.priority), []).append(rule)
-
-    events = (await session.execute(select(ShowcaseEvent))).scalars()
-    now = datetime.now(UTC)
-    added = 0
-    for event in events:
-        title = (event.title or '').lower()
-        priority = PRIORITY_FROM_DISPLAY.get(event.priority)
-        if priority is None:
-            continue
-        matched = next(
-            (
-                type_id
-                for type_id, keywords in event_types
-                if any(kw in title for kw in keywords)
-            ),
-            None,
-        )
-        if matched is None:
-            continue  # незначимое событие — алерта нет
-        for rule in routes.get((matched, priority), []):
-            delivered = rule.mode == DeliveryMode.instant
-            session.add(
-                Alert(
-                    showcase_event_id=event.id,
-                    event_type_id=matched,
-                    priority=priority,
-                    department_id=rule.department_id,
-                    channel_id=rule.channel_id,
-                    mode=rule.mode,
-                    status=AlertStatus.sent
-                    if delivered
-                    else AlertStatus.queued,
-                    sent_at=now if delivered else None,
-                )
-            )
-            added += 1
-
+    """Прогнать витрину через детектор настоящим конвейером BP-5."""
+    summary = await sync_alerts(session)
     await session.flush()
-    return added
+    return summary['alerts']
 
 
 async def clear(session: AsyncSession) -> int:
-    """Снести журнал алертов (и задачи, которые ниже по потоку)."""
-    return await clear_from(session, Alert)
+    """Снести журнал алертов и сбросить watermark на витрине.
+
+    clear_from(Alert) удаляет alert/action_item, но НЕ трогает
+    showcase_event — та таблица выше по PIPELINE_ORDER, её строки
+    переживают эту очистку. Значит alerted_at остался бы проставленным
+    с прошлого прогона, и повторный seed() не нашёл бы что перепроверять
+    (критерий отбора: alerted_at IS NULL OR updated_at > alerted_at).
+    Сбрасываем watermark явно.
+
+    updated_at перезаписываем его же значением (self-reference), чтобы
+    НЕ дать сработать onupdate этого поля — иначе bulk UPDATE без
+    указанного updated_at в .values() сдвинул бы его на текущий момент
+    (onupdate срабатывает на любом UPDATE через SQLAlchemy, не только на
+    точечной ORM-правке), и витрина выглядела бы «пересобранной», хотя
+    её содержимое не менялось.
+    """
+    total = await clear_from(session, Alert)
+    await session.execute(
+        ShowcaseEvent.__table__.update().values(
+            alerted_at=None,
+            updated_at=ShowcaseEvent.updated_at,
+        )
+    )
+    return total
 
 
 if __name__ == '__main__':

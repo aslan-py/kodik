@@ -37,7 +37,7 @@ class MetaInfo(BaseModel):
 
     search_task_id: int = Field(description='ID поисковой задачи в БД')
     source: str = Field(
-        description='Код источника (fedresurs.ru, kad-arbitr.ru)',
+        description='Код источника (hh.ru, fedresurs.ru)',
     )
     competitor: str = Field(description='Наименование конкурента')
     trigger: str = Field(
@@ -48,10 +48,6 @@ class MetaInfo(BaseModel):
     )
     fetched_at: datetime = Field(
         description='Timestamp выгрузки (время получения данных)',
-    )
-    status: ProcessingStatus = Field(
-        default=ProcessingStatus.PENDING,
-        description='Текущий статус обработки в ETL-пайплайне',
     )
 
 
@@ -65,15 +61,34 @@ class RawDataItem(BaseModel):
     url: str = Field(description='URL конкретного элемента')
     title: str = Field(description='Заголовок элемента')
     text: str = Field(description='Полный текст или HTML-код элемента')
-    date: str | None = Field(
+    published_at: str | None = Field(
         default=None,
-        description='Дата элемента (строка)',
+        description=(
+            'Сырая дата строкой (имя = колонке); '
+            'BP-2 парсит в date'
+        ),
     )
-    region: str | None = Field(default=None, description='Регион')
-    media: str | None = Field(default=None, description='Медиа-источник')
-    salary: str | None = Field(
+    region: str | None = Field(
         default=None,
-        description='Зарплата (если применимо)',
+        description=(
+            'Сырое имя региона (не id) -> '
+            'lookup в region -> region_id'
+        ),
+    )
+    media_name: str | None = Field(
+        default=None,
+        description=(
+            'Имя публикатора (имя = колонке): '
+            'у hh пусто, у новостей = СМИ'
+        ),
+    )
+    extra: dict = Field(
+        default_factory=dict,
+        description=(
+            'Источник-специфичные СЫРЫЕ факты; {} если их нет. '
+            'У hh здесь зарплата -> нормализуется в '
+            'extra.salary_from/salary_to/currency'
+        ),
     )
 
 

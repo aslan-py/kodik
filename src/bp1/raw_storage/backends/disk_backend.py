@@ -23,17 +23,16 @@ from ..constants import (
     JSON_GLOB_PATTERN,
     JSON_INDENT,
     JSON_KEY_COMPETITOR,
-    JSON_KEY_DATE,
+    JSON_KEY_EXTRA,
     JSON_KEY_FETCHED_AT,
     JSON_KEY_ITEMS,
-    JSON_KEY_MEDIA,
+    JSON_KEY_MEDIA_NAME,
     JSON_KEY_META,
+    JSON_KEY_PUBLISHED_AT,
     JSON_KEY_REGION,
-    JSON_KEY_SALARY,
     JSON_KEY_SEARCH_TASK_ID,
     JSON_KEY_SOURCE,
     JSON_KEY_SOURCE_REQUEST_URL,
-    JSON_KEY_STATUS,
     JSON_KEY_TEXT,
     JSON_KEY_TITLE,
     JSON_KEY_TRIGGER,
@@ -43,7 +42,6 @@ from ..core.exceptions import NotFoundError, StorageError
 from ..core.interfaces import BaseStorage
 from ..core.models import (
     MetaInfo,
-    ProcessingStatus,
     RawDataFile,
     RawDataItem,
 )
@@ -166,26 +164,25 @@ class DiskBackend(BaseStorage):
     def _serialize(self, raw_data_file: RawDataFile) -> dict[str, Any]:
         """Сериализовать RawDataFile в JSON-совместимый словарь.
 
-        Структура JSONB:
+        Структура JSONB (эталон):
         {
             "meta": {
                 "search_task_id": 1,
-                "source": "fedresurs.ru",
-                "competitor": "ООО СИТИГРАД",
-                "trigger": "6318034066",
-                "source_request_url": "https://...",
-                "fetched_at": "2026-07-25T23:42:59+05:00",
-                "status": "pending"
+                "source": "hh.ru",
+                "competitor": "Бегемот",
+                "trigger": "Python",
+                "source_request_url": "https://hh.ru/search/...",
+                "fetched_at": "2026-07-18T10:00:00Z"
             },
             "items": [
                 {
-                    "url": "https://...",
-                    "title": "Недостоверность сведений",
-                    "text": "<!DOCTYPE html><html>...",
-                    "date": "07.07.2026",
-                    "region": null,
-                    "media": null,
-                    "salary": null
+                    "url": "https://hh.ru/vacancy/101",
+                    "title": "Python-разработчик",
+                    "text": "Описание вакансии...",
+                    "published_at": "18 июля 2026",
+                    "region": "г. Москва",
+                    "media_name": null,
+                    "extra": {"salary": "150000-200000 руб."}
                 }
             ]
         }
@@ -199,17 +196,16 @@ class DiskBackend(BaseStorage):
                 JSON_KEY_TRIGGER: meta.trigger,
                 JSON_KEY_SOURCE_REQUEST_URL: meta.source_request_url,
                 JSON_KEY_FETCHED_AT: meta.fetched_at.isoformat(),
-                JSON_KEY_STATUS: meta.status.value,
             },
             JSON_KEY_ITEMS: [
                 {
                     JSON_KEY_URL: item.url,
                     JSON_KEY_TITLE: item.title,
                     JSON_KEY_TEXT: item.text,
-                    JSON_KEY_DATE: item.date,
+                    JSON_KEY_PUBLISHED_AT: item.published_at,
                     JSON_KEY_REGION: item.region,
-                    JSON_KEY_MEDIA: item.media,
-                    JSON_KEY_SALARY: item.salary,
+                    JSON_KEY_MEDIA_NAME: item.media_name,
+                    JSON_KEY_EXTRA: item.extra,
                 }
                 for item in raw_data_file.items
             ],
@@ -231,9 +227,6 @@ class DiskBackend(BaseStorage):
             trigger=meta_section[JSON_KEY_TRIGGER],
             source_request_url=meta_section[JSON_KEY_SOURCE_REQUEST_URL],
             fetched_at=meta_section[JSON_KEY_FETCHED_AT],
-            status=ProcessingStatus(
-                meta_section.get(JSON_KEY_STATUS, 'pending')
-            ),
         )
 
         items = [
@@ -241,10 +234,10 @@ class DiskBackend(BaseStorage):
                 url=item[JSON_KEY_URL],
                 title=item[JSON_KEY_TITLE],
                 text=item[JSON_KEY_TEXT],
-                date=item.get(JSON_KEY_DATE),
+                published_at=item.get(JSON_KEY_PUBLISHED_AT),
                 region=item.get(JSON_KEY_REGION),
-                media=item.get(JSON_KEY_MEDIA),
-                salary=item.get(JSON_KEY_SALARY),
+                media_name=item.get(JSON_KEY_MEDIA_NAME),
+                extra=item.get(JSON_KEY_EXTRA, {}),
             )
             for item in items_section
         ]

@@ -60,6 +60,10 @@ class Category(Base, Mixin, ActiveMixin):
             'PR-активность конкурента, репутационный риск)'
         ),
     )
+    note: Mapped[str | None] = mapped_column(
+        String(512),
+        comment='Определение категории для аналитика: что под неё подпадает',
+    )
 
 
 class Department(Base, Mixin, ActiveMixin):
@@ -72,7 +76,11 @@ class Department(Base, Mixin, ActiveMixin):
     name: Mapped[str] = mapped_column(
         String(128),
         unique=True,
-        comment='Отдел: PR, Тендеры, Юристы, Аналитика, Маркетинг',
+        comment='Отдел: PR, Юристы, Аналитика, Маркетинг',
+    )
+    note: Mapped[str | None] = mapped_column(
+        String(512),
+        comment='Зона ответственности отдела: какие категории он ведёт',
     )
 
 
@@ -148,6 +156,19 @@ class CategorizedEvent(Base, Mixin):
     categorized_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
         server_default=func.now(),
-        comment='Когда разметили',
+        index=True,
+        comment=(
+            'Когда разметили (INSERT) или переразметили (UPDATE). '
+            'По индексу BP-4 отбирает переразмеченные события '
+            '(categorized_at > showcase_event.updated_at). onupdate '
+            'срабатывает автоматически на ЛЮБОМ UPDATE через SQLAlchemy '
+            '(и точечная правка атрибута, и bulk update()) — колонка не '
+            'перечислена в .values(), компилятор сам подставит значение. '
+            'НЕ сработает при INSERT ... ON CONFLICT DO UPDATE (это '
+            'технически INSERT, не UPDATE) и при правке в обход '
+            'SQLAlchemy — сырой SQL, DBeaver, pgAdmin: там колонку нужно '
+            'проставлять руками'
+        ),
     )

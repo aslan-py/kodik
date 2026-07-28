@@ -7,10 +7,10 @@
 env.py трогать не нужно.
 """
 
-import src.bp1  # noqa: F401 — Trigger, Competitor, Source, SearchTask, RawItem
-# import src.bp2
-# import src.bp3
-# import src.bp4
-# import src.bp5
-# import src.bp6
-# import src.bp7
+import src.bp1  # Trigger, Competitor, Source, SearchTask, RawItem
+import src.bp2  # Region, BlackDomain, StopWord, TopicLimit, NormalizedItem
+import src.bp3  # Category, Department, CategorizedEvent
+import src.bp4  # ShowcaseEvent
+import src.bp5  # EventType, Channel, RoutingRule, Alert
+import src.bp6  # ActionItem
+import src.bp7  # noqa: F401 — SourceCandidate

@@ -150,3 +150,10 @@ AGENTS.md
 **playwright.config.ts
 **pipline_test.py
 **test_file.txt
+test_file.txt
+/venv
+gg.py
+__pycache__/
+.ruff_cache
+my_folder
+.ipynb_checkpoints

@@ -19,7 +19,7 @@
 | `python -m core.scripts.stages.bp2` | `normalized_item` |
 | `python -m core.scripts.stages.bp3` | `categorized_event` |
 | `python -m core.scripts.stages.bp4` | `showcase_event` (собирает конвейером, не подделывает) |
-| `python -m core.scripts.stages.bp5` | `alert` |
+| `python -m core.scripts.stages.bp5` | `alert` (собирает конвейером, не подделывает) |
 | `python -m core.scripts.stages.bp6` | `action_item` |
 
 Каждый скрипт чистит свой слой и всё, что ниже по потоку, затем заливает заново.

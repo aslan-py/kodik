@@ -143,3 +143,14 @@ class ShowcaseEvent(Base, Mixin):
         server_default=func.now(),
         comment='Инкрементальный UPSERT, без полной перезагрузки',
     )
+    alerted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment=(
+            'Когда BP-5 последний раз проверял строку на значимость — '
+            'НЕЗАВИСИМО от результата (даже если алерт не сработал). '
+            'Отбор BP-5: alerted_at IS NULL OR updated_at > alerted_at. '
+            'Не по журналу alert — там легитимны события с нулём алертов, '
+            'и по нему нельзя было бы отличить «ещё не проверено» от '
+            '«проверено, но не значимо»'
+        ),
+    )

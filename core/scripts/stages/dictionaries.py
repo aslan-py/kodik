@@ -3,8 +3,9 @@
 Система data-driven — поведение задаётся данными справочников, а не кодом:
 кого ищем (competitor), где (source), по каким словам (trigger), что
 отсеиваем (black_domain, stop_word, topic_limit), какими категориями и
-отделами размечаем (category, department), куда шлём алерты (event_type,
-channel, routing_rule). Без них не запустится ни один этап пайплайна.
+отделами размечаем (category, department), кому и куда шлём алерты
+(event_type, channel, user, routing_rule). Без них не запустится ни один
+этап пайплайна.
 
 Запуск:
     python -m core.scripts.stages.dictionaries
@@ -32,7 +33,7 @@ from core.scripts.stages.cascade import (
 from src.bp1.models import Competitor, Source, Trigger
 from src.bp2.models import BlackDomain, Region, StopWord, TopicLimit
 from src.bp3.models import Category, Department
-from src.bp5.models import Channel, EventType, RoutingRule
+from src.bp5.models import Channel, EventType, RoutingRule, User
 
 PROJECT_ROOT = Path(__file__).parents[3]
 CITIES_FILE = PROJECT_ROOT / 'src' / 'bp2' / 'files' / 'cities.json'
@@ -198,51 +199,93 @@ DEPARTMENTS = [
 EVENT_TYPES = [
     {
         'name': 'судебный/надзорный риск',
-        'keywords': 'прокуратура, суд, иск, нарушения, надзор',
+        'keywords': ['прокуратура', 'суд', 'иск', 'нарушения', 'надзор'],
     },
     {
         'name': 'выигранный тендер',
-        'keywords': 'тендер, контракт, закупка, аукцион',
+        'keywords': ['тендер', 'контракт', 'закупка', 'аукцион'],
     },
-    {'name': 'активный наём', 'keywords': 'вакансия, наём, набор персонала'},
+    {
+        'name': 'активный наём',
+        'keywords': ['вакансия', 'наём', 'набор персонала'],
+    },
     {
         'name': 'расширение',
-        'keywords': 'расширение, открытие, новый объект, реконструкция',
+        'keywords': ['расширение', 'открытие', 'новый объект', 'реконструкция'],
     },
     {
         'name': 'закрытие объекта',
-        'keywords': 'закрытие, банкротство, ликвидация',
+        'keywords': ['закрытие', 'банкротство', 'ликвидация'],
     },
 ]
 
 CHANNELS = ['telegram', 'email']
 
-# (тип события, приоритет, отдел, канал, режим доставки)
+# Получатели алертов — конкретные люди, не абстрактный «отдел». department —
+# справочно (в каком отделе числится), резолвится в department_id при
+# заливке. email/telegram_login обязательны — это и есть адрес доставки.
+USERS = [
+    {
+        'full_name': 'Иванов Пётр',
+        'department': 'Юристы',
+        'email': 'ivanov@kodik.example',
+        'telegram_login': 'ivanov_p',
+    },
+    {
+        'full_name': 'Петрова Анна',
+        'department': 'Юристы',
+        'email': 'petrova@kodik.example',
+        'telegram_login': 'petrova_a',
+    },
+    {
+        'full_name': 'Сидоров Олег',
+        'department': 'Аналитика',
+        'email': 'sidorov@kodik.example',
+        'telegram_login': 'sidorov_o',
+    },
+]
+
+# (тип события, приоритет, получатель, канал, режим доставки)
+# Получатель — user.full_name, НЕ отдел: список курируется вручную и может
+# не совпадать со штатом отдела. Пример ниже — у «судебного риска» на П1
+# ДВА получателя, и у одного из них ДВА канала: три строки под одну пару
+# (тип, приоритет) дают три алерта на одно и то же событие.
 ROUTING = [
     (
         'судебный/надзорный риск',
         PriorityLevel.p1,
-        'Юристы',
+        'Иванов Пётр',
         'telegram',
         DeliveryMode.instant,
     ),
     (
         'судебный/надзорный риск',
         PriorityLevel.p1,
-        'Юристы',
+        'Иванов Пётр',
         'email',
         DeliveryMode.instant,
     ),
     (
-        # Тендеры как отдел упразднён — выигранный тендер конкурента
-        # это рыночный сигнал, его ведёт Аналитика (см. DEPARTMENTS.note).
+        'судебный/надзорный риск',
+        PriorityLevel.p1,
+        'Петрова Анна',
+        'telegram',
+        DeliveryMode.instant,
+    ),
+    (
         'выигранный тендер',
         PriorityLevel.p2,
-        'Аналитика',
+        'Сидоров Олег',
         'email',
         DeliveryMode.digest,
     ),
-    ('расширение', PriorityLevel.p3, 'Аналитика', 'email', DeliveryMode.digest),
+    (
+        'расширение',
+        PriorityLevel.p3,
+        'Сидоров Олег',
+        'email',
+        DeliveryMode.digest,
+    ),
 ]
 
 
@@ -309,9 +352,14 @@ async def _is_empty(session: AsyncSession, model) -> bool:
     return await session.scalar(select(model.id).limit(1)) is None
 
 
-async def _name_to_id(session: AsyncSession, model) -> dict[str, int]:
-    """{name: id} справочника — для резолва связей routing_rule."""
-    rows = await session.execute(select(model.name, model.id))
+async def _key_to_id(session: AsyncSession, model, key_column) -> dict:
+    """{значение key_column: id} — для резолва связей (routing_rule, user).
+
+    key_column передаётся явно (Department.name, User.full_name, ...),
+    а не берётся по умолчанию как model.name — у User естественный ключ
+    называется full_name, не name.
+    """
+    rows = await session.execute(select(key_column, model.id))
     return dict(rows.all())
 
 
@@ -347,19 +395,37 @@ async def seed(session: AsyncSession) -> int:
         added += await _insert(session, TopicLimit, TOPIC_LIMITS)
     await session.flush()
 
+    # user: email И telegram_login по отдельности unique (не пара), поэтому
+    # обычный _insert с ON CONFLICT по двум колонкам сразу не подходит —
+    # тот же count-guard, что и у routing_rule. department_id резолвится
+    # из уже залитых Department.
+    if await _is_empty(session, User):
+        dept = await _key_to_id(session, Department, Department.name)
+        session.add_all(
+            User(
+                full_name=u['full_name'],
+                department_id=dept[u['department']],
+                email=u['email'],
+                telegram_login=u['telegram_login'],
+            )
+            for u in USERS
+        )
+        added += len(USERS)
+    await session.flush()
+
     if await _is_empty(session, RoutingRule):
-        etype = await _name_to_id(session, EventType)
-        channel = await _name_to_id(session, Channel)
-        dept = await _name_to_id(session, Department)
+        etype = await _key_to_id(session, EventType, EventType.name)
+        channel = await _key_to_id(session, Channel, Channel.name)
+        user = await _key_to_id(session, User, User.full_name)
         session.add_all(
             RoutingRule(
                 event_type_id=etype[etype_name],
                 priority=priority,
-                department_id=dept[dep_name],
+                user_id=user[full_name],
                 channel_id=channel[chan_name],
                 mode=mode,
             )
-            for etype_name, priority, dep_name, chan_name, mode in ROUTING
+            for etype_name, priority, full_name, chan_name, mode in ROUTING
         )
         added += len(ROUTING)
     await session.flush()

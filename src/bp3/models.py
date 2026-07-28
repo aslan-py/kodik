@@ -60,6 +60,10 @@ class Category(Base, Mixin, ActiveMixin):
             'PR-активность конкурента, репутационный риск)'
         ),
     )
+    note: Mapped[str | None] = mapped_column(
+        String(512),
+        comment='Определение категории для аналитика: что под неё подпадает',
+    )
 
 
 class Department(Base, Mixin, ActiveMixin):
@@ -72,7 +76,11 @@ class Department(Base, Mixin, ActiveMixin):
     name: Mapped[str] = mapped_column(
         String(128),
         unique=True,
-        comment='Отдел: PR, Тендеры, Юристы, Аналитика, Маркетинг',
+        comment='Отдел: PR, Юристы, Аналитика, Маркетинг',
+    )
+    note: Mapped[str | None] = mapped_column(
+        String(512),
+        comment='Зона ответственности отдела: какие категории он ведёт',
     )
 
 

@@ -3,7 +3,7 @@ import logging
 from .constants import LOG_FORMAT, LOG_LEVEL
 
 
-def get_logger(name: str = "kad_arbitr_rpa") -> logging.Logger:
+def get_logger(name: str = 'kad_arbitr_rpa') -> logging.Logger:
     """Создаёт и возвращает логгер с стандартным форматом."""
     logger = logging.getLogger(name)
     if not logger.handlers:

@@ -10,13 +10,13 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from raw_storage.core.exceptions import NotFoundError, StorageError
-from raw_storage.core.interfaces import (
+from ..core.exceptions import NotFoundError, StorageError
+from ..core.interfaces import (
     BaseDeduplicator,
     BaseStorage,
     NoOpDeduplicator,
 )
-from raw_storage.core.models import ProcessingStatus, RawDataFile
+from ..core.models import ProcessingStatus, RawDataFile
 
 logger = logging.getLogger(__name__)
 
@@ -61,20 +61,20 @@ class RawDataRepository:
         # Проверяем дедупликацию по raw_id
         if await self._dedup.is_duplicate(raw_id_str):
             logger.info(
-                "Дубликат обнаружен (raw_id: %s), пропуск",
+                'Дубликат обнаружен (raw_id: %s), пропуск',
                 raw_id_str,
             )
             # Пытаемся найти существующий файл
             try:
                 existing = await self.find_by_id(raw_data_file.raw_id)
                 return existing  # возвращаем путь
-            except NotFoundError:
+            except NotFoundError as err:
                 raise StorageError(
-                    f"Дубликат raw_id {raw_id_str} без существующего файла"
-                )
+                    f'Дубликат raw_id {raw_id_str} без существующего файла',
+                ) from err
 
         path = await self._storage.save(raw_data_file)
-        logger.info("RawDataFile %s сохранён в %s", raw_id_str, path)
+        logger.info('RawDataFile %s сохранён в %s', raw_id_str, path)
         return path
 
     async def find_by_id(self, raw_id: UUID | str) -> str:
@@ -92,12 +92,12 @@ class RawDataRepository:
         Raises:
             NotFoundError: Если файл с таким raw_id не найден.
         """
-        results = await self.find_by_prefix("")
+        results = await self.find_by_prefix('')
         for path in results:
             data = await self._storage.load(path)
             if str(data.raw_id) == str(raw_id):
                 return path
-        raise NotFoundError(f"Файл выгрузки {raw_id} не найден")
+        raise NotFoundError(f'Файл выгрузки {raw_id} не найден')
 
     async def find_by_trigger(self, trigger_id: str) -> list[RawDataFile]:
         """Найти все выгрузки, собранные по указанному триггеру.
@@ -109,7 +109,7 @@ class RawDataRepository:
             Список моделей RawDataFile, соответствующих триггеру.
         """
         results: list[RawDataFile] = []
-        for path in await self.find_by_prefix(""):
+        for path in await self.find_by_prefix(''):
             data = await self._storage.load(path)
             if data.meta.trigger == trigger_id:
                 results.append(data)
@@ -125,7 +125,7 @@ class RawDataRepository:
             Список моделей RawDataFile со статусом PENDING.
         """
         results: list[RawDataFile] = []
-        for path in await self.find_by_prefix(""):
+        for path in await self.find_by_prefix(''):
             data = await self._storage.load(path)
             if data.meta.status == ProcessingStatus.PENDING:
                 results.append(data)
@@ -158,12 +158,12 @@ class RawDataRepository:
         # Перезаписываем файл с обновлённым статусом
         await self._storage.save(data)
         logger.info(
-            "Статус выгрузки %s обновлён на %s",
+            'Статус выгрузки %s обновлён на %s',
             raw_id,
             new_status.value,
         )
 
-    async def find_by_prefix(self, prefix: str = "") -> list[str]:
+    async def find_by_prefix(self, prefix: str = '') -> list[str]:
         """Вернуть список путей файлов по префиксу каталога.
 
         Если prefix пустой — сканирует весь корень хранилища.

@@ -8,10 +8,10 @@
 CSV-файлы лежат рядом: core/data/*.csv.
 
 Запуск (из корня проекта):
-    python -m core.seed_data                          # полный прогон из CSV
-    python -m core.seed_data --dry-run                # показать что будет сделано
-    python -m core.seed_data --only competitors       # только конкуренты
-    python -m core.seed_data --clear                  # очистить и заполнить заново
+    python -m core.seed_data                       # полный прогон из CSV
+    python -m core.seed_data --dry-run             # показать что будет сделано
+    python -m core.seed_data --only competitors    # только конкуренты
+    python -m core.seed_data --clear             # очистить и заполнить заново
     python -m core.seed_data --csv-dir ./custom/path  # свой путь к CSV
 
 Или напрямую:
@@ -20,11 +20,6 @@ CSV-файлы лежат рядом: core/data/*.csv.
 Повторный запуск безопасен — дубликаты не создаются (ON CONFLICT DO NOTHING).
 """
 
-from src.bp1.models import Competitor, Source, SearchTask, Trigger
-from core.database import AsyncSessionLocal
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy import delete, select
 import argparse
 import asyncio
 import csv
@@ -32,6 +27,13 @@ import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.database import AsyncSessionLocal
+from src.bp1.models import Competitor, SearchTask, Source, Trigger
 
 # Добавляем корень проекта в PYTHONPATH для импорта моделей
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +58,7 @@ _DEFAULT_DATA_DIR = Path(__file__).resolve().parent / 'data'
 @dataclass
 class CompetitorRow:
     """Строка из competitor.csv."""
+
     name: str
     inn: str | None
 
@@ -63,18 +66,21 @@ class CompetitorRow:
 @dataclass
 class SourceRow:
     """Строка из source.csv."""
+
     name: str
 
 
 @dataclass
 class TriggerRow:
     """Строка из trigger.csv."""
+
     keyword: str
 
 
 @dataclass
 class SearchTaskRow:
     """Строка из search_task.csv (имена вместо ID)."""
+
     competitor_name: str
     source_name: str
     trigger_keyword: str | None
@@ -94,8 +100,7 @@ def read_competitors_csv(path: Path) -> list[CompetitorRow]:
         for line_no, row in enumerate(reader, start=2):
             name = row['name'].strip()
             if not name:
-                log.warning(
-                    'competitor.csv:%d — пустое name, пропуск', line_no)
+                log.warning('competitor.csv:%d — пустое name, пропуск', line_no)
                 continue
             inn_raw = row.get('inn', '').strip()
             inn = inn_raw if inn_raw else None
@@ -125,9 +130,7 @@ def read_triggers_csv(path: Path) -> list[TriggerRow]:
         for line_no, row in enumerate(reader, start=2):
             keyword = row['keyword'].strip()
             if not keyword:
-                log.warning(
-                    'trigger.csv:%d — пустое keyword, пропуск', line_no
-                )
+                log.warning('trigger.csv:%d — пустое keyword, пропуск', line_no)
                 continue
             rows.append(TriggerRow(keyword=keyword))
     return rows
@@ -153,11 +156,13 @@ def read_search_tasks_csv(path: Path) -> list[SearchTaskRow]:
                 continue
             trig_raw = row.get('trigger_keyword', '').strip()
             trig = trig_raw if trig_raw else None
-            rows.append(SearchTaskRow(
-                competitor_name=comp,
-                source_name=src,
-                trigger_keyword=trig,
-            ))
+            rows.append(
+                SearchTaskRow(
+                    competitor_name=comp,
+                    source_name=src,
+                    trigger_keyword=trig,
+                )
+            )
     return rows
 
 
@@ -310,9 +315,7 @@ async def insert_search_tasks(
         trigger_id = None
         if row.trigger_keyword:
             trig_result = await session.execute(
-                select(Trigger).where(
-                    Trigger.keyword == row.trigger_keyword
-                )
+                select(Trigger).where(Trigger.keyword == row.trigger_keyword)
             )
             trigger = trig_result.scalar_one_or_none()
             if not trigger:
@@ -420,7 +423,7 @@ async def seed(
         'tasks': data_dir / 'search_task.csv',
     }
 
-    for name, path in csv_files.items():
+    for _name, path in csv_files.items():
         if not path.exists():
             log.error('CSV-файл не найден: %s', path)
             sys.exit(1)
@@ -471,22 +474,30 @@ async def seed(
 
                 if 'competitors' in run_types:
                     stats['Конкуренты'] = await insert_competitors(
-                        session, competitors, dry_run,
+                        session,
+                        competitors,
+                        dry_run,
                     )
 
                 if 'sources' in run_types:
                     stats['Источники'] = await insert_sources(
-                        session, sources, dry_run,
+                        session,
+                        sources,
+                        dry_run,
                     )
 
                 if 'triggers' in run_types:
                     stats['Триггеры'] = await insert_triggers(
-                        session, triggers, dry_run,
+                        session,
+                        triggers,
+                        dry_run,
                     )
 
                 if 'tasks' in run_types:
                     stats['SearchTask'] = await insert_search_tasks(
-                        session, search_tasks, dry_run,
+                        session,
+                        search_tasks,
+                        dry_run,
                     )
 
             # Если dry_run — откатываем (ничего не сохранялось)
@@ -541,7 +552,7 @@ def parse_args() -> argparse.Namespace:
         '--clear',
         action='store_true',
         help='Очистить таблицы перед вставкой (search_task, trigger, '
-             'source, competitor)',
+        'source, competitor)',
     )
     return parser.parse_args()
 
@@ -554,12 +565,14 @@ def main() -> None:
         log.error('Папка с CSV не найдена: %s', args.csv_dir)
         sys.exit(1)
 
-    asyncio.run(seed(
-        data_dir=args.csv_dir,
-        only=args.only,
-        dry_run=args.dry_run,
-        clear=args.clear,
-    ))
+    asyncio.run(
+        seed(
+            data_dir=args.csv_dir,
+            only=args.only,
+            dry_run=args.dry_run,
+            clear=args.clear,
+        )
+    )
 
 
 if __name__ == '__main__':

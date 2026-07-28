@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
-from raw_storage.constants import (
+
+from ..constants import (
     CHECKSUM_LOG_LENGTH,
     DEFAULT_BASE_PATH,
     ENCODING_UTF8,
@@ -38,16 +39,16 @@ from raw_storage.constants import (
     JSON_KEY_TRIGGER,
     JSON_KEY_URL,
 )
-from raw_storage.core.exceptions import NotFoundError, StorageError
-from raw_storage.core.interfaces import BaseStorage
-from raw_storage.core.models import (
+from ..core.exceptions import NotFoundError, StorageError
+from ..core.interfaces import BaseStorage
+from ..core.models import (
     MetaInfo,
     ProcessingStatus,
     RawDataFile,
     RawDataItem,
 )
-from raw_storage.utils.hashing import compute_sha256
-from raw_storage.utils.path_generator import PathGenerator
+from ..utils.hashing import compute_sha256
+from ..utils.path_generator import PathGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +93,11 @@ class DiskBackend(BaseStorage):
             ) as f:
                 await f.write(raw_bytes)
         except OSError as e:
-            raise StorageError(f"Ошибка записи файла {path}: {e}") from e
+            raise StorageError(f'Ошибка записи файла {path}: {e}') from e
 
         checksum = compute_sha256(raw_bytes.encode(ENCODING_UTF8))
         logger.info(
-            "Сохранён файл %s (чексумма: %s...)",
+            'Сохранён файл %s (чексумма: %s...)',
             path,
             checksum[:CHECKSUM_LOG_LENGTH],
         )
@@ -116,7 +117,7 @@ class DiskBackend(BaseStorage):
             StorageError: При ошибке чтения или парсинга.
         """
         if not await self.exists(path):
-            raise NotFoundError(f"Файл не найден: {path}")
+            raise NotFoundError(f'Файл не найден: {path}')
 
         try:
             async with aiofiles.open(
@@ -126,13 +127,13 @@ class DiskBackend(BaseStorage):
             ) as f:
                 content = await f.read()
         except OSError as e:
-            raise StorageError(f"Ошибка чтения файла {path}: {e}") from e
+            raise StorageError(f'Ошибка чтения файла {path}: {e}') from e
 
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as e:
             raise StorageError(
-                f"Ошибка парсинга JSON в файле {path}: {e}"
+                f'Ошибка парсинга JSON в файле {path}: {e}'
             ) from e
 
         return self._deserialize(payload)
@@ -141,12 +142,12 @@ class DiskBackend(BaseStorage):
         """Удалить файл по пути. Возвращает True при успехе."""
         try:
             Path(path).unlink(missing_ok=False)
-            logger.info("Удалён файл %s", path)
+            logger.info('Удалён файл %s', path)
             return True
         except FileNotFoundError:
             return False
         except OSError as e:
-            raise StorageError(f"Ошибка удаления файла {path}: {e}") from e
+            raise StorageError(f'Ошибка удаления файла {path}: {e}') from e
 
     async def exists(self, path: str) -> bool:
         """Проверить, что файл существует на диске."""
@@ -231,7 +232,8 @@ class DiskBackend(BaseStorage):
             source_request_url=meta_section[JSON_KEY_SOURCE_REQUEST_URL],
             fetched_at=meta_section[JSON_KEY_FETCHED_AT],
             status=ProcessingStatus(
-                meta_section.get(JSON_KEY_STATUS, "pending")),
+                meta_section.get(JSON_KEY_STATUS, 'pending')
+            ),
         )
 
         items = [

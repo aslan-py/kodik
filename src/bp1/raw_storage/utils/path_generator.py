@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from raw_storage.constants import (
+from ..constants import (
     DEFAULT_BASE_PATH,
     FILE_EXTENSION,
     RAW_FILE_PREFIX,
@@ -49,10 +49,10 @@ class PathGenerator:
         path = (
             self._base
             / str(dt.year)
-            / f"{dt.month:02d}"
-            / f"{dt.day:02d}"
-            / f"{TRIGGER_DIR_PREFIX}{trigger_id}"
-            / f"{RAW_FILE_PREFIX}{file_id}{FILE_EXTENSION}"
+            / f'{dt.month:02d}'
+            / f'{dt.day:02d}'
+            / f'{TRIGGER_DIR_PREFIX}{trigger_id}'
+            / f'{RAW_FILE_PREFIX}{file_id}{FILE_EXTENSION}'
         )
         return str(path)
 

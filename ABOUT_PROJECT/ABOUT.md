@@ -226,13 +226,15 @@ URL как ключ не годится: одна и та же новость н
 ```python
 import hashlib, re
 
-def norm(s: str) -> str:                       # без этого «Бегемот» и "Бегемот" дадут разные хэши
-    s = (s or "").lower()
-    s = re.sub(r"[^\w\s]", "", s)              # убрать кавычки/пунктуацию
-    return re.sub(r"\s+", " ", s).strip()      # схлопнуть пробелы
+
+def norm(s: str) -> str:  # без этого «Бегемот» и "Бегемот" дадут разные хэши
+    s = (s or '').lower()
+    s = re.sub(r'[^\w\s]', '', s)  # убрать кавычки/пунктуацию
+    return re.sub(r'\s+', ' ', s).strip()  # схлопнуть пробелы
+
 
 dedup_key = hashlib.sha256(
-    f"{competitor}|{norm(title)}|{published_at}|{region}".encode()
+    f'{competitor}|{norm(title)}|{published_at}|{region}'.encode()
 ).hexdigest()
 ```
 

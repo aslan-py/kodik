@@ -22,19 +22,19 @@ tz = timezone(timedelta(hours=5))
 
 batch = RawDataFile(
     meta=MetaInfo(
-        search_task_id=1,                          # ID задачи в БД
-        source="fedresurs.ru",                     # код источника
-        competitor="ООО СИТИГРАД",                 # наименование конкурента
-        trigger="6318034066",                      # ИНН / ключевое слово
-        source_request_url="https://fedresurs.ru/company/6318034066",
-        fetched_at=datetime.now(tz),               # время выгрузки
+        search_task_id=1,  # ID задачи в БД
+        source='fedresurs.ru',  # код источника
+        competitor='ООО СИТИГРАД',  # наименование конкурента
+        trigger='6318034066',  # ИНН / ключевое слово
+        source_request_url='https://fedresurs.ru/company/6318034066',
+        fetched_at=datetime.now(tz),  # время выгрузки
     ),
     items=[
         RawDataItem(
-            url="https://fedresurs.ru/sfactmessages/123",
-            title="Недостоверность сведений",
-            text="<!DOCTYPE html><html>...</html>",  # полный HTML
-            date="07.07.2026",
+            url='https://fedresurs.ru/sfactmessages/123',
+            title='Недостоверность сведений',
+            text='<!DOCTYPE html><html>...</html>',  # полный HTML
+            date='07.07.2026',
             region=None,
             media=None,
             salary=None,
@@ -48,11 +48,11 @@ batch = RawDataFile(
 ```python
 from raw_storage import StorageFactory, RawDataRepository
 
-backend = StorageFactory.create("disk", base_path="data/raw")
+backend = StorageFactory.create('disk', base_path='data/raw')
 repo = RawDataRepository(storage_backend=backend)
 
 path = await repo.save(batch)
-print(f"Сохранён: {path}")
+print(f'Сохранён: {path}')
 # data/raw/2026/07/27/trigger_6318034066/raw_a1b2c3d4-....json
 ```
 
@@ -60,17 +60,17 @@ print(f"Сохранён: {path}")
 
 ```python
 loaded = await backend.load(path)
-print(f"Элементов: {len(loaded.items)}")
-print(f"Источник: {loaded.meta.source}")
-print(f"Статус: {loaded.meta.status.value}")
+print(f'Элементов: {len(loaded.items)}')
+print(f'Источник: {loaded.meta.source}')
+print(f'Статус: {loaded.meta.status.value}')
 ```
 
 ### 4. Найти выгрузки по триггеру
 
 ```python
-results = await repo.find_by_trigger("6318034066")
+results = await repo.find_by_trigger('6318034066')
 for r in results:
-    print(f"{r.meta.fetched_at}: {len(r.items)} элементов")
+    print(f'{r.meta.fetched_at}: {len(r.items)} элементов')
 ```
 
 ### 5. Обновить статус обработки
@@ -100,13 +100,17 @@ pip install -r requirements.txt
 import asyncio
 from datetime import datetime, timezone, timedelta
 from raw_storage import (
-    RawDataFile, RawDataItem, MetaInfo,
-    RawDataRepository, StorageFactory,
+    RawDataFile,
+    RawDataItem,
+    MetaInfo,
+    RawDataRepository,
+    StorageFactory,
 )
+
 
 async def main():
     # Создаём бэкенд и репозиторий
-    backend = StorageFactory.create("disk", base_path="data/raw")
+    backend = StorageFactory.create('disk', base_path='data/raw')
     repo = RawDataRepository(storage_backend=backend)
 
     # Формируем выгрузку
@@ -114,29 +118,30 @@ async def main():
     batch = RawDataFile(
         meta=MetaInfo(
             search_task_id=1,
-            source="fedresurs.ru",
-            competitor="ООО СИТИГРАД",
-            trigger="6318034066",
-            source_request_url="https://fedresurs.ru/company/...",
+            source='fedresurs.ru',
+            competitor='ООО СИТИГРАД',
+            trigger='6318034066',
+            source_request_url='https://fedresurs.ru/company/...',
             fetched_at=datetime.now(tz),
         ),
         items=[
             RawDataItem(
-                url="https://fedresurs.ru/sfactmessages/...",
-                title="Недостоверность сведений",
-                text="<!DOCTYPE html><html>...</html>",
-                date="07.07.2026",
+                url='https://fedresurs.ru/sfactmessages/...',
+                title='Недостоверность сведений',
+                text='<!DOCTYPE html><html>...</html>',
+                date='07.07.2026',
             ),
         ],
     )
 
     # Сохраняем
     path = await repo.save(batch)
-    print(f"Сохранён: {path}")
+    print(f'Сохранён: {path}')
 
     # Загружаем обратно
     loaded = await backend.load(path)
-    print(f"Элементов: {len(loaded.items)}")
+    print(f'Элементов: {len(loaded.items)}')
+
 
 asyncio.run(main())
 ```
@@ -148,7 +153,7 @@ asyncio.run(main())
 Фабрика для создания бэкендов хранения.
 
 ```python
-backend = StorageFactory.create("disk", base_path="data/raw")
+backend = StorageFactory.create('disk', base_path='data/raw')
 ```
 
 | Метод | Описание |
@@ -287,10 +292,12 @@ data/raw/
 ```python
 from raw_storage.core.interfaces import BaseDeduplicator
 
+
 class FileIdDeduplicator(BaseDeduplicator):
     async def is_duplicate(self, raw_id: str) -> bool:
         # Реализация: проверка по индексу или БД
         ...
+
 
 repo = RawDataRepository(
     storage_backend=backend,

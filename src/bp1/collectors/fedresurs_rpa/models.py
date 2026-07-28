@@ -1,4 +1,4 @@
-"""Pydantic models for request/response."""
+"""Pydantic-модели для запроса/ответа."""
 
 from datetime import datetime
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class ProxyConfig(BaseModel):
-    """Proxy configuration."""
+    """Конфигурация прокси-сервера."""
 
     server: str
     username: str | None = None
@@ -14,21 +14,21 @@ class ProxyConfig(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """Request model for search operation."""
+    """Модель запроса для операции поиска."""
 
     name: str
     inn: str | None = None
     proxy: ProxyConfig | None = None
     user_agent: str | None = None
-    headless: bool | None = None  # None = use parser default
-    output_dir: str = "./parsed_pages"
+    headless: bool | None = None  # None = значение парсера по умолчанию
+    output_dir: str = './parsed_pages'
     timeout: int = 60000
     retry_count: int = 3
     qrator_bypass: bool = True
 
 
 class SearchResult(BaseModel):
-    """Result model for search operation."""
+    """Модель результата операции поиска."""
 
     success: bool
     name: str

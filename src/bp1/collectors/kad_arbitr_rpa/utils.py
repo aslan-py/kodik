@@ -12,7 +12,7 @@ def generate_request_id() -> str:
 def format_proxy_string(server: str, username: str | None = None) -> str:
     """Форматирует строку прокси для логирования (без пароля)."""
     if username:
-        return f"{username}@{server}"
+        return f'{username}@{server}'
     return server
 
 
@@ -47,34 +47,47 @@ def validate_inn(inn: str) -> bool:
     length = len(digits)
 
     if length == 10:
-        expected = sum(
-            d * w for d, w in zip(digits[:9], _INN_WEIGHTS_10, strict=False)
-        ) % 11 % 10
+        expected = (
+            sum(
+                d * w for d, w in zip(digits[:9], _INN_WEIGHTS_10, strict=False)
+            )
+            % 11
+            % 10
+        )
         if digits[9] != expected:
             raise ValueError(
-                f"Неверная контрольная сумма ИНН: ожидалось {expected}, "
-                f"получено {digits[9]}"
+                f'Неверная контрольная сумма ИНН: ожидалось {expected}, '
+                f'получено {digits[9]}'
             )
         return True
 
     if length == 12:
-        check_11 = sum(
-            d * w for d, w in zip(digits[:10], _INN_WEIGHTS_11, strict=False)
-        ) % 11 % 10
+        check_11 = (
+            sum(
+                d * w
+                for d, w in zip(digits[:10], _INN_WEIGHTS_11, strict=False)
+            )
+            % 11
+            % 10
+        )
         if digits[10] != check_11:
             raise ValueError(
-                f"Неверная 10-я контрольная сумма ИНН: ожидалось {check_11}, "
-                f"получено {digits[10]}"
+                f'Неверная 10-я контрольная сумма ИНН: ожидалось {check_11}, '
+                f'получено {digits[10]}'
             )
-        check_12 = sum(
-            d * w for d, w in zip(
-                digits[:11], _INN_WEIGHTS_12, strict=False
-            )) % 11 % 10
+        check_12 = (
+            sum(
+                d * w
+                for d, w in zip(digits[:11], _INN_WEIGHTS_12, strict=False)
+            )
+            % 11
+            % 10
+        )
         if digits[11] != check_12:
             raise ValueError(
-                f"Неверная 11-я контрольная сумма ИНН: ожидалось {check_12}, "
-                f"получено {digits[11]}"
+                f'Неверная 11-я контрольная сумма ИНН: ожидалось {check_12}, '
+                f'получено {digits[11]}'
             )
         return True
 
-    raise ValueError(f"ИНН должен содержать 10 или 12 цифр, получено {length}")
+    raise ValueError(f'ИНН должен содержать 10 или 12 цифр, получено {length}')

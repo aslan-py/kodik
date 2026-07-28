@@ -24,7 +24,12 @@ stealth/
 ```python
 import asyncio
 from playwright.async_api import async_playwright
-from stealth import get_launch_args, get_context_config, apply_stealth, bypass_qrator
+from stealth import (
+    get_launch_args,
+    get_context_config,
+    apply_stealth,
+    bypass_qrator,
+)
 
 
 async def main():
@@ -38,7 +43,7 @@ async def main():
 
     # 2. Создание контекста с нужными настройками
     context = await browser.new_context(
-        **get_context_config(user_agent="Mozilla/5.0 ...")
+        **get_context_config(user_agent='Mozilla/5.0 ...')
     )
 
     # 3. Инъекция JS-обманок (ДО создания страниц!)
@@ -47,9 +52,9 @@ async def main():
     page = await context.new_page()
 
     # 4. Обход QRATOR (если сайт использует эту защиту)
-    loaded = await bypass_qrator(page, context, "https://fedresurs.ru")
+    loaded = await bypass_qrator(page, context, 'https://fedresurs.ru')
     if loaded:
-        print("Сайт загружен!")
+        print('Сайт загружен!')
 
     # ... работа со страницей ...
 
@@ -98,9 +103,9 @@ args = get_launch_args(headless=True)
 **Пример:**
 ```python
 config = get_context_config(
-    locale="en-US",
-    timezone="America/New_York",
-    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) ..."
+    locale='en-US',
+    timezone='America/New_York',
+    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...',
 )
 context = await browser.new_context(**config)
 ```
@@ -131,7 +136,7 @@ context = await browser.new_context(**config)
 await apply_stealth(context)
 
 # С кастомным скриптом
-await apply_stealth(context, js_path="./my_evasions.js")
+await apply_stealth(context, js_path='./my_evasions.js')
 ```
 
 ---
@@ -157,9 +162,9 @@ await apply_stealth(context, js_path="./my_evasions.js")
 
 **Пример:**
 ```python
-loaded = await bypass_qrator(page, context, "https://fedresurs.ru")
+loaded = await bypass_qrator(page, context, 'https://fedresurs.ru')
 if not loaded:
-    print("Не удалось обойти QRATOR")
+    print('Не удалось обойти QRATOR')
 ```
 
 ## Константы QRATOR
@@ -168,9 +173,9 @@ if not loaded:
 
 ```python
 from stealth.qrator_bypass import (
-    QRATOR_CHALLENGE_WAIT_MS,      # 25000 — ожидание JS challenge
-    QRATOR_POST_NAVIGATION_WAIT_MS, # 3000  — ожидание после перехода на /search
-    QRATOR_LOGO_CLICK_WAIT_MS,      # 5000  — ожидание после клика по логотипу
+    QRATOR_CHALLENGE_WAIT_MS,  # 25000 — ожидание JS challenge
+    QRATOR_POST_NAVIGATION_WAIT_MS,  # 3000  — ожидание после перехода на /search
+    QRATOR_LOGO_CLICK_WAIT_MS,  # 5000  — ожидание после клика по логотипу
 )
 ```
 
@@ -188,12 +193,22 @@ _root = str(Path(__file__).resolve().parent.parent)
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
-from stealth import apply_stealth, get_launch_args, get_context_config, bypass_qrator
+from stealth import (
+    apply_stealth,
+    get_launch_args,
+    get_context_config,
+    bypass_qrator,
+)
 ```
 
 **Пример интеграции в BrowserManager:**
 ```python
-from stealth.browser_config import apply_stealth, get_context_config, get_launch_args
+from stealth.browser_config import (
+    apply_stealth,
+    get_context_config,
+    get_launch_args,
+)
+
 
 class BrowserManager:
     async def start(self):
@@ -218,14 +233,14 @@ from fedresurs_rpa.models import SearchRequest
 # С QRATOR bypass (по умолчанию) — для fedresurs.ru
 request = SearchRequest(
     name='ООО "Компания"',
-    inn="6318034066",
+    inn='6318034066',
     qrator_bypass=True,  # обход QRATOR (25с ожидание + двухшаговая навигация)
 )
 
 # Без QRATOR bypass — для сайтов без anti-bot защиты
 request = SearchRequest(
     name='ООО "Компания"',
-    inn="1234567890",
+    inn='1234567890',
     qrator_bypass=False,  # обычная навигация page.goto()
 )
 ```

@@ -1,37 +1,37 @@
-"""Custom exceptions for fedresurs_rpa package."""
+"""Пользовательские исключения пакета fedresurs_rpa."""
 
 
 class FedresursRPAException(Exception):
-    """Base exception for fedresurs_rpa package."""
+    """Базовое исключение пакета fedresurs_rpa."""
 
     pass
 
 
 class BrowserStartError(FedresursRPAException):
-    """Error starting browser."""
+    """Ошибка запуска браузера."""
 
     pass
 
 
 class PageLoadError(FedresursRPAException):
-    """Error loading page."""
+    """Ошибка загрузки страницы."""
 
     pass
 
 
 class ElementNotFoundError(FedresursRPAException):
-    """Element not found on page."""
+    """Элемент не найден на странице."""
 
     pass
 
 
 class ProxyError(FedresursRPAException):
-    """Proxy connection error."""
+    """Ошибка подключения к прокси."""
 
     pass
 
 
 class SearchExecutionError(FedresursRPAException):
-    """Error during search execution."""
+    """Ошибка выполнения поиска."""
 
     pass

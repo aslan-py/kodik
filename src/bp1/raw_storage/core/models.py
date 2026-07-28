@@ -11,22 +11,21 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
 
-class ProcessingStatus(str, Enum):
+class ProcessingStatus(str, Enum):  # noqa: UP042
     """Статус обработки сырых данных.
 
-    Lifecycle: PENDING -> PROCESSING -> DONE | ERROR
+    Жизненный цикл: PENDING -> PROCESSING -> DONE | ERROR
     """
 
-    PENDING = "pending"
-    PROCESSING = "processing"
-    DONE = "done"
-    ERROR = "error"
+    PENDING = 'pending'
+    PROCESSING = 'processing'
+    DONE = 'done'
+    ERROR = 'error'
 
 
 class MetaInfo(BaseModel):
@@ -36,20 +35,23 @@ class MetaInfo(BaseModel):
     были собраны данные.
     """
 
-    search_task_id: int = Field(description="ID поисковой задачи в БД")
+    search_task_id: int = Field(description='ID поисковой задачи в БД')
     source: str = Field(
-        description="Код источника (fedresurs.ru, kad-arbitr.ru)")
-    competitor: str = Field(description="Наименование конкурента")
+        description='Код источника (fedresurs.ru, kad-arbitr.ru)',
+    )
+    competitor: str = Field(description='Наименование конкурента')
     trigger: str = Field(
-        description="Идентификатор триггера (ИНН, ключевое слово)")
+        description='Идентификатор триггера (ИНН, ключевое слово)',
+    )
     source_request_url: str = Field(
-        description="URL исходного запроса к источнику")
+        description='URL исходного запроса к источнику',
+    )
     fetched_at: datetime = Field(
-        description="Timestamp выгрузки (время получения данных)"
+        description='Timestamp выгрузки (время получения данных)',
     )
     status: ProcessingStatus = Field(
         default=ProcessingStatus.PENDING,
-        description="Текущий статус обработки в ETL-пайплайне",
+        description='Текущий статус обработки в ETL-пайплайне',
     )
 
 
@@ -60,15 +62,19 @@ class RawDataItem(BaseModel):
     структурированные поля, извлечённые при сборе.
     """
 
-    url: str = Field(description="URL конкретного элемента")
-    title: str = Field(description="Заголовок элемента")
-    text: str = Field(description="Полный текст или HTML-код элемента")
-    date: Optional[str] = Field(
-        default=None, description="Дата элемента (строка)")
-    region: Optional[str] = Field(default=None, description="Регион")
-    media: Optional[str] = Field(default=None, description="Медиа-источник")
-    salary: Optional[str] = Field(
-        default=None, description="Зарплата (если применимо)")
+    url: str = Field(description='URL конкретного элемента')
+    title: str = Field(description='Заголовок элемента')
+    text: str = Field(description='Полный текст или HTML-код элемента')
+    date: str | None = Field(
+        default=None,
+        description='Дата элемента (строка)',
+    )
+    region: str | None = Field(default=None, description='Регион')
+    media: str | None = Field(default=None, description='Медиа-источник')
+    salary: str | None = Field(
+        default=None,
+        description='Зарплата (если применимо)',
+    )
 
 
 class RawDataFile(BaseModel):
@@ -79,9 +85,11 @@ class RawDataFile(BaseModel):
     """
 
     raw_id: UUID = Field(
-        default_factory=uuid4, description="Уникальный ID файла выгрузки"
+        default_factory=uuid4,
+        description='Уникальный ID файла выгрузки',
     )
-    meta: MetaInfo = Field(description="Метаданные выгрузки")
-    items: List[RawDataItem] = Field(
-        default_factory=list, description="Массив собранных элементов"
+    meta: MetaInfo = Field(description='Метаданные выгрузки')
+    items: list[RawDataItem] = Field(
+        default_factory=list,
+        description='Массив собранных элементов',
     )

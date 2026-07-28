@@ -2,29 +2,39 @@
 
 from __future__ import annotations
 
-from raw_storage.backends.disk_backend import DiskBackend
-from raw_storage.core.exceptions import StorageError
-from raw_storage.core.interfaces import BaseStorage
+from src.bp1.raw_storage.backends.disk_backend import DiskBackend
+from src.bp1.raw_storage.core.exceptions import StorageError
+from src.bp1.raw_storage.core.interfaces import BaseStorage
 
 
 class StorageFactory:
     """Создаёт бэкенд по строке из конфигурации."""
 
-    _registry: dict[str, type[BaseStorage]] = {
-        "disk": DiskBackend,
-    }
+    _registry: dict[str, type[BaseStorage]]
 
     @classmethod
-    def create(cls, backend_type: str = "disk", **kwargs) -> BaseStorage:
+    def _get_registry(cls) -> dict[str, type[BaseStorage]]:
+        """Ленивая инициализация реестра бэкендов."""
+        if not hasattr(cls, '_registry'):
+            cls._registry = {
+                'disk': DiskBackend,
+            }
+        return cls._registry
+
+    @classmethod
+    def create(
+        cls, backend_type: str = 'disk', **kwargs: object
+    ) -> BaseStorage:
         """Создать экземпляр бэкенда."""
-        if backend_type not in cls._registry:
-            available = ", ".join(cls._registry.keys())
+        registry = cls._get_registry()
+        if backend_type not in registry:
+            available = ', '.join(registry.keys())
             raise StorageError(
-                f"Неизвестный бэкенд '{backend_type}'. Доступные: {available}"
+                f"Неизвестный бэкенд '{backend_type}'. Доступные: {available}",
             )
-        return cls._registry[backend_type](**kwargs)
+        return registry[backend_type](**kwargs)
 
     @classmethod
     def register(cls, name: str, backend_class: type[BaseStorage]) -> None:
         """Зарегистрировать новый бэкенд."""
-        cls._registry[name] = backend_class
+        cls._get_registry()[name] = backend_class

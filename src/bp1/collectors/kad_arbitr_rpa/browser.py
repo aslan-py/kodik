@@ -47,7 +47,8 @@ class BrowserManager:
     def context(self) -> BrowserContext:
         if self._context is None:
             raise RuntimeError(
-                "BrowserManager не инициализирован. Вызовите start().")
+                'BrowserManager не инициализирован. Вызовите start().'
+            )
         return self._context
 
     def start(self) -> BrowserManager:
@@ -59,17 +60,17 @@ class BrowserManager:
         )
 
         context_kwargs: dict = {
-            "user_agent": self._user_agent,
-            "viewport": VIEWPORT,
+            'user_agent': self._user_agent,
+            'viewport': VIEWPORT,
         }
 
         if self._proxy:
-            proxy_dict: dict = {"server": self._proxy.server}
+            proxy_dict: dict = {'server': self._proxy.server}
             if self._proxy.username:
-                proxy_dict["username"] = self._proxy.username
+                proxy_dict['username'] = self._proxy.username
             if self._proxy.password:
-                proxy_dict["password"] = self._proxy.password
-            context_kwargs["proxy"] = proxy_dict
+                proxy_dict['password'] = self._proxy.password
+            context_kwargs['proxy'] = proxy_dict
 
         self._context = self._browser.new_context(**context_kwargs)
         self._context.set_default_timeout(self._timeout)
@@ -80,7 +81,7 @@ class BrowserManager:
             else None
         )
         logger.info(
-            "Браузер запущен. UA=%s, proxy=%s, headless=%s",
+            'Браузер запущен. UA=%s, proxy=%s, headless=%s',
             self._user_agent[:UA_LOG_TRUNCATE],
             proxy_log,
             self._headless,
@@ -98,7 +99,7 @@ class BrowserManager:
         if self._playwright:
             self._playwright.stop()
             self._playwright = None
-        logger.info("Браузер закрыт.")
+        logger.info('Браузер закрыт.')
 
     def __enter__(self) -> BrowserManager:
         return self.start()

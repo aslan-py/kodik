@@ -1,4 +1,4 @@
-"""Fedresurs RPA — Parser for fedresurs.ru with QRATOR bypass."""
+"""Fedresurs RPA — Парсер для fedresurs.ru с обходом QRATOR."""
 
 from .browser import BrowserManager
 from .exceptions import (
@@ -14,16 +14,16 @@ from .parser import FedresursRPA
 from .utils import validate_inn
 
 __all__ = [
-    "BrowserManager",
-    "BrowserStartError",
-    "ElementNotFoundError",
-    "FedresursRPA",
-    "FedresursRPAException",
-    "PageLoadError",
-    "ProxyConfig",
-    "ProxyError",
-    "SearchExecutionError",
-    "SearchRequest",
-    "SearchResult",
-    "validate_inn",
+    'BrowserManager',
+    'BrowserStartError',
+    'ElementNotFoundError',
+    'FedresursRPA',
+    'FedresursRPAException',
+    'PageLoadError',
+    'ProxyConfig',
+    'ProxyError',
+    'SearchExecutionError',
+    'SearchRequest',
+    'SearchResult',
+    'validate_inn',
 ]

@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import AsyncSessionLocal
 from src.bp1.collectors.fedresurs_rpa import FedresursRPA
-from src.bp1.collectors.fedresurs_rpa.models import (
+from src.bp1.collectors.fedresurs_rpa.schemas import (
     SearchRequest as FedresursRequest,
 )
 from src.bp1.collectors.kad_arbitr_rpa import KadArbitrParser

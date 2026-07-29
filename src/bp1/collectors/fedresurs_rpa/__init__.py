@@ -9,8 +9,8 @@ from .exceptions import (
     ProxyError,
     SearchExecutionError,
 )
-from .models import ProxyConfig, SearchRequest, SearchResult
 from .parser import FedresursRPA
+from .schemas import ProxyConfig, SearchRequest, SearchResult
 from .utils import validate_inn
 
 __all__ = [

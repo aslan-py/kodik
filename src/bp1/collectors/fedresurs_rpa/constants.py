@@ -14,6 +14,12 @@ SELECTORS = {
     'results_link_text': 'Вся информация',
     'logo': 'a[href="/"]',
     'loading_indicator': '.loading',
+    # Селекторы для извлечения данных из карточки компании
+    'company_status': '.label-item-text',
+    'company_info_container': '.information-content',
+    'company_name': '.company-name, .entity-header',
+    'company_inn': '[data-testid="inn"], .inn-value',
+    'company_address': '.company-address, .address-value',
 }
 
 # User-Agent Pool (Chromium-based for consistency with stealth)

@@ -21,8 +21,9 @@ from .exceptions import (
     PageLoadError,
     SearchExecutionError,
 )
+from .extractor import CompanyDataExtractor
 from .logger import get_logger
-from .models import ProxyConfig, SearchRequest, SearchResult
+from .schemas import ProxyConfig, SearchRequest, SearchResult
 from .utils import format_proxy_string, generate_filename
 
 logger = get_logger()
@@ -167,12 +168,17 @@ class FedresursRPA:
 
             await self._save_page(page, filepath)
 
+            # Извлечение структурированных данных из карточки компании
+            company_data = await self._extract_data_from_page(page)
+
             logger.info('Поиск успешно завершён: %s', filepath)
 
             return SearchResult(
                 success=True,
                 name=request.name,
                 inn=request.inn,
+                status=company_data.get('status'),
+                raw_text=company_data.get('full_text'),
                 file_path=filepath,
                 timestamp=timestamp,
                 proxy_used=format_proxy_string(proxy),
@@ -280,6 +286,32 @@ class FedresursRPA:
             except Exception:
                 pass
 
+            # Ожидание загрузки данных компании (information-content)
+            try:
+                await page.wait_for_selector(
+                    SELECTORS.get(
+                        'company_info_container', '.information-content'
+                    ),
+                    timeout=15000,
+                )
+                logger.info('Контейнер информации о компании загружен')
+            except Exception:
+                logger.info(
+                    'Контейнер .information-content не найден, продолжаем'
+                )
+
+            # Проверка наличия статуса компании
+            try:
+                status_selector = SELECTORS.get(
+                    'company_status', '.label-item-text'
+                )
+                status_el = page.locator(status_selector).first
+                if await status_el.count() > 0:
+                    status_text = await status_el.inner_text()
+                    logger.info('Статус компании: %s', status_text.strip())
+            except Exception:
+                logger.info('Статус компании не обнаружен')
+
             logger.info('Карточка компании загружена')
         except Exception as e:
             logger.warning('Не удалось открыть карточку компании: %s', e)
@@ -309,3 +341,22 @@ class FedresursRPA:
             raise PageLoadError(
                 f'Не удалось сохранить страницу в {filepath}: {e}'
             ) from e
+
+    async def _extract_data_from_page(self, page: Page) -> dict:
+        """Извлечь структурированные данные из карточки компании.
+
+        Args:
+            page: Playwright Page с открытой карточкой компании.
+
+        Returns:
+            Словарь с извлечёнными данными (status, full_text, ...).
+        """
+        logger.info('Извлечение данных из карточки компании...')
+        extractor = CompanyDataExtractor()
+        data = await extractor.extract_company_data(page)
+        logger.info(
+            'Извлечено: статус="%s", текст=%d символов',
+            data.get('status'),
+            len(data.get('full_text') or ''),
+        )
+        return data

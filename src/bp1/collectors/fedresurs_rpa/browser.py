@@ -14,7 +14,7 @@ from src.bp1.collectors.stealth.browser_config import (
 from .constants import get_random_user_agent
 from .exceptions import BrowserStartError, ProxyError
 from .logger import get_logger
-from .models import ProxyConfig
+from .schemas import ProxyConfig
 
 logger = get_logger()
 
@@ -94,9 +94,7 @@ class BrowserManager:
             self._context = await self._browser.new_context(**context_kwargs)
             await apply_stealth(self._context)
 
-            logger.info(
-                'Браузер успешно запущен (headless=%s)', self._headless
-            )
+            logger.info('Браузер успешно запущен (headless=%s)', self._headless)
             return self._context
 
         except Exception as e:

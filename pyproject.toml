@@ -5,8 +5,13 @@ line-length = 80
 exclude = [
     ".git",
     ".venv",
+    ".venv-kodik",
     "alembic",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Автогенерированные миграции — длинные строки неизбежны
+"alembic/versions/*.py" = ["E501"]
 
 [tool.ruff.lint]
 select = [

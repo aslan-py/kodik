@@ -21,13 +21,18 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    declared_attr,
+    mapped_column,
+)
 
 from core.config import settings
 
 
 class Mixin:
-    """Добавляет автоматическое имя таблицы и id (primary key).
+    """Примесь: добавляет автоматическое имя таблицы и id (первичный ключ).
 
     Имя таблицы генерируется из CamelCase в snake_case:
     SearchTask -> search_task, RawItem -> raw_item.
@@ -46,7 +51,7 @@ class Mixin:
 
 
 class ActiveMixin:
-    """Добавляет флаг is_active.
+    """Примесь: добавляет флаг is_active для мягкого удаления.
 
     Используется для справочников, где записи нужно мягко выключать
     (не участвует в парсинге/выборках), не удаляя физически из БД.
@@ -66,7 +71,7 @@ class ActiveMixin:
 
 
 class Base(DeclarativeBase):
-    """Базовый класс для моделей."""
+    """Базовый декларативный класс для всех моделей SQLAlchemy."""
 
 
 engine = create_async_engine(settings.database_url)

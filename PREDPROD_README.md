@@ -113,7 +113,7 @@ pre-commit run ruff --all-files
 pre-commit run ruff-format --all-files
 ```
 
-## Поднятие разработческого окружения (Docker)
+## Поднятие окружения разработчика (Docker)
 
 ### 4. Инициализация контейнеров
 

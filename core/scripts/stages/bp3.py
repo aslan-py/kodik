@@ -193,4 +193,4 @@ async def clear(session: AsyncSession) -> int:
 if __name__ == '__main__':
     from core.scripts.stages.cascade import run_stage
 
-    run_stage('BP-3 (разметка)', clear, seed)
+    run_stage('BP-3 (categorized_event)', clear, seed)

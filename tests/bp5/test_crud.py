@@ -3,14 +3,24 @@
 Сессия из conftest не делает commit — данные откатываются после каждого
 теста. Цепочка до витрины та же, что в tests/bp4/test_crud.py, плюс
 справочники детектора: event_type, channel, user, routing_rule.
+
+sync_alerts реально пытается слать email (core.mail.send_email) и telegram
+(core.telegram.send_telegram) для instant-строк — во всех тестах ниже обе
+функции подменяются моками (AsyncMock), чтобы не зависеть от сети и от
+TRUE_ALERTING в окружении. Адресация (test_email/test_tg против реального
+recipient.email/recipient.telegram_id) выбирается settings.true_alerting —
+см. test_routing_uses_test_address_when_true_alerting_is_false и парный
+тест ниже.
 """
 
 from datetime import UTC, date, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 
+from core.config import settings
 from core.enums import (
     AlertStatus,
     DeliveryMode,
@@ -27,6 +37,28 @@ from src.bp4.models import ShowcaseEvent
 from src.bp5.crud import Bp5Crud
 from src.bp5.models import Alert, Channel, EventType, RoutingRule, User
 from src.bp5.pipeline import sync_alerts
+
+
+@pytest.fixture(autouse=True)
+def mock_send_email(monkeypatch):
+    """sync_alerts не должен реально стучаться в SMTP ни в одном тесте.
+
+    autouse — иначе забытый тест без мока либо реально уйдёт в сеть (при
+    TRUE_ALERTING=true в окружении разработчика), либо будет молча
+    считаться "sent" при поломанной логике доставки (при false).
+    """
+    mock = AsyncMock()
+    monkeypatch.setattr('src.bp5.pipeline.send_email', mock)
+    return mock
+
+
+@pytest.fixture(autouse=True)
+def mock_send_telegram(monkeypatch):
+    """Telegram-аналог mock_send_email — тот же смысл, тот же autouse."""
+    mock = AsyncMock()
+    monkeypatch.setattr('src.bp5.pipeline.send_telegram', mock)
+    return mock
+
 
 # ============================================================================
 #  Вспомогательные фикстуры — цепочка до витрины + справочники детектора
@@ -87,7 +119,37 @@ async def department(session):
 
 @pytest.fixture
 async def channel(session):
-    c = Channel(name=f'__тест-канал-{uuid4().hex[:8]}__')
+    """'email' — тот самый канал, что реально сидируется в проде
+    (core/scripts/stages/dictionaries.py: CHANNELS).
+
+    БД не изолирована от уже закоммиченных справочников (тот же нюанс,
+    что и у фикстуры event_type ниже) — если 'email' уже существует,
+    переиспользуем, иначе создаём. Имя должно быть ровно 'email': иначе
+    sync_alerts не распознает канал как email-доставляемый (см.
+    src/bp5/pipeline.py, шаг 5.5) и mock send_email ни разу не вызовется.
+    """
+    existing = await session.scalar(
+        select(Channel).where(Channel.name == 'email')
+    )
+    if existing is not None:
+        return existing
+    c = Channel(name='email')
+    session.add(c)
+    await session.flush()
+    return c
+
+
+@pytest.fixture
+async def channel_telegram(session):
+    """'telegram' — второй реально сидируемый канал (см. фикстуру channel
+    выше). Имя должно быть ровно 'telegram', иначе sync_alerts не
+    распознает канал как telegram-доставляемый."""
+    existing = await session.scalar(
+        select(Channel).where(Channel.name == 'telegram')
+    )
+    if existing is not None:
+        return existing
+    c = Channel(name='telegram')
     session.add(c)
     await session.flush()
     return c
@@ -99,7 +161,7 @@ async def user(session, department):
         full_name='Тестовый Пользователь',
         department_id=department.id,
         email=f'{uuid4().hex[:8]}@test.ru',
-        telegram_login=f'test_{uuid4().hex[:8]}',
+        telegram_id=uuid4().int % 1_000_000_000,
     )
     session.add(u)
     await session.flush()
@@ -311,7 +373,7 @@ async def test_insert_alerts_duplicate_ignored(
     inserted_again = await crud.insert_alerts([row])
     await session.flush()
 
-    assert inserted_again == 0
+    assert inserted_again == []
     found = (
         (
             await session.execute(
@@ -324,9 +386,9 @@ async def test_insert_alerts_duplicate_ignored(
     assert len(found) == 1
 
 
-async def test_insert_alerts_empty_list_returns_zero(session):
+async def test_insert_alerts_empty_list_returns_empty(session):
     crud = Bp5Crud(session)
-    assert await crud.insert_alerts([]) == 0
+    assert await crud.insert_alerts([]) == []
 
 
 # ============================================================================
@@ -387,6 +449,7 @@ async def test_matched_event_creates_alert(
     department,
     event_type,
     routing_rule,
+    mock_send_email,
 ):
     sc = await make_showcase(
         session,
@@ -405,7 +468,40 @@ async def test_matched_event_creates_alert(
     )
     assert alert is not None
     assert alert.user_id == routing_rule.user_id
-    assert alert.status == AlertStatus.sent  # instant
+    assert alert.status == AlertStatus.sent  # instant + email, отправка ок
+    assert alert.sent_at is not None
+    mock_send_email.assert_awaited_once()
+
+
+async def test_matched_event_marks_failed_when_send_raises(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    routing_rule,
+    mock_send_email,
+):
+    mock_send_email.side_effect = RuntimeError('SMTP недоступен')
+
+    sc = await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title=f'Новость про {event_type.keywords[0]}',
+    )
+    await sync_alerts(session)
+    await session.flush()
+
+    alert = await session.scalar(
+        select(Alert).where(Alert.showcase_event_id == sc.id)
+    )
+    assert alert.status == AlertStatus.failed
+    assert alert.sent_at is None
+    assert alert.error_message == 'SMTP недоступен'
 
 
 async def test_digest_mode_stays_queued(
@@ -454,13 +550,13 @@ async def test_multiple_recipients_create_multiple_alerts(
         full_name='Получатель Один',
         department_id=department.id,
         email=f'{uuid4().hex[:8]}@test.ru',
-        telegram_login=f't1_{uuid4().hex[:8]}',
+        telegram_id=uuid4().int % 1_000_000_000,
     )
     u2 = User(
         full_name='Получатель Два',
         department_id=department.id,
         email=f'{uuid4().hex[:8]}@test.ru',
-        telegram_login=f't2_{uuid4().hex[:8]}',
+        telegram_id=uuid4().int % 1_000_000_000,
     )
     session.add_all([u1, u2])
     await session.flush()
@@ -533,3 +629,247 @@ async def test_sync_alerts_is_idempotent(
     await session.flush()
     assert second['pending'] == 0
     assert second['alerts'] == 0
+
+
+# ============================================================================
+#  sync_alerts — канал telegram (зеркало email-тестов выше)
+# ============================================================================
+
+
+async def test_telegram_instant_creates_sent_alert(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    user,
+    channel_telegram,
+    mock_send_telegram,
+):
+    session.add(
+        RoutingRule(
+            event_type_id=event_type.id,
+            priority=PriorityLevel.p1,
+            user_id=user.id,
+            channel_id=channel_telegram.id,
+            mode=DeliveryMode.instant,
+        )
+    )
+    await session.flush()
+
+    sc = await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title=f'Новость про {event_type.keywords[0]}',
+    )
+    summary = await sync_alerts(session)
+    await session.flush()
+
+    assert summary['alerts'] == 1
+    alert = await session.scalar(
+        select(Alert).where(Alert.showcase_event_id == sc.id)
+    )
+    assert alert.status == AlertStatus.sent
+    assert alert.sent_at is not None
+    mock_send_telegram.assert_awaited_once()
+
+
+async def test_telegram_send_failure_marks_failed(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    user,
+    channel_telegram,
+    mock_send_telegram,
+):
+    mock_send_telegram.side_effect = RuntimeError('Telegram API недоступен')
+    session.add(
+        RoutingRule(
+            event_type_id=event_type.id,
+            priority=PriorityLevel.p1,
+            user_id=user.id,
+            channel_id=channel_telegram.id,
+            mode=DeliveryMode.instant,
+        )
+    )
+    await session.flush()
+
+    sc = await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title=f'Новость про {event_type.keywords[0]}',
+    )
+    await sync_alerts(session)
+    await session.flush()
+
+    alert = await session.scalar(
+        select(Alert).where(Alert.showcase_event_id == sc.id)
+    )
+    assert alert.status == AlertStatus.failed
+    assert alert.sent_at is None
+    assert alert.error_message == 'Telegram API недоступен'
+
+
+# ============================================================================
+#  sync_alerts — адресация по settings.true_alerting
+# ============================================================================
+
+
+async def test_routing_uses_test_address_when_true_alerting_is_false(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    routing_rule,
+    user,
+    channel_telegram,
+    mock_send_email,
+    mock_send_telegram,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, 'true_alerting', False)
+    monkeypatch.setattr(settings, 'test_email', 'sandbox@example.com')
+    monkeypatch.setattr(settings, 'test_tg', 999999999)
+    session.add(
+        RoutingRule(
+            event_type_id=event_type.id,
+            priority=PriorityLevel.p1,
+            user_id=user.id,
+            channel_id=channel_telegram.id,
+            mode=DeliveryMode.instant,
+        )
+    )
+    await session.flush()
+
+    await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title=f'Новость про {event_type.keywords[0]}',
+    )
+    await sync_alerts(session)
+    await session.flush()
+
+    email_to = mock_send_email.await_args.args[0]
+    tg_chat_id = mock_send_telegram.await_args.args[0]
+    assert email_to == 'sandbox@example.com'
+    assert tg_chat_id == 999999999
+
+
+async def test_routing_uses_real_recipient_when_true_alerting_is_true(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    routing_rule,
+    user,
+    channel_telegram,
+    mock_send_email,
+    mock_send_telegram,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, 'true_alerting', True)
+    session.add(
+        RoutingRule(
+            event_type_id=event_type.id,
+            priority=PriorityLevel.p1,
+            user_id=user.id,
+            channel_id=channel_telegram.id,
+            mode=DeliveryMode.instant,
+        )
+    )
+    await session.flush()
+
+    await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title=f'Новость про {event_type.keywords[0]}',
+    )
+    await sync_alerts(session)
+    await session.flush()
+
+    email_to = mock_send_email.await_args.args[0]
+    tg_chat_id = mock_send_telegram.await_args.args[0]
+    assert email_to == user.email
+    assert tg_chat_id == user.telegram_id
+
+
+# ============================================================================
+#  sync_alerts(deliver=False) — режим сидера, сеть не трогается никогда
+# ============================================================================
+
+
+async def test_sync_alerts_deliver_false_marks_sent_without_network(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    routing_rule,
+    user,
+    channel_telegram,
+    mock_send_email,
+    mock_send_telegram,
+    monkeypatch,
+):
+    # true_alerting=True — если deliver=False не работал бы, это привело
+    # бы к попытке реальной отправки на настоящие адреса юзера.
+    monkeypatch.setattr(settings, 'true_alerting', True)
+    session.add(
+        RoutingRule(
+            event_type_id=event_type.id,
+            priority=PriorityLevel.p1,
+            user_id=user.id,
+            channel_id=channel_telegram.id,
+            mode=DeliveryMode.instant,
+        )
+    )
+    await session.flush()
+
+    sc = await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title=f'Новость про {event_type.keywords[0]}',
+    )
+    summary = await sync_alerts(session, deliver=False)
+    await session.flush()
+
+    assert summary['alerts'] == 2  # email (routing_rule) + telegram
+    mock_send_email.assert_not_awaited()
+    mock_send_telegram.assert_not_awaited()
+
+    alerts = (
+        (
+            await session.execute(
+                select(Alert).where(Alert.showcase_event_id == sc.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(alerts) == 2
+    assert all(a.status == AlertStatus.sent for a in alerts)
+    assert all(a.sent_at is not None for a in alerts)

@@ -319,7 +319,7 @@ Table user {
   full_name varchar [null, note: "ФИО — для читаемости в админке, не критично"]
   department_id int [null, ref: > department.id, note: "В каком отделе числится. СПРАВОЧНО — не источник для маршрутизации (см. routing_rule.user_id)"]
   email varchar [not null, unique, note: "Адрес для канала email"]
-  telegram_login varchar [not null, unique, note: "Логин для канала telegram (без @)"]
+  telegram_id bigint [not null, unique, note: "Числовой chat_id для канала telegram (sendMessage требует id, не @username)"]
   is_active boolean [not null, default: true, note: "Уволен/в отпуске — гасим флагом, не удаляем (иначе потеряется история alert через FK RESTRICT)"]
 
   Note: "Список получателей курируется вручную и может не совпадать со штатом отдела (сегодня трое, завтра один) — поэтому department НЕ годится источником рассылки, только user."

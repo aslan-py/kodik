@@ -223,25 +223,28 @@ CHANNELS = ['telegram', 'email']
 
 # Получатели алертов — конкретные люди, не абстрактный «отдел». department —
 # справочно (в каком отделе числится), резолвится в department_id при
-# заливке. email/telegram_login обязательны — это и есть адрес доставки.
+# заливке. email/telegram_id обязательны — это и есть адрес доставки.
+# telegram_id — фейковые числовые id (не настоящие chat_id): сидер работает
+# с deliver=False (src/bp5/pipeline.py), в сеть не стучится, поэтому эти
+# значения нужны только чтобы удовлетворить NOT NULL/unique в БД.
 USERS = [
     {
         'full_name': 'Иванов Пётр',
         'department': 'Юристы',
         'email': 'ivanov@kodik.example',
-        'telegram_login': 'ivanov_p',
+        'telegram_id': 100000001,
     },
     {
         'full_name': 'Петрова Анна',
         'department': 'Юристы',
         'email': 'petrova@kodik.example',
-        'telegram_login': 'petrova_a',
+        'telegram_id': 100000002,
     },
     {
         'full_name': 'Сидоров Олег',
         'department': 'Аналитика',
         'email': 'sidorov@kodik.example',
-        'telegram_login': 'sidorov_o',
+        'telegram_id': 100000003,
     },
 ]
 
@@ -395,7 +398,7 @@ async def seed(session: AsyncSession) -> int:
         added += await _insert(session, TopicLimit, TOPIC_LIMITS)
     await session.flush()
 
-    # user: email И telegram_login по отдельности unique (не пара), поэтому
+    # user: email И telegram_id по отдельности unique (не пара), поэтому
     # обычный _insert с ON CONFLICT по двум колонкам сразу не подходит —
     # тот же count-guard, что и у routing_rule. department_id резолвится
     # из уже залитых Department.
@@ -406,7 +409,7 @@ async def seed(session: AsyncSession) -> int:
                 full_name=u['full_name'],
                 department_id=dept[u['department']],
                 email=u['email'],
-                telegram_login=u['telegram_login'],
+                telegram_id=u['telegram_id'],
             )
             for u in USERS
         )

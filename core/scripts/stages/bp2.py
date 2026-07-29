@@ -313,4 +313,4 @@ async def clear(session: AsyncSession) -> int:
 if __name__ == '__main__':
     from core.scripts.stages.cascade import run_stage
 
-    run_stage('BP-2 (факты)', clear, seed)
+    run_stage('BP-2 (таблица normalized_item)', clear, seed)

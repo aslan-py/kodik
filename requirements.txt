@@ -9,6 +9,12 @@ fastapi>=0.104,<1.0       # фреймворк для REST API
 pydantic>=2.0,<3.0        # валидация и сериализация данных
 pydantic-settings>=2.0,<3.0  # типизированный конфиг из .env
 
+# ===== Mail =====
+fastapi-mail>=1.4,<2.0    # отправка email-алертов (BP-5)
+
+# ===== Telegram =====
+aiogram>=3.0,<4.0         # отправка telegram-алертов (BP-5)
+
 # ===== Server =====
 uvicorn>=0.24,<1.0        # ASGI-сервер для FastAPI
 

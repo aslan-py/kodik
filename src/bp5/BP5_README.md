@@ -35,7 +35,7 @@ BP-5 берёт новые/изменившиеся строки витрины 
 | `full_name` | string, nullable | ФИО — для читаемости в админке, не критично |
 | `department_id` | FK → `department` | В каком отделе числится. **Справочно**, не источник для рассылки |
 | `email` | string, unique, not null | Адрес для канала `email` |
-| `telegram_login` | string, unique, not null | Логин для канала `telegram` |
+| `telegram_id` | bigint, unique, not null | Числовой chat_id для канала `telegram` (sendMessage требует id, не `@username`) |
 | `is_active` | bool | Уволен/в отпуске — гасим флагом, историю алертов не теряем |
 
 **Почему не через отдел.** Список получателей курируется вручную и может

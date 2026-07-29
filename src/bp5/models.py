@@ -29,6 +29,7 @@ Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     ForeignKey,
     Index,
@@ -120,10 +121,13 @@ class User(Base, Mixin, ActiveMixin):
         unique=True,
         comment='Адрес для канала email',
     )
-    telegram_login: Mapped[str] = mapped_column(
-        String(64),
+    telegram_id: Mapped[int] = mapped_column(
+        BigInteger,
         unique=True,
-        comment='Логин для канала telegram (без @)',
+        comment=(
+            'Числовой chat_id для канала telegram (sendMessage требует '
+            'id, не @username)'
+        ),
     )
 
 

@@ -146,12 +146,12 @@ def upgrade() -> None:
     sa.Column('full_name', sa.String(length=256), nullable=True, comment='ФИО — для читаемости в админке, не критично'),
     sa.Column('department_id', sa.Integer(), nullable=True, comment='В каком отделе числится (справочно, не для маршрутизации)'),
     sa.Column('email', sa.String(length=256), nullable=False, comment='Адрес для канала email'),
-    sa.Column('telegram_login', sa.String(length=64), nullable=False, comment='Логин для канала telegram (без @)'),
+    sa.Column('telegram_id', sa.BigInteger(), nullable=False, comment='Числовой chat_id для канала telegram (sendMessage требует id, не @username)'),
     sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
     sa.ForeignKeyConstraint(['department_id'], ['department.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('email'),
-    sa.UniqueConstraint('telegram_login')
+    sa.UniqueConstraint('telegram_id')
     )
     op.create_table('raw_item',
     sa.Column('id', sa.Integer(), nullable=False),

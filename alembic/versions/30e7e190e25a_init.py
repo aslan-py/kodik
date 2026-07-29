@@ -1,8 +1,8 @@
-"""init_create_all_tables
+"""init
 
-Revision ID: 12e96157869f
+Revision ID: 30e7e190e25a
 Revises:
-Create Date: 2026-07-26 12:41:00.046048
+Create Date: 2026-07-29 11:40:14.622656
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '12e96157869f'
+revision: str = '30e7e190e25a'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -33,6 +33,7 @@ def upgrade() -> None:
     op.create_table('category',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(length=128), nullable=False, comment='Категория события (напр. надзорная санкция и юр.риск, PR-активность конкурента, репутационный риск)'),
+    sa.Column('note', sa.String(length=512), nullable=True, comment='Определение категории для аналитика: что под неё подпадает'),
     sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
@@ -55,7 +56,8 @@ def upgrade() -> None:
     )
     op.create_table('department',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('name', sa.String(length=128), nullable=False, comment='Отдел: PR, Тендеры, Юристы, Аналитика, Маркетинг'),
+    sa.Column('name', sa.String(length=128), nullable=False, comment='Отдел: PR, Юристы, Аналитика, Маркетинг'),
+    sa.Column('note', sa.String(length=512), nullable=True, comment='Зона ответственности отдела: какие категории он ведёт'),
     sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
@@ -63,11 +65,12 @@ def upgrade() -> None:
     op.create_table('event_type',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(length=256), nullable=False, comment='Название типа: судебный/надзорный риск, выигранный тендер, активный наём, расширение, M&A, закрытие объекта'),
-    sa.Column('keywords', sa.Text(), nullable=False, comment='Слова-маркеры через запятую: «прокуратура, суд, иск, нарушения». По ним детектор матчит title события'),
+    sa.Column('keywords', postgresql.ARRAY(sa.String()), nullable=False, comment='Слова-маркеры: [«прокуратура», «суд», «иск», «нарушения»]. По ним детектор матчит title события (вхождение подстроки)'),
     sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
+    op.create_index('ix_event_type_keywords', 'event_type', ['keywords'], unique=False, postgresql_using='gin')
     op.create_table('region',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name_display', sa.String(length=128), nullable=False, comment='Каноническое имя для витрины и карты: «Волгоград». По нему группируем в дашборде'),
@@ -111,20 +114,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('keyword')
     )
-    op.create_table('routing_rule',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('event_type_id', sa.Integer(), nullable=False, comment='Для какого типа значимого события'),
-    sa.Column('priority', sa.Enum('p1', 'p2', 'p3', 'p4', name='priority_level'), nullable=False, comment='Для какого приоритета срабатывает правило'),
-    sa.Column('department_id', sa.Integer(), nullable=False, comment='На какой отдел маршрутизируем'),
-    sa.Column('channel_id', sa.Integer(), nullable=False, comment='В какой канал доставляем'),
-    sa.Column('mode', sa.Enum('instant', 'digest', name='delivery_mode'), nullable=False, comment='instant (П1) | digest (П2)'),
-    sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
-    sa.ForeignKeyConstraint(['channel_id'], ['channel.id'], ondelete='RESTRICT'),
-    sa.ForeignKeyConstraint(['department_id'], ['department.id'], ondelete='RESTRICT'),
-    sa.ForeignKeyConstraint(['event_type_id'], ['event_type.id'], ondelete='RESTRICT'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('event_type_id', 'priority', 'channel_id', name='uq_routing_rule_type_priority_channel')
-    )
     op.create_table('search_task',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('competitor_id', sa.Integer(), nullable=False, comment='Какого конкурента ищем'),
@@ -152,6 +141,18 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('domain')
     )
+    op.create_table('user',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('full_name', sa.String(length=256), nullable=True, comment='ФИО — для читаемости в админке, не критично'),
+    sa.Column('department_id', sa.Integer(), nullable=True, comment='В каком отделе числится (справочно, не для маршрутизации)'),
+    sa.Column('email', sa.String(length=256), nullable=False, comment='Адрес для канала email'),
+    sa.Column('telegram_login', sa.String(length=64), nullable=False, comment='Логин для канала telegram (без @)'),
+    sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
+    sa.ForeignKeyConstraint(['department_id'], ['department.id'], ondelete='RESTRICT'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('email'),
+    sa.UniqueConstraint('telegram_login')
+    )
     op.create_table('raw_item',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('search_task_id', sa.Integer(), nullable=False, comment='Ссылка на задачу конфигурации. Через неё вытягиваем конкурента, источник и триггер'),
@@ -165,6 +166,20 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Время последней СВЕРКИ. При совпадении хэша обновляем ТОЛЬКО это поле (статус не трогаем)'),
     sa.ForeignKeyConstraint(['search_task_id'], ['search_task.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('routing_rule',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('event_type_id', sa.Integer(), nullable=False, comment='Для какого типа значимого события'),
+    sa.Column('priority', sa.Enum('p1', 'p2', 'p3', 'p4', name='priority_level'), nullable=False, comment='Для какого приоритета срабатывает правило'),
+    sa.Column('user_id', sa.Integer(), nullable=False, comment='Кому конкретно отправлять'),
+    sa.Column('channel_id', sa.Integer(), nullable=False, comment='В какой канал доставляем'),
+    sa.Column('mode', sa.Enum('instant', 'digest', name='delivery_mode'), nullable=False, comment='instant (П1) | digest (П2)'),
+    sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
+    sa.ForeignKeyConstraint(['channel_id'], ['channel.id'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['event_type_id'], ['event_type.id'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ondelete='RESTRICT'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('event_type_id', 'priority', 'channel_id', 'user_id', name='uq_routing_rule_type_priority_channel_user')
     )
     op.create_table('normalized_item',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -203,13 +218,14 @@ def upgrade() -> None:
     sa.Column('comment', sa.String(length=512), nullable=True, comment='Комментарий от LLM'),
     sa.Column('llm_model', sa.String(length=64), nullable=True, comment='Какая модель разметила (для аудита)'),
     sa.Column('prompt_version', sa.String(length=32), nullable=True, comment='Версия промпта/правил (для перекатегоризации)'),
-    sa.Column('categorized_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Когда разметили'),
+    sa.Column('categorized_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Когда разметили (INSERT) или переразметили (UPDATE). По индексу BP-4 отбирает переразмеченные события (categorized_at > showcase_event.updated_at). onupdate срабатывает автоматически на ЛЮБОМ UPDATE через SQLAlchemy (и точечная правка атрибута, и bulk update()) — колонка не перечислена в .values(), компилятор сам подставит значение. НЕ сработает при INSERT ... ON CONFLICT DO UPDATE (это технически INSERT, не UPDATE) и при правке в обход SQLAlchemy — сырой SQL, DBeaver, pgAdmin: там колонку нужно проставлять руками'),
     sa.ForeignKeyConstraint(['category_id'], ['category.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['department_id'], ['department.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['normalized_item_id'], ['normalized_item.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('normalized_item_id')
     )
+    op.create_index(op.f('ix_categorized_event_categorized_at'), 'categorized_event', ['categorized_at'], unique=False)
     op.create_table('showcase_event',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('categorized_event_id', sa.Integer(), nullable=False, comment='Ключ инкрементального UPSERT: одна строка витрины на размеченное событие'),
@@ -219,6 +235,8 @@ def upgrade() -> None:
     sa.Column('media', sa.String(length=256), nullable=True, comment='СМИ-публикатор (normalized_item.media_name)'),
     sa.Column('region', sa.String(length=128), nullable=True, comment='Регион (region.name_display)'),
     sa.Column('macro_region', sa.String(length=64), nullable=True, comment='Федеральный округ (region.macro_region)'),
+    sa.Column('latitude', sa.Float(), nullable=True, comment='Широта центра региона (WGS-84) — метка на карте рынка'),
+    sa.Column('longitude', sa.Float(), nullable=True, comment='Долгота центра региона (WGS-84) — метка на карте рынка'),
     sa.Column('competitor', sa.String(length=256), nullable=True, comment='Конкурент / объект (competitor.name)'),
     sa.Column('source_url', sa.String(length=512), nullable=True, comment='Ссылка на событие (normalized_item.url)'),
     sa.Column('priority', sa.String(length=8), nullable=False, comment='Приоритет П1..П4'),
@@ -230,11 +248,16 @@ def upgrade() -> None:
     sa.Column('department', sa.String(length=128), nullable=True, comment='Ответственный отдел (department.name)'),
     sa.Column('comment', sa.Text(), nullable=True, comment='Комментарий'),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Инкрементальный UPSERT, без полной перезагрузки'),
+    sa.Column('alerted_at', sa.DateTime(timezone=True), nullable=True, comment='Когда BP-5 последний раз проверял строку на значимость — НЕЗАВИСИМО от результата (даже если алерт не сработал). Отбор BP-5: alerted_at IS NULL OR updated_at > alerted_at. Не по журналу alert — там легитимны события с нулём алертов, и по нему нельзя было бы отличить «ещё не проверено» от «проверено, но не значимо»'),
     sa.ForeignKeyConstraint(['categorized_event_id'], ['categorized_event.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['raw_item_id'], ['raw_item.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('categorized_event_id')
     )
+    op.create_index(op.f('ix_showcase_event_category'), 'showcase_event', ['category'], unique=False)
+    op.create_index(op.f('ix_showcase_event_competitor'), 'showcase_event', ['competitor'], unique=False)
+    op.create_index(op.f('ix_showcase_event_priority'), 'showcase_event', ['priority'], unique=False)
+    op.create_index(op.f('ix_showcase_event_published_at'), 'showcase_event', ['published_at'], unique=False)
     op.create_table('action_item',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('showcase_event_id', sa.Integer(), nullable=False, comment='По какому событию витрины заведена задача'),
@@ -254,7 +277,7 @@ def upgrade() -> None:
     sa.Column('showcase_event_id', sa.Integer(), nullable=False, comment='По какому событию витрины сработал алерт'),
     sa.Column('event_type_id', sa.Integer(), nullable=False, comment='Какой тип значимого события распознан'),
     sa.Column('priority', sa.Enum('p1', 'p2', 'p3', 'p4', name='priority_level'), nullable=False, comment='Приоритет события на момент алерта (снимок)'),
-    sa.Column('department_id', sa.Integer(), nullable=False, comment='Кому ушло (отдел)'),
+    sa.Column('user_id', sa.Integer(), nullable=False, comment='Кому ушло'),
     sa.Column('channel_id', sa.Integer(), nullable=False, comment='Каким каналом'),
     sa.Column('mode', sa.Enum('instant', 'digest', name='delivery_mode'), nullable=False, comment='Снимок режима из правила: instant | digest. По нему джоба-сводка находит свои алерты'),
     sa.Column('status', sa.Enum('queued', 'sent', 'failed', name='alert_status'), server_default=sa.text("'queued'"), nullable=False, comment='queued → sent / failed'),
@@ -262,11 +285,11 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Когда завели алерт'),
     sa.Column('sent_at', sa.DateTime(timezone=True), nullable=True, comment='Когда фактически доставлено'),
     sa.ForeignKeyConstraint(['channel_id'], ['channel.id'], ondelete='RESTRICT'),
-    sa.ForeignKeyConstraint(['department_id'], ['department.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['event_type_id'], ['event_type.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['showcase_event_id'], ['showcase_event.id'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('showcase_event_id', 'channel_id', name='uq_alert_event_channel')
+    sa.UniqueConstraint('showcase_event_id', 'channel_id', 'user_id', name='uq_alert_event_channel_user')
     )
     # ### end Alembic commands ###
 
@@ -276,41 +299,31 @@ def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_table('alert')
     op.drop_table('action_item')
+    op.drop_index(op.f('ix_showcase_event_published_at'), table_name='showcase_event')
+    op.drop_index(op.f('ix_showcase_event_priority'), table_name='showcase_event')
+    op.drop_index(op.f('ix_showcase_event_competitor'), table_name='showcase_event')
+    op.drop_index(op.f('ix_showcase_event_category'), table_name='showcase_event')
     op.drop_table('showcase_event')
+    op.drop_index(op.f('ix_categorized_event_categorized_at'), table_name='categorized_event')
     op.drop_table('categorized_event')
     op.drop_table('normalized_item')
+    op.drop_table('routing_rule')
     op.drop_table('raw_item')
+    op.drop_table('user')
     op.drop_table('source_candidate')
     op.drop_index('uq_search_task_no_trigger', table_name='search_task', postgresql_where=sa.text('trigger_id IS NULL'))
     op.drop_table('search_task')
-    op.drop_table('routing_rule')
     op.drop_table('trigger')
     op.drop_table('topic_limit')
     op.drop_table('stop_word')
     op.drop_table('source')
     op.drop_index('ix_region_name_aliases', table_name='region', postgresql_using='gin')
     op.drop_table('region')
+    op.drop_index('ix_event_type_keywords', table_name='event_type', postgresql_using='gin')
     op.drop_table('event_type')
     op.drop_table('department')
     op.drop_table('competitor')
     op.drop_table('channel')
     op.drop_table('category')
     op.drop_table('black_domain')
-    # Удаляем enum-типы PostgreSQL: вместе с таблицами они НЕ дропаются,
-    # иначе повторный upgrade падает с «type ... already exists».
-    for enum_name in (
-        'alert_status',
-        'delivery_mode',
-        'action_status',
-        'candidate_status',
-        'tonality_level',
-        'priority_level',
-        'reject_reason_t',
-        'norm_status',
-        'limit_window',
-        'limit_scope',
-        'stop_type',
-        'raw_item_status',
-    ):
-        sa.Enum(name=enum_name).drop(op.get_bind(), checkfirst=True)
     # ### end Alembic commands ###

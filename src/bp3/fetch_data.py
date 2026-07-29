@@ -26,13 +26,17 @@ def fetch_data():
             {'id': row['id'], 'text': row['text']} for row in rows_items
         ]
 
-        stmt_cat = select(Category.name)
+        stmt_cat = select(Category.name, Category.note)
         rows_cat = session.execute(stmt_cat).mappings().all()
-        cat_list = [row['name'] for row in rows_cat]
+        cat_list = [
+            {'name': row['name'], 'note': row['note']} for row in rows_cat
+        ]
 
-        stmt_dep = select(Department.name)
+        stmt_dep = select(Department.name, Department.note)
         rows_dep = session.execute(stmt_dep).mappings().all()
-        depart_list = [row['name'] for row in rows_dep]
+        depart_list = [
+            {'name': row['name'], 'note': row['note']} for row in rows_dep
+        ]
 
     return news_list, cat_list, depart_list
 

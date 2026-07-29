@@ -48,7 +48,7 @@ from src.bp1.raw_storage.core.models import (
 from src.bp1.raw_storage.core.models import (
     RawDataItem as StorageItem,
 )
-from src.bp1.raw_storage.utils.hashing import compute_sha256
+from src.bp1.raw_storage.utils.hashing import compute_content_hash
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
@@ -144,11 +144,7 @@ class SourceManager:
     @property
     def disabled_sources(self) -> list[str]:
         """Вернуть список имён источников, которые были отключены."""
-        return [
-            name
-            for name, state in self._sources.items()
-            if state.disabled
-        ]
+        return [name for name, state in self._sources.items() if state.disabled]
 
 
 # ── ParserFactory ────────────────────────────────────────────────────────────
@@ -310,8 +306,7 @@ class Pipeline:
                 continue
 
             # Filter tasks for this source
-            source_tasks = [
-                st for st in search_tasks if st.source_id == src.id]
+            source_tasks = [st for st in search_tasks if st.source_id == src.id]
             if not source_tasks:
                 JSONStructureLogger.info(
                     'source_no_tasks',
@@ -430,7 +425,7 @@ class Pipeline:
                 )
 
                 # ── Save reference to RawItem in DB ─────────────────────
-                content_hash = compute_sha256(html_content.encode('utf-8'))
+                content_hash = compute_content_hash(html_content)
 
                 # Idempotency: проверяем, не сохраняли ли уже такой же хэш
                 # для этой search_task. Если да — обновляем только updated_at.
@@ -439,9 +434,7 @@ class Pipeline:
                     content_hash=content_hash,
                 )
                 if existing is not None:
-                    duration_ms = int(
-                        (time.monotonic() - task_start) * 1000
-                    )
+                    duration_ms = int((time.monotonic() - task_start) * 1000)
                     JSONStructureLogger.info(
                         'task_duplicate_skipped',
                         pipeline_run_id=self._pipeline_run_id,
@@ -583,9 +576,7 @@ class Pipeline:
         )
 
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, parser.search_by_inn, request
-        )
+        result = await loop.run_in_executor(None, parser.search_by_inn, request)
 
         if not result.success:
             raise RuntimeError(result.error or 'kad_arbitr parse failed')

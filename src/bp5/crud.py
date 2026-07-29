@@ -4,7 +4,11 @@
     select_pending_events   → события витрины под проверку детектором
     load_event_types        → активные типы + ключевые слова (для detect)
     load_routing_rules      → активные правила по (тип, приоритет)
-    insert_alerts            → запись пачки alert (ON CONFLICT DO NOTHING)
+    load_channels             → справочник channel_id -> name (доставка)
+    load_users                → справочник user_id -> User (контакты)
+    insert_alerts            → запись пачки alert (ON CONFLICT DO NOTHING),
+                                возвращает РЕАЛЬНО вставленные строки
+    mark_alert_result         → точечно queued -> sent/failed после отправки
     mark_checked              → проставить alerted_at (событие проверено)
 
 Сессия — в self.session (через __init__), методы её не принимают. Транзакцией
@@ -14,13 +18,13 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import RowMapping, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.enums import PriorityLevel
+from core.enums import AlertStatus, PriorityLevel
 from src.bp4.models import ShowcaseEvent
-from src.bp5.models import Alert, EventType, RoutingRule
+from src.bp5.models import Alert, Channel, EventType, RoutingRule, User
 
 
 class Bp5Crud:
@@ -81,26 +85,71 @@ class Bp5Crud:
             )
         return grouped
 
+    async def load_channels(self) -> dict[int, str]:
+        """Справочник channel_id -> name. Нет relationship к Channel в
+        RoutingRule/Alert (проект хранит только FK int), поэтому имя канала
+        для решения «слать ли по email прямо сейчас» берётся отдельным
+        плоским запросом, как и load_event_types/load_routing_rules.
+        """
+        result = await self.session.execute(select(Channel.id, Channel.name))
+        return dict(result.all())
+
+    async def load_users(self) -> dict[int, User]:
+        """Справочник user_id -> User. Полный объект, не только email:
+        telegram_id нужен для доставки в telegram, full_name — для текста
+        письма."""
+        result = await self.session.execute(select(User))
+        return {u.id: u for u in result.scalars()}
+
     # ========================================================================
     #  Запись результата
     # ========================================================================
 
-    async def insert_alerts(self, rows: Sequence[dict]) -> int:
+    async def insert_alerts(self, rows: Sequence[dict]) -> Sequence[RowMapping]:
         """Записать пачку alert. ON CONFLICT DO NOTHING — идемпотентность.
 
         UNIQUE(showcase_event_id, channel_id, user_id) гасит повтор: если
         событие уже проверялось и alert для этой пары (канал, получатель)
         есть, повторная проверка (например, из-за косметической
         переразметки) не продублирует отправку. commit — на вызывающем.
+
+        Возвращает РЕАЛЬНО вставленные строки (RETURNING) — строки,
+        попавшие в конфликт, Postgres в RETURNING не включает. По этому
+        набору вызывающий код (sync_alerts) решает, для чего в этом
+        прогоне действительно нужно попытаться отправить письмо/сообщение.
         """
         if not rows:
-            return 0
+            return []
         stmt = pg_insert(Alert).values(list(rows))
         stmt = stmt.on_conflict_do_nothing(
             index_elements=['showcase_event_id', 'channel_id', 'user_id']
+        ).returning(
+            Alert.id,
+            Alert.showcase_event_id,
+            Alert.channel_id,
+            Alert.user_id,
+            Alert.mode,
         )
         result = await self.session.execute(stmt)
-        return result.rowcount
+        return result.mappings().all()
+
+    async def mark_alert_result(
+        self,
+        alert_id: int,
+        status: AlertStatus,
+        sent_at: datetime | None,
+        error_message: str | None,
+    ) -> None:
+        """Точечно обновить исход попытки доставки: queued -> sent/failed.
+
+        Alert не имеет updated_at/onupdate (в отличие от showcase_event),
+        так что self-reference трюк из mark_checked здесь не нужен.
+        """
+        await self.session.execute(
+            Alert.__table__.update()
+            .where(Alert.id == alert_id)
+            .values(status=status, sent_at=sent_at, error_message=error_message)
+        )
 
     async def mark_checked(
         self, event_ids: Sequence[int], checked_at: datetime

@@ -34,5 +34,25 @@ class Settings(BaseSettings):
             f'{self.postgres_port}/{self.postgres_db}'
         )
 
+    # ===== Mail =====
+    mail_username: str
+    mail_password: str
+    mail_from: str
+    mail_from_name: str = 'Kodik Alerts'
+    mail_port: int = 465
+    mail_server: str
+    mail_starttls: bool = False
+    mail_ssl_tls: bool = True
+    mail_use_credentials: bool = True
+    mail_validate_certs: bool = True
+
+    # ===== Telegram =====
+    telegram_bot_token: str
+    test_tg: int
+
+    # ===== Alerting =====
+    true_alerting: bool = False
+    test_email: str
+
 
 settings = Settings()

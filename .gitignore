@@ -1,6 +1,14 @@
 .mypy_cache
 .claude
 .env
+/venv
+**/node_modules
+**package-lock.json
+**package.json
+**package.json
+**playwright.config.ts
+**pipline_test.py
+**test_file.txt
 test_file.txt
 /venv
 gg.py

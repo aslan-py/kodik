@@ -1,0 +1,83 @@
+.wrapper {
+  display: flex;
+  align-items: flex-start;
+  height: 100vh;
+  animation: slideIn 0.25s ease-out;
+}
+
+.sideButtons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px 8px 20px 0;
+}
+
+.card {
+  height: 100vh;
+  width: 600px;
+  max-width: 90vw;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0;
+  color: #111827;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: #fff;
+  border: none;
+  cursor: pointer;
+  border-radius: 6px;
+  color: #6b7280;
+  transition: background 0.15s, color 0.15s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.iconButton:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}

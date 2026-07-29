@@ -1,0 +1,59 @@
+"use client";
+import type { ReactNode } from "react";
+import { Modal } from "@ui/Modal/Modal";
+import { Icon } from "@ui/Icon/Icon";
+import styles from "./card.module.css";
+
+export type CardHeaderButton = {
+  icon: ReactNode;
+  onClick: () => void;
+  label: string;
+};
+
+export type CardProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  header: ReactNode;
+  children: ReactNode;
+  headerButtons?: CardHeaderButton[];
+};
+
+export function Card({
+  isOpen,
+  onClose,
+  header,
+  children,
+  headerButtons,
+}: CardProps) {
+  return (
+    <Modal isOpen={isOpen} onClose={onClose}>
+      <div className={styles.wrapper}>
+        <div className={styles.sideButtons}>
+          {headerButtons?.map((btn, i) => (
+            <button
+              key={i}
+              className={styles.iconButton}
+              onClick={btn.onClick}
+              title={btn.label}
+            >
+              {btn.icon}
+            </button>
+          ))}
+          <button
+            className={styles.iconButton}
+            onClick={onClose}
+            title="Закрыть"
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+        <div className={styles.card}>
+          <div className={styles.header}>
+            {header}
+          </div>
+          <div className={styles.content}>{children}</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}

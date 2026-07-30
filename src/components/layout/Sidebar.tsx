@@ -1,9 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import UserSidebarProfile from "../user/UserSidebarProfile";
-import { Icon } from "@ui/Icon/Icon";
+import { Icon } from "@/components/ui/Icon/Icon";
 
 const navItems = [
   { href: "/incidents", label: "События" },
@@ -13,13 +14,8 @@ const navItems = [
   { href: "/competitors", label: "Конкуренты" },
 ];
 
-export default function Sidebar({
-  isCollapsed,
-  onToggle,
-}: {
-  isCollapsed: boolean;
-  onToggle: () => void;
-}) {
+export default function Sidebar() {
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const pathname = usePathname();
 
   return (
@@ -72,7 +68,7 @@ export default function Sidebar({
         <UserSidebarProfile />
       </div>
       <button
-        onClick={onToggle}
+        onClick={() => setIsCollapsed((v) => !v)}
         className="absolute -right-3 top-8 flex h-6 w-6 items-center justify-center rounded-full border border-(--color-border) bg-(--color-dark) text-(--color-secondary) hover:text-white transition-colors cursor-pointer"
         title={isCollapsed ? "Развернуть" : "Свернуть"}
       >

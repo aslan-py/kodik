@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Button from "@ui/Button/button";
+import { useMemo, useState } from "react";
+import Button from "@/components/ui/Button/button";
 import { PeriodSelector } from "@/components/filters/PeriodSelector/PeriodSelector";
 import { SearchInput } from "@/components/filters/SearchInput/SearchInput";
 import { SelectFilter } from "@/components/filters/SelectFilter/SelectFilter";
-import { Table, TableColumn } from "@ui/Table/Table";
-import { Icon } from "@ui/Icon/Icon";
+import { Table, TableColumn } from "@/components/ui/Table/Table";
+import { Icon } from "@/components/ui/Icon/Icon";
 import { IncidentItem } from "@/types/types";
-import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { loadIncidents } from "@/store/incidentsSlice";
+import { useGetIncidentsQuery } from "@/store/incidentsApi";
 
 function useIncidentColumns(onOpen: (item: IncidentItem) => void): TableColumn<IncidentItem>[] {
     return [
@@ -130,8 +129,7 @@ type IncidentTableProps = {
 };
 
 export default function IncidentTable({ onOpen }: IncidentTableProps) {
-    const dispatch = useAppDispatch();
-    const { items: incidents, loading } = useAppSelector((state) => state.incidents);
+    const { data: incidents = [], isLoading: loading } = useGetIncidentsQuery();
     const [searchQuery, setSearchQuery] = useState("");
     const [dateFrom, setDateFrom] = useState(defaultRange.from);
     const [dateTo, setDateTo] = useState(defaultRange.to);
@@ -139,11 +137,9 @@ export default function IncidentTable({ onOpen }: IncidentTableProps) {
     const [priorityFilter, setPriorityFilter] = useState("");
     const [objectFilter, setObjectFilter] = useState("");
 
-    useEffect(() => {
-        dispatch(loadIncidents());
-    }, []);
+
     
-    const columns = useMemo(() => useIncidentColumns(onOpen), []);
+    const columns = useMemo(() => useIncidentColumns(onOpen), [onOpen]);
 
     const sourceOptions = useMemo(
         () => getUniqueOptions(incidents, "source"),

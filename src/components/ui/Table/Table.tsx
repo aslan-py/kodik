@@ -59,8 +59,8 @@ export function Table<T>({
       <div className="overflow-hidden ">
         <div className="overflow-x-auto">
           <table className="min-w-full text-left">
-            <thead className="rounded-[10]">
-              <tr className="bg-(--color-surface) rounded-[10]">
+            <thead className="rounded-[10px]">
+              <tr className="bg-(--color-surface) rounded-[10px]">
                 {columns.map((column) => (
                   <th
                     key={String(column.key)}

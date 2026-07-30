@@ -50,19 +50,9 @@
 .tonality {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
     font-size: 12px;
     padding: 4px 10px;
     border-radius: 999px;
-}
-
-.tonality::before {
-    content: "";
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
 }
 
 /* variant — positive */
@@ -70,27 +60,17 @@
     color: var(--color-status-positive);
     background: #EFF4F0;
 }
-.tonality-positive::before {
-    background: var(--color-status-positive);
-}
-
 /* variant — neutral */
 .tonality-neutral {
     color: var(--color-status-neutral);
     background: #F2F3F5;
 }
-.tonality-neutral::before {
-    background: var(--color-status-neutral);
-}
-
 /* variant — negative */
 .tonality-negative {
     color: var(--color-status-negative);
     background: #F5EEEE;
 }
-.tonality-negative::before {
-    background: var(--color-status-negative);
-}
+
 
 /* ─── Surface block ───────────────────────────────────────── */
 

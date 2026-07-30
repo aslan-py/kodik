@@ -1,7 +1,7 @@
 "use client";
 import type { ReactNode } from "react";
-import { Modal } from "@ui/Modal/Modal";
-import { Icon } from "@ui/Icon/Icon";
+import { Modal } from "@/components/ui/Modal/Modal";
+import { Icon } from "@/components/ui/Icon/Icon";
 import styles from "./card.module.css";
 
 export type CardHeaderButton = {
@@ -48,10 +48,7 @@ export function Card({
           </button>
         </div>
         <div className={styles.card}>
-          <div className={styles.header}>
-            {header}
-          </div>
-          <div className={styles.content}>{children}</div>
+          <div className={styles.content}>{header}{children}</div>
         </div>
       </div>
     </Modal>

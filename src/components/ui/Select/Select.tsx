@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, type ReactNode } from "react";
-import { Icon } from "@ui/Icon/Icon";
+import { Icon } from "@/components/ui/Icon/Icon";
 
 type SelectProps = {
   label?: string;
@@ -24,10 +24,12 @@ export function Select({
 }: SelectProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      if (openRef.current && ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false);
       }
     }

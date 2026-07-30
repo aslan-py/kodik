@@ -1,12 +1,16 @@
 "use client";
 
+import { useMemo } from "react";
 import Button from "@/components/ui/Button/button";
-import { DateInput } from "@/components/inputs/DateInput";
-import { TextInput } from "@/components/inputs/TextInput";
 import { Divider } from "@/components/ui/Divider";
-import { Select, SelectItem } from "@/components/ui/Select";
+import { TagList } from "@/components/ui/TagList";
+import { TaskCreation } from "@/components/cards/TaskCreation";
+import { Attributes } from "@/components/cards/Attributes";
+import { RelatedTask } from "@/components/cards/RelatedTask";
 import type { IncidentItem } from "@/types/types";
-import { Card } from "@ui/Card/Card";
+import { Card } from "@/components/ui/Card/Card";
+import { Icon } from "@/components/ui/Icon/Icon";
+import { DeadlineState } from "@/components/ui/DeadlineState";
 
 type CardIncidentProps = {
   incident: IncidentItem | null;
@@ -15,140 +19,146 @@ type CardIncidentProps = {
 };
 
 export function CardIncident({ incident, isOpen, onClose }: CardIncidentProps) {
+  if (!incident) return null;
+
+  const header = useMemo(() => (
+    <div className="flex items-center justify-between w-full">
+          <div className="flex flex-col">
+            <p className="flex gap-[10px] mb-[14px] items-center">
+              <span className="priority priority-accent">{incident.priority}</span>
+              <span className="tonality tonality-neutral">Новое</span>
+              <span className="text-xs text-[var(--color-muted)]">Обнаружено {incident.data}</span>
+            </p>
+            <h2 className="text-2xl font-semibold text-[var(--color-strong)] mb-[14px] m-0">
+              {incident.incident}
+            </h2>
+            <div className="text-xs text-[var(--color-muted)]">
+              Объект <span className="text-[var(--color-ink)]">{incident.object}</span> · {incident.category} · {incident.type}
+            </div>
+            <Divider />
+          </div>
+        </div>
+  ), [incident]);
+
   return (
     <Card
       isOpen={isOpen}
       onClose={onClose}
-      header={
-        <div className="flex items-center justify-between w-full">
-          <div className="flex flex-col gap-1">
-            <p>
-              <span>П1</span>
-              <span>Новое</span>
-              <span>Обнаружено 26 июл, 09:18</span>
-            </p>
-            <h2 className="text-lg font-semibold m-0 text-[#111827]">
-              Wildberries запускает экспресс-доставку для региональных продавцов
-            </h2>
-            <Divider />
-            <div className="flex items-center gap-3 text-xs text-[#6b7280]">
-              <p>Объект Wildberries · Маркетплейсы · Доставка</p>
-            </div>
-          </div>
-        </div>
-      }
+      header={header}
     >
-      {/* {incident && ( */}
-      <div className="space-y-4 text-sm">
-        <p>Что произошло</p>
-        
-        <p>
-          Wildberries запустил экспресс-доставку для региональных продавцов,
-          чтобы ускорить вывод товаров в локальные кластеры. Событие усиливает
-          конкуренцию за продавцов вне столичных регионов и может повлиять на
-          ожидания по скорости доставки на маркетплейсах.
-        </p>
-      </div>
-      <div className="space-y-4 text-sm">
-        <p>Анализ события</p>
-        <div className="flex">
-          <p>Причина приоритета</p>
-          <p>
-            Изменение логистического сервиса конкурента с прямым влиянием на
-            продавцов и региональный SLA.
-          </p>
-        </div>
-        <div className="flex">
-          <p>Причина приоритета</p>
-          <p>
-            Изменение логистического сервиса конкурента с прямым влиянием на
-            продавцов и региональный SLA.
-          </p>
-        </div>
-        <div className="flex">
-          <p>Причина приоритета</p>
-          <p>
-            Изменение логистического сервиса конкурента с прямым влиянием на
-            продавцов и региональный SLA.
-          </p>
-        </div>
-        <div className="flex">
-          <p>Причина приоритета</p>
-          <p>
-            Изменение логистического сервиса конкурента с прямым влиянием на
-            продавцов и региональный SLA.
-          </p>
-        </div>
-      </div>
-      <div className="space-y-4 text-sm">
-        <h3>Атрибуты</h3>
-        <div className="flex">
-          <p>Конкурент / объект</p>
-          <p>Wildberries</p>
-        </div>
-        <div className="flex">
-          <p>Категория</p>
-          <p>Wildberries</p>
-        </div>
-        <div className="flex">
-          <p>Конкурент / объект</p>
-          <p>
-            <span className="priority priority-accent">П1</span>
-          </p>
-        </div>
-        <div className="flex">
-          <p>Тональность</p>
-          <p>
-            <span className="tonality tonality-positive">Позитивная</span>.
-          </p>
-        </div>
-        <div className="flex">
-          <p>Регион</p>
-          <p>Сибирь</p>
-        </div>
-        <div className="flex">
-          <Button variant="badge">Подтвердить разметку</Button>
-          <Button variant="badge" badgeColor="gray">
-            Исправить
-          </Button>
-        </div>
-      </div>
 
-      <div className="space-y-4 text-sm">
-        <p>Создание задачи</p>
-        <div>
-          <p>Требуемое действие</p>
-          <TextInput  multiline width="" height="120px" value="Короткая оценка риска, список ответных действий и рекомендация по коммуникации для селлеров." onChange={() => {}}></TextInput>
-        </div>
-        <div>
-          <p>Ответственный отдел</p>
-          <Select className="surface-block interactive-surface" buttonContent={'Выберите отдел'}>
-            <SelectItem onClick={() => {}}>Комммерческий отдел </SelectItem>
-            <SelectItem onClick={() => {}}>Финансовый отдел </SelectItem>
-          </Select>
-          <input type="text" name="" id="" />
-        </div>
-        <div>
-          <p>Срок</p>
-          <DateInput  value="" onChange={() => {}} />
-        </div>
-        <div>
-          <p>Ожидаемый результат</p>
-          {/* инпут селект */}
-          <TextInput value="Короткая оценка риска, список ответных действий и рекомендация по коммуникации для селлеров." onChange={() => {}}></TextInput>
-        </div>
-        <Button className="surface-block interactive-surface justify-start">+  Комментарий</Button>
-      </div>
-      <div className="space-y-4 text-sm">
-        <p>Что произошло</p>
-        <p>
+      <div className="space-y-4">
+        <p className="text-[13px] font-semibold text-[var(--color-strong)]">Что произошло</p>
+        <p className="text-xs text-[var(--color-ink)]">
           Wildberries запустил экспресс-доставку для региональных продавцов,
           чтобы ускорить вывод товаров в локальные кластеры. Событие усиливает
           конкуренцию за продавцов вне столичных регионов и может повлиять на
           ожидания по скорости доставки на маркетплейсах.
         </p>
+      </div>
+      <Divider></Divider>
+      <div className="space-y-4">
+        <p className="text-[13px] font-semibold text-[var(--color-strong)]">Анализ события</p>
+        <div className="grid grid-cols-[160px_1fr] gap-x-4 gap-y-3">
+          <p className="text-xs text-[var(--color-muted)]">Причина приоритета</p>
+          <p className="text-xs text-[var(--color-ink)]">
+            Изменение логистического сервиса конкурента с прямым влиянием на
+            продавцов и региональный SLA.
+          </p>
+          <p className="text-xs text-[var(--color-muted)]">Риск / возможность</p>
+          <p className="text-xs text-[var(--color-ink)]">
+            Риск перетока региональных продавцов; возможность усилить собственные условия доставки и коммуникацию для селлеров.
+          </p>
+          <p className="text-xs text-[var(--color-muted)]">Рекомендуемое действие</p>
+          <p className="text-xs text-[var(--color-ink)]">
+            Передать событие в коммерческий и логистический блоки для оценки реакции по региональным продавцам.
+          </p>
+          <p className="text-xs text-[var(--color-muted)]">Срок реакции</p>
+          <p className="text-xs font-medium text-[var(--color-ink)]">
+            До конца рабочего дня
+          </p>
+        </div>
+      </div>
+      <Divider></Divider>
+      <Attributes incident={incident} onConfirm={() => console.log("подтверждено")}
+  onFix={() => console.log("исправить")} />
+      <Divider />
+      <TaskCreation />
+      <Divider></Divider>
+      <RelatedTask />
+      <Divider></Divider>
+      <div className="space-y-4 text-sm">
+        <p>Источники</p>
+        <TagList
+          items={[
+            <span>Основной источник: {incident.source}</span>,
+            <span>{incident.source}</span>,
+          ]}
+        />
+        <div>
+          <ul>
+            <li>
+              <div>
+                <div className="flex justify-between">
+                  <div className="flex flex-col">
+                    <span>Коммерсантъ</span>
+                    <div>
+                      <span>26 июл 2026</span> · <span>первоисточник</span>{" "}
+                    </div>
+                  </div>
+                  <Button
+                    endIcon={<Icon name="link" />}
+                    variant="link"
+                    className=""
+                  ></Button>
+                </div>
+              </div>
+            </li>
+            <li>
+              <div>
+                <div className="flex justify-between">
+                  <div className="flex flex-col">
+                    <span>Коммерсантъ</span>
+                    <div>
+                      <span>26 июл 2026</span> · <span>первоисточник</span>{" "}
+                    </div>
+                  </div>
+                  <Button
+                    endIcon={<Icon name="link" />}
+                    variant="link"
+                    className=""
+                  ></Button>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </div>
       </div>
       <Divider />
+      <div className="space-y-4 text-sm">
+        <h3>Комментарии и история</h3>
+        <ul>
+          <li>
+            <div className="flex">
+              <span>10:42</span> · <p>Событие создано из публикации РБК</p>
+            </div>
+          </li>
+          <li>
+            <div className="flex">
+              <span>10:42</span> · <p>Событие создано из публикации РБК</p>
+            </div>
+          </li>
+        </ul>
+        <Button>+  Комментарий аналитика</Button>
+      </div>
+      <Divider />
+      <div className="space-y-4 text-sm">
+          <span>Событие не обработано</span>
+          <div>
+            <Button>Отметить шум</Button>
+            <Button>Создать задачу</Button>
+          </div>
+      </div>
     </Card>
   );
 }

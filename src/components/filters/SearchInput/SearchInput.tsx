@@ -1,7 +1,7 @@
 "use client";
 
-import { Icon } from "@ui/Icon/Icon";
-import { Input } from "@ui/Input";
+import { Icon } from "@/components/ui/Icon/Icon";
+import { Input } from "@/components/ui/Input";
 
 type SearchInputProps = {
   value: string;

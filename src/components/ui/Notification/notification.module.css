@@ -1,0 +1,22 @@
+.notification {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 420px;
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid #E1E3E4CC;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 14px;
+  color: #111827;
+  box-sizing: border-box;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22C55E;
+  flex-shrink: 0;
+}

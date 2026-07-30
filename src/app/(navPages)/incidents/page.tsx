@@ -1,9 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import IncidentTable from "@/components/tables/IncidentTable";
-import { CardIncident } from "@/components/cards/CardIncident/CardIncident";
 import TitlePage from "@/components/layout/TitlePage";
+
+const CardIncident = dynamic(
+  () => import("@/components/cards/CardIncident/CardIncident").then((m) => ({ default: m.CardIncident })),
+  { ssr: false }
+);
 import type { IncidentItem } from "@/types/types";
 
 export default function IncidentsPage() {
@@ -30,8 +35,7 @@ export default function IncidentsPage() {
 
       <CardIncident
         incident={selectedIncident}
-        // isOpen={!!selectedIncident}
-        isOpen={true}
+        isOpen={!!selectedIncident}
         onClose={() => setSelectedIncident(null)}
       />
     </div>

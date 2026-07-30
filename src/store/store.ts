@@ -1,10 +1,12 @@
 import { configureStore } from "@reduxjs/toolkit";
-import incidentsReducer from "./incidentsSlice";
+import { incidentsApi } from "./incidentsApi";
 
 export const store = configureStore({
     reducer: {
-        incidents: incidentsReducer,
+        [incidentsApi.reducerPath]: incidentsApi.reducer,
     },
+    middleware: (getDefaultMiddleware) =>
+        getDefaultMiddleware().concat(incidentsApi.middleware),
 });
 
 export type RootState = ReturnType<typeof store.getState>;

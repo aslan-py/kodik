@@ -44,7 +44,7 @@ export function Input({
   };
 
   const containerClass = [
-    "rounded-[10] bg-(--color-surface)",
+    "rounded-[10px] bg-(--color-surface)",
     multiline ? "flex items-start" : "flex items-center",
     width ? "" : "w-full",
     startIcon ? "relative" : "",
@@ -55,7 +55,7 @@ export function Input({
 
   const inputClass = [
     "w-full text-sm text-(--color-ink) outline-none transition bg-transparent",
-    "placeholder:text-(--color-muted) focus:border-(--color-accent) rounded-[10]",
+    "placeholder:text-(--color-muted) focus:border-(--color-accent) rounded-[10px]",
     multiline ? "h-full px-3 py-2 resize-none" : "h-10 px-3",
     startIcon ? "pl-9" : "",
     inputClassName,

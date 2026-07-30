@@ -179,6 +179,9 @@ class FedresursRPA:
                 inn=request.inn,
                 status=company_data.get('status'),
                 raw_text=company_data.get('full_text'),
+                published_at=company_data.get('published_at'),
+                region=company_data.get('region'),
+                extra=company_data.get('extra'),
                 file_path=filepath,
                 timestamp=timestamp,
                 proxy_used=format_proxy_string(proxy),
@@ -349,14 +352,22 @@ class FedresursRPA:
             page: Playwright Page с открытой карточкой компании.
 
         Returns:
-            Словарь с извлечёнными данными (status, full_text, ...).
+            Словарь с извлечёнными данными.
         """
         logger.info('Извлечение данных из карточки компании...')
         extractor = CompanyDataExtractor()
         data = await extractor.extract_company_data(page)
+
+        extra = data.get('extra')
+        extra_lines = len(extra.split('\n')) if extra else 0
+
         logger.info(
-            'Извлечено: статус="%s", текст=%d символов',
+            'Извлечено: статус="%s", текст=%d символов, дата=%s, '
+            'регион=%s, extra=%d строк',
             data.get('status'),
             len(data.get('full_text') or ''),
+            data.get('published_at'),
+            data.get('region'),
+            extra_lines,
         )
         return data

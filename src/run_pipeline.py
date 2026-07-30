@@ -604,7 +604,6 @@ class Pipeline:
             name=competitor.name,
             inn=competitor.inn,
             headless=True,
-            output_dir='./data/parsed_pages/fedresurs',
             retry_count=1,  # Pipeline handles retries
         )
 

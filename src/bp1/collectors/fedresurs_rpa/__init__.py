@@ -10,12 +10,13 @@ from .exceptions import (
     SearchExecutionError,
 )
 from .parser import FedresursRPA
-from .schemas import ProxyConfig, SearchRequest, SearchResult
+from .schemas import DirectorInfo, ProxyConfig, SearchRequest, SearchResult
 from .utils import validate_inn
 
 __all__ = [
     'BrowserManager',
     'BrowserStartError',
+    'DirectorInfo',
     'ElementNotFoundError',
     'FedresursRPA',
     'FedresursRPAException',

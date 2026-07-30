@@ -13,6 +13,7 @@ from src.bp3.modules.action_planning_module import ActionPlanningModule
 from src.bp3.modules.categorized_module import CategorizedModule
 from src.bp3.modules.comment_action_module import CommentActionModule
 from src.bp3.modules.input_data_module import InputDataModule
+from src.bp3.modules.save_results_module import SaveResultsModule
 from src.bp3.modules.tone_analysis_module import ToneAnalysisModule
 
 if __name__ == '__main__':
@@ -30,6 +31,7 @@ if __name__ == '__main__':
             ActionPlanningModule(),
             ToneAnalysisModule(llm),
             CommentActionModule(llm),
+            SaveResultsModule(),
         ]
     )
 

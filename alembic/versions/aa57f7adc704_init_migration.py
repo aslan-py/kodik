@@ -1,8 +1,8 @@
-"""init
+"""init migration
 
-Revision ID: 30e7e190e25a
+Revision ID: aa57f7adc704
 Revises:
-Create Date: 2026-07-29 11:40:14.622656
+Create Date: 2026-07-30 21:32:30.168045
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '30e7e190e25a'
+revision: str = 'aa57f7adc704'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -210,7 +210,7 @@ def upgrade() -> None:
     sa.Column('normalized_item_id', sa.Integer(), nullable=False, comment='1:1 ссылка на факты события. UNIQUE = одна разметка'),
     sa.Column('priority', sa.Enum('p1', 'p2', 'p3', 'p4', name='priority_level'), nullable=False, comment='Приоритет П1–П4 (от LLM)'),
     sa.Column('category_id', sa.Integer(), nullable=False, comment='Категория события из справочника (LLM → lookup id)'),
-    sa.Column('tonality', sa.Enum('positive', 'neutral', 'negative', name='tonality_level'), nullable=False, comment='Тональность (от LLM)'),
+    sa.Column('tonality', sa.Enum('positive', 'neutral', 'negative', 'alarming', 'irrelevant', name='tonality_level'), nullable=False, comment='Тональность (от LLM)'),
     sa.Column('media_index', sa.Numeric(precision=10, scale=2), nullable=True, comment='Медиаиндекс (охват/заметность) из лицензионного агрегатора. НЕ выход LLM. NULL если источника нет'),
     sa.Column('action', sa.String(length=512), nullable=True, comment='Требуемое действие (черновик от LLM)'),
     sa.Column('deadline', sa.Date(), nullable=True, comment='Срок реакции. Считает код: П1 = дата+48ч, П2 = +7 дней'),

@@ -110,6 +110,8 @@ class TonalityLevel(enum.StrEnum):
     positive = 'positive'
     neutral = 'neutral'
     negative = 'negative'
+    alarming = 'alarming'
+    irrelevant = 'irrelevant'
 
 
 # ============================================================================

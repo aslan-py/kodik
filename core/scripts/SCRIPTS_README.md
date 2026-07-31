@@ -14,7 +14,7 @@
 
 | Команда | Заполняет |
 |---------|-----------|
-| `python -m core.scripts.stages.dictionaries` | Все справочники + регионы из `cities.json` |
+| `python -m core.scripts.stages.dictionaries` | Все справочники + регионы из `scripts_data/cities.json` |
 | `python -m core.scripts.stages.bp1` | `search_task`, `raw_item` |
 | `python -m core.scripts.stages.bp2` | `normalized_item` |
 | `python -m core.scripts.stages.bp3` | `categorized_event` |
@@ -27,3 +27,16 @@
 
 Очистка `stages.dictionaries` сносит и данные пайплайна: иначе FK не дадут
 удалить конкурента, на которого ссылается задача сбора.
+
+## Откуда берутся демо-данные
+
+Всё содержимое демо лежит в `scripts_data/` (см. README там же):
+
+- `news_dataset.csv` — новости конкурентов. Одна строка = одна новость, из
+  неё собираются сырьё (BP-1), факты (BP-2) и разметка (BP-3), а также
+  справочник конкурентов. Загрузчик — `stages/news_data.py`;
+- `cities.json` — справочник регионов.
+
+Сценарий выгрузок (какой снимок, когда снят, какие новости содержит) описан
+в `SNAPSHOTS` — `stages/bp1.py`. Добавить новость = дописать строку в CSV и
+упомянуть её id в снимке.

@@ -10,25 +10,34 @@
     python -c "import asyncio; from src.bp2.pipeline import run_bp2; \\
                print(asyncio.run(run_bp2()))"
 
+Контент снимков берётся из демо-набора новостей (stages/news_data.py):
+здесь описан только СЦЕНАРИЙ выгрузок — какой конкурент, какой статус,
+когда снят снимок и какие новости (по id строки CSV) в нём лежат. Тексты
+перед укладкой намеренно «пачкаются» (dirty): HTML-сущности, обрывки тегов,
+неразрывные пробелы, три разных формата даты, регион в произвольном
+регистре — ровно то, что чистит BP-2.
+
 Набор данных решает две задачи сразу — поэтому он один, а не два разных:
 
-1. ДЕМО. Настоящие новости по девяти конкурентам: пройдя весь конвейер, они
-   дают осмысленную витрину, на которую не стыдно посмотреть в BI.
+1. ДЕМО. Новости по одиннадцати конкурентам (разработчики LLM/ML-решений):
+   пройдя весь конвейер, они дают осмысленную витрину, на которую не стыдно
+   посмотреть в BI.
 2. КРАЙНИЕ СЛУЧАИ. В него вплетены все сценарии, которые должен пережить
    отбор BP-2 и его фильтры:
 
-   - пары new → changed (в нормализацию идёт только changed);
+   - пары new → changed (в нормализацию идёт только свежий снимок);
    - unchanged: снимок с поднятым updated_at (хэш совпал, данные те же);
    - две строки error (raw_data = NULL, в отбор не попадают);
    - тай-брейк: пара с ОДИНАКОВЫМ created_at — побеждает больший id;
    - события под каждый фильтр: чёрный домен, стоп-слово, стоп-тема,
      ложное срабатывание, пустой заголовок (parse_error);
-   - перебор лимита антишума по конкуренту (у Иркутска событий больше 5).
+   - перебор лимита антишума по конкуренту (у «Омега Интеллект» чистых
+     событий за неделю больше 5).
 
 Справочники должны быть залиты заранее (stages/dictionaries).
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 
 from sqlalchemy import select
@@ -37,7 +46,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.enums import RawItemStatus
 from core.scripts.stages.cascade import clear_from
 from core.scripts.stages.dictionaries import SOURCE_NAME
+from core.scripts.stages.news_data import News, by_ids
 from src.bp1.models import Competitor, RawItem, SearchTask, Source
+
+# Месяцы в родительном падеже — для формата даты «26 июня 2026»,
+# который умеет разбирать parse_ru_date (src/bp2/schemas.py).
+RU_MONTHS = (
+    'января',
+    'февраля',
+    'марта',
+    'апреля',
+    'мая',
+    'июня',
+    'июля',
+    'августа',
+    'сентября',
+    'октября',
+    'ноября',
+    'декабря',
+)
 
 
 def dt(day: int, hour: int = 9, minute: int = 0, second: int = 0) -> datetime:
@@ -45,12 +72,57 @@ def dt(day: int, hour: int = 9, minute: int = 0, second: int = 0) -> datetime:
     return datetime(2026, 6, day, hour, minute, second, tzinfo=UTC)
 
 
-def item(url, title, text, published_at, region, media_name, extra=None):
-    """Один сырой объект raw_data.items[] (ключи = колонкам normalized_item).
+# ============================================================================
+#  Порча текста: чистая новость → то, что реально приходит со страницы
+# ============================================================================
+#  Вид артефакта выбирается по номеру события в снимке — так в наборе
+#  встречаются все варианты, а результат остаётся воспроизводимым. Все они
+#  обратимы: clean_text (BP-2) возвращает ровно исходную строку из CSV.
 
-    Тексты намеренно ГРЯЗНЫЕ — с HTML-сущностями, обрывками тегов, лишними
-    пробелами и разными форматами даты: ровно то, что чистит BP-2.
+
+def dirty(text: str, index: int) -> str:
+    """Внести в текст артефакты вёрстки — то, что чистит BP-2.
+
+    0 — HTML-сущности вместо кавычек-ёлочек (&laquo; / &raquo;);
+    1 — неразрывный пробел, табуляция и лишние пробелы по краям;
+    2 — обёртка в HTML-тег.
     """
+    kind = index % 3
+    if kind == 0:
+        return text.replace('«', '&laquo;').replace('»', '&raquo;')
+    if kind == 1:
+        return f'  {text.replace(" ", "&nbsp;", 1)}\t'
+    return f'<p>{text}</p>'
+
+
+def dirty_date(day: date, index: int) -> str:
+    """Дата в одном из трёх форматов, которые встречаются в источниках."""
+    kind = index % 3
+    if kind == 0:
+        return f'{day.day:02d}.{day.month:02d}.{day.year}'
+    if kind == 1:
+        return f'{day.day} {RU_MONTHS[day.month - 1]} {day.year}'
+    return day.isoformat()
+
+
+def dirty_region(region: str | None, index: int) -> str | None:
+    """Регион в произвольном регистре и с мусорным пробелом.
+
+    Резолвится он по name_aliases (в справочнике они в нижнем регистре),
+    поэтому «НИЖНИЙ НОВГОРОД» и «нижний новгород » дадут тот же region_id.
+    """
+    if region is None:
+        return None
+    kind = index % 3
+    if kind == 0:
+        return region
+    if kind == 1:
+        return f'{region.lower()} '
+    return region.upper()
+
+
+def item(url, title, text, published_at, region, media_name, extra=None):
+    """Один сырой объект raw_data.items[] (ключи = колонкам normalized_item)."""
     return {
         'url': url,
         'title': title,
@@ -62,394 +134,175 @@ def item(url, title, text, published_at, region, media_name, extra=None):
     }
 
 
+def news_item(news: News, index: int) -> dict:
+    """Демо-новость → «грязный» объект items[] сырой выгрузки."""
+    return item(
+        news.url,
+        dirty(news.title, index),
+        dirty(news.text, index),
+        dirty_date(news.published_at, index),
+        dirty_region(news.region, index),
+        news.media_name,
+    )
+
+
+def draft_item(url: str, title: str, text: str, snapshot_date: date) -> dict:
+    """Черновая версия заметки для ПЕРВОГО снимка пары new → changed.
+
+    В факты такие строки не попадают: BP-2 берёт только свежий снимок задачи,
+    а он — второй (changed). Они нужны, чтобы у пары была история версий,
+    поэтому и описаны прямо здесь, а не в CSV с настоящими новостями.
+    """
+    return item(url, title, text, snapshot_date.isoformat(), None, 'Черновик')
+
+
 # ============================================================================
-#  Снимки: (конкурент, статус, момент съёма, события) + опции
+#  Снимки: (конкурент, статус, момент съёма, id новостей из CSV) + опции
 # ============================================================================
 #  Порядок в списке = порядок вставки: у снимка, объявленного ниже, id больше.
 #  Это важно для пары с одинаковым created_at (тай-брейк по id DESC).
 
 SNAPSHOTS: list[dict] = [
-    # ---- Топ-Сервис: new → changed, побеждает changed ----
+    # ---- НейроПолис: new → changed, побеждает changed ----
     {
-        'competitor': 'Топ-Сервис',
+        'competitor': 'НейроПолис',
         'status': RawItemStatus.new,
-        'created': dt(22, 10),
-        'items': [
-            item(
-                'https://big-news.ru/kaluga/old',
-                'Первая версия заметки',
-                'Черновой текст, позже обновлён.',
-                '22.06.2026',
-                'Калуга',
-                'Big-news.ru, Москва',
+        'created': dt(21, 10),
+        'drafts': [
+            (
+                'https://www.rbc.ru/technology/21/06/2026/neuropolis-draft',
+                'Первая версия заметки об утечке',
+                'Черновой текст, позже обновлён редакцией.',
             ),
         ],
     },
     {
-        'competitor': 'Топ-Сервис',
+        'competitor': 'НейроПолис',
         'status': RawItemStatus.changed,
-        'created': dt(25, 10),
-        'items': [
-            item(
-                'https://big-news.ru/kaluga/12045',
-                '  Калужской транспортной прокуратурой выявлены\t'
-                'нарушения закона о защите прав пассажиров ',
-                '<p>Проверка показала&nbsp;нарушения. '
-                '&laquo;Топ-Сервис&raquo; получил представление.</p>',
-                '25.06.2026',
-                'Калуга',
-                'Big-news.ru, Москва',
-            ),
-            item(
-                'https://big-news.ru/kaluga/12046',
-                '…нарушения законодательства о защите прав '
-                'пассажиров ж/д транспорта',
-                'Продолжение темы&mdash;прокуратура выявила '
-                'нарушения у перевозчика.',
-                '25 июня 2026 г.',
-                '  калуга ',
-                'Big-news.ru, Москва',
-            ),
-            item(
-                'https://www.cnews.ru/news/2026/06/24/conf',
-                'Конференция CNews &laquo;Оптимизация цифровой '
-                'инфраструктуры 2026&raquo;',
-                'Топ-Сервис выступил партнёром конференции.',
-                '24.06.2026',
-                'Москва',
-                'CNews.ru',
-            ),
-        ],
+        'created': dt(26, 10),
+        'news': [1, 11, 22, 26],
     },
-    # ---- МУП «Школьное питание»: unchanged (updated_at поднят) ----
+    # ---- Гиперион Диджитал: unchanged (updated_at поднят) + чёрный домен ----
     {
-        'competitor': 'МУП «Школьное питание»',
+        'competitor': 'Гиперион Диджитал',
         'status': RawItemStatus.new,
-        'created': dt(24, 8),
-        'updated': dt(27, 8),  # хэш совпал — обновили только отметку сверки
-        'items': [
-            item(
-                'https://news.rambler.ru/incident/54321',
-                'Бывшему вице-мэру Нефтеюганска второй&nbsp;раз '
-                'смягчили меру пресечения',
-                'Суд смягчил меру пресечения фигуранту, связанному '
-                'с МУП &laquo;Школьное питание&raquo;.',
-                '25.06.2026',
-                'Нефтеюганск',
-                'Рамблер/новости',
-            ),
-        ],
-    },
-    # ---- Виво Маркет: демо + стоп-слово + пустой заголовок ----
-    {
-        'competitor': 'Виво Маркет',
-        'status': RawItemStatus.new,
-        'created': dt(27, 9),
-        'items': [
-            item(
-                'https://v1.ru/text/business/2026/06/25/social',
-                'Как волгоградские  предприниматели развивают '
-                'социальный бизнес',
-                'Среди участников — сеть &laquo;Виво Маркет&raquo;.',
-                '25.06.2026',
-                'Волгоград',
-                'V1.ru, Волгоград',
-            ),
-            item(
-                'https://www.forbes.ru/biznes/456-den',
-                'День широко распахнутых дверей и кешбэк во&nbsp;благо',
-                '<b>Виво Маркет</b> провёл акцию для покупателей.',
-                '27.06.2026',
-                'ВОЛГОГРАД',
-                'Forbes, Москва',
-            ),
-            item(
-                'https://volgaprom.expert/news/789',
-                'VR-очки, дегустация, карта желаний: ярмарка '
-                'вакансий Волгограда',
-                'Виво Маркет представил стенд на ярмарке.',
-                '23.06.2026',
-                'г. Волгоград',
-                'ВолгаПромЭксперт',
-            ),
-            # → stop_word «реклама»
-            item(
-                'https://volgaprom.expert/news/790',
-                'Скидки недели в магазинах сети',
-                'Это реклама акции для покупателей.',
-                '26.06.2026',
-                'Волгоград',
-                'ВолгаПромЭксперт',
-            ),
-            # → parse_error: заголовка нет вообще
-            item(
-                'https://v1.ru/text/business/2026/06/26/noname',
-                '',
-                'Текст без заголовка — парсер не смог достать title.',
-                '26.06.2026',
-                'Волгоград',
-                'V1.ru, Волгоград',
-            ),
-        ],
-    },
-    # ---- Комбинат питания Иркутска: new → changed, перебор антишума ----
-    {
-        'competitor': 'Комбинат питания Иркутска',
-        'status': RawItemStatus.new,
-        'created': dt(21, 8),
-        'items': [
-            item(
-                'https://irksib.ru/2026/06/20/old',
-                'Старая версия материала',
-                'Позже заменена обновлённой выгрузкой.',
-                '20.06.2026',
-                'Иркутск',
-                'Irksib.ru',
-            ),
-        ],
-    },
-    {
-        'competitor': 'Комбинат питания Иркутска',
-        'status': RawItemStatus.changed,
         'created': dt(26, 8),
-        'items': [
-            item(
-                'https://argumenti.ru/irkutsk/2026/06/35let',
-                '35 лет со вкусом и качеством от Комбината питания',
-                'Предприятие отмечает юбилей.',
-                '24.06.2026',
-                'Иркутск',
-                'Аргументы недели',
-            ),
-            item(
-                'https://www.kp.ru/irkutsk/recipe',
-                'Поделитесь рецептом',
-                'Комбинат питания запустил конкурс рецептов.',
-                '23.06.2026',
-                'иркутск',
-                'КП-Иркутск',
-            ),
-            item(
-                'https://irksib.ru/2026/06/22/kuhnya',
-                'Детская молочная кухня Иркутска: роботизация '
-                'и поставки с сентября',
-                'Модернизация производства детского питания.',
-                '2026-06-22',
-                'Иркутск ',
-                'Irksib.ru',
-            ),
-            item(
-                'https://dairynews.today/irkutsk/assort',
-                'Детская молочная кухня Иркутска расширяет ассортимент',
-                'В линейке появились новые позиции.',
-                '22.06.26',
-                'Иркутск',
-                'ДэйриНьюс',
-            ),
-            item(
-                'https://tokmedia.ru/tn-angara',
-                'Иркутское предприятие ТН-Ангара внедрит бережливые технологии',
-                'Оптимизация процессов на производстве.',
-                '26 июня 2026',
-                'Иркутск',
-                'Ток Медиа',
-            ),
-            # → stop_topic «гороскоп»
-            item(
-                'https://www.kp.ru/irkutsk/goroskop',
-                'Гороскоп на неделю для жителей Иркутска',
-                'Что обещают звёзды.',
-                '24.06.2026',
-                'Иркутск',
-                'КП-Иркутск',
-            ),
-            # Шестое ЧИСТОЕ событие конкурента при лимите 5/неделю —
-            # именно оно уходит в rejected(noise_limit) на шаге антишума.
-            item(
-                'https://irksib.ru/2026/06/25/postavki',
-                'Комбинат питания заключил договор на поставку овощей',
-                'Расширение пула поставщиков к новому учебному году.',
-                '25.06.2026',
-                'Иркутск',
-                'Irksib.ru',
+        'updated': dt(27, 8),  # хэш совпал — обновили только отметку сверки
+        'news': [6, 15, 27, 39],
+    },
+    # ---- Аврора Интеллект: демо + стоп-слово + ложное срабатывание ----
+    {
+        'competitor': 'Аврора Интеллект',
+        'status': RawItemStatus.new,
+        'created': dt(26, 9),
+        'news': [2, 7, 23, 35, 38],
+    },
+    # ---- ДатаВерум: ТАЙ-БРЕЙК — одинаковый created_at, побеждает больший id -
+    {
+        'competitor': 'ДатаВерум',
+        'status': RawItemStatus.new,
+        'created': dt(27, 15),
+        'drafts': [
+            (
+                'https://habr.com/ru/companies/dataverum/articles/draft',
+                'Черновик материала о споре с издательством',
+                'Черновой текст.',
             ),
         ],
     },
-    # ---- Сургут: new → changed с разными датами съёма ----
     {
-        'competitor': 'Комбинат школьного питания Сургута',
+        'competitor': 'ДатаВерум',
+        'status': RawItemStatus.changed,
+        'created': dt(27, 15),  # ТОТ ЖЕ момент, что у new выше
+        'news': [3, 9, 25],
+    },
+    # ---- Тензор Логика: new → changed с разными датами съёма ----
+    {
+        'competitor': 'Тензор Логика',
         'status': RawItemStatus.new,
         'created': dt(21, 9, 30),
-        'items': [
-            item(
-                'https://ugra-news.ru/surgut/old',
-                'Старая заметка о питании',
+        'drafts': [
+            (
+                'https://www.interfax.ru/russia/tenzor-draft',
+                'Ранняя заметка о проверке',
                 'Заменена свежей выгрузкой.',
-                '21.06.2026',
-                'Сургут',
-                'Сургутская трибуна',
             ),
         ],
     },
     {
-        'competitor': 'Комбинат школьного питания Сургута',
+        'competitor': 'Тензор Логика',
         'status': RawItemStatus.changed,
-        'created': dt(23, 9, 30, 15),
-        'items': [
-            item(
-                'https://ugra-news.ru/surgut/reforma',
-                'Сургут готовит реформу школьного питания: '
-                '55%&nbsp;еды выбрасывается',
-                'Власти обсуждают проблему пищевых отходов.',
-                '23.06.2026',
-                'Сургут',
-                'Сургутская трибуна',
-            ),
-            item(
-                'https://siapress.ru/news/pitanie',
-                'В школах Сургута хотят изменить систему питания',
-                'Обсуждается новая модель организации питания.',
-                '23.06.2026',
-                'Сургут ',
-                'СИА-Пресс',
-            ),
-        ],
+        'created': dt(27, 9, 30, 15),
+        'news': [4, 18, 30],
     },
-    # ---- Казань: new → changed + ложное срабатывание ----
+    # ---- Когнитив Системс ----
     {
-        'competitor': 'Деп. продовольствия и соцпитания Казани',
+        'competitor': 'Когнитив Системс',
         'status': RawItemStatus.new,
-        'created': dt(20, 12),
-        'items': [
-            item(
-                'https://www.kzn.ru/meta/news/old',
-                'Прошлая новость департамента',
-                'Устарела.',
-                '20.06.2026',
-                'Казань',
-                'kzn.ru',
-            ),
-        ],
-    },
-    {
-        'competitor': 'Деп. продовольствия и соцпитания Казани',
-        'status': RawItemStatus.changed,
         'created': dt(26, 12),
-        'items': [
-            item(
-                'https://www.kzn.ru/meta/news/600',
-                'С начала года свыше 600 школьников посетили '
-                'городские предприятия',
-                'Экскурсии организованы департаментом питания.',
-                '22.06.2026',
-                'Казань',
-                'kzn.ru',
-            ),
-            # → false_positive «бегемот в зоопарке»
-            item(
-                'https://www.kzn.ru/meta/news/zoo',
-                'Бегемот в зоопарке Казани отметил день рождения',
-                'К деятельности конкурента отношения не имеет.',
-                '22.06.2026',
-                'Казань',
-                'kzn.ru',
-            ),
-        ],
+        'news': [5, 21],
     },
-    # ---- Охта: ТАЙ-БРЕЙК — одинаковый created_at, побеждает больший id ----
+    # ---- СинтезЛаб: сбой сбора + демо ----
     {
-        'competitor': 'Комбинат соц. питания «Охта»',
-        'status': RawItemStatus.new,
-        'created': dt(23, 15),
-        'items': [
-            item(
-                'https://spb.bezformata.com/draft',
-                'Черновик материала о столовых',
-                'Черновой текст.',
-                '23.06.2026',
-                'СПб',
-                'БезФормата СПб',
-            ),
-        ],
-    },
-    {
-        'competitor': 'Комбинат соц. питания «Охта»',
-        'status': RawItemStatus.changed,
-        'created': dt(23, 15),  # ТОТ ЖЕ момент, что у new выше
-        'items': [
-            item(
-                'https://spb.bezformata.com/stolovye',
-                'В Петербурге определили лучшие школьные столовые',
-                'Комбинат &laquo;Охта&raquo; вошёл в число лучших.',
-                '23.06.2026',
-                'СПб',
-                'БезФормата СПб',
-            ),
-        ],
-    },
-    # ---- Мусороуборочная компания: чёрный домен + сбой сбора ----
-    {
-        'competitor': 'Мусороуборочная компания',
+        'competitor': 'СинтезЛаб',
         'status': RawItemStatus.error,
         'created': dt(24, 11),
-        'items': [],
         'error': 'ConnectionTimeout: источник не ответил за 30 с. '
         'Исчерпаны все 3 попытки.',
     },
     {
-        'competitor': 'Мусороуборочная компания',
+        'competitor': 'СинтезЛаб',
         'status': RawItemStatus.new,
         'created': dt(25, 11),
-        'items': [
-            # → black_domain critics24.com; регион «Украина» не резолвится
-            item(
-                'https://critics24.com/kiev/gubernator',
-                '&laquo;Ночной губернатор&raquo; вызван на допрос',
-                'Скандальная публикация о деятельности компании.',
-                '22.06.2026',
-                'Украина',
-                'critics24.com (Киев)',
+        'news': [8, 17, 31],
+    },
+    # ---- Омега Интеллект: new → changed, перебор антишума ----
+    {
+        'competitor': 'Омега Интеллект',
+        'status': RawItemStatus.new,
+        'created': dt(21, 8),
+        'drafts': [
+            (
+                'https://www.cnews.ru/news/omega-old',
+                'Старая версия материала о тарифах',
+                'Позже заменена обновлённой выгрузкой.',
             ),
         ],
     },
-    # ---- СКС: сбой + три демо-новости ----
     {
-        'competitor': 'СКС',
+        'competitor': 'Омега Интеллект',
+        'status': RawItemStatus.changed,
+        'created': dt(27, 8),
+        # Шесть ЧИСТЫХ событий конкурента при лимите 5/неделю: самое
+        # незначительное (43) уходит в rejected(noise_limit) на шаге антишума.
+        'news': [10, 16, 28, 36, 40, 41, 42, 43],
+    },
+    # ---- Ирида ИИ: сбой сбора + демо ----
+    {
+        'competitor': 'Ирида ИИ',
         'status': RawItemStatus.error,
         'created': dt(24, 11, 10),
-        'items': [],
         'error': 'HTTP 403 от источника: сработала защита от парсинга.',
     },
     {
-        'competitor': 'СКС',
+        'competitor': 'Ирида ИИ',
         'status': RawItemStatus.new,
-        'created': dt(25, 11, 10),
-        'items': [
-            item(
-                'https://samadm.ru/news/rekonstrukciya',
-                'Глава Самары проверил ход реконструкции коммунальных сетей',
-                'Работы ведёт СКС.',
-                '25.06.2026',
-                'Самара',
-                'samadm.ru',
-            ),
-            item(
-                'https://63.ru/text/gorod/2026/06/23/torez',
-                'В Самаре закрыто движение по ул. Мориса Тореза',
-                'Причина — ремонт сетей СКС.',
-                '23.06.2026',
-                'самара',
-                '63.ru',
-            ),
-            item(
-                'https://samara450.ru/dolg',
-                'Более 1,5 млрд руб. долга накопили жители Самары за воду',
-                'Задолженность перед ресурсником СКС.',
-                '25.06.2026',
-                'Самара',
-                'Самара 450',
-            ),
-        ],
+        'created': dt(26, 11, 10),
+        'news': [12, 19, 29],
+    },
+    # ---- Стек Форвард ----
+    {
+        'competitor': 'Стек Форвард',
+        'status': RawItemStatus.new,
+        'created': dt(25, 13),
+        'news': [13, 24, 33],
+    },
+    # ---- Квантум Медиа: демо + стоп-тема ----
+    {
+        'competitor': 'Квантум Медиа',
+        'status': RawItemStatus.new,
+        'created': dt(27, 13),
+        'news': [14, 20, 32, 34, 37],
     },
 ]
 
@@ -457,6 +310,19 @@ SNAPSHOTS: list[dict] = [
 # ============================================================================
 #  Этап
 # ============================================================================
+
+
+def build_items(snapshot: dict) -> list[dict]:
+    """События снимка: новости из CSV (по id) плюс черновики, если заданы."""
+    items = [
+        news_item(news, index)
+        for index, news in enumerate(by_ids(snapshot.get('news', [])))
+    ]
+    items.extend(
+        draft_item(url, title, text, snapshot['created'].date())
+        for url, title, text in snapshot.get('drafts', [])
+    )
+    return items
 
 
 def make_raw_data(task_id: int, competitor: str, items: list[dict]) -> dict:
@@ -525,7 +391,7 @@ async def seed(session: AsyncSession) -> int:
                 ).hexdigest(),
                 raw_data=None
                 if failed
-                else make_raw_data(task_id, name, snap['items']),
+                else make_raw_data(task_id, name, build_items(snap)),
                 html_file_path=None
                 if failed
                 else f'/snapshots/{task_id}/{created:%Y-%m-%dT%H-%M}.html',

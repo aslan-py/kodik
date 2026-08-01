@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -42,7 +43,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import ActiveMixin, Base, Mixin
+from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import (
     AlertStatus,
     DeliveryMode,
@@ -65,7 +66,7 @@ class EventType(Base, Mixin, ActiveMixin):
     """
 
     name: Mapped[str] = mapped_column(
-        String(256),
+        StrippedString(256),
         unique=True,
         comment=(
             'Название типа: судебный/надзорный риск, выигранный тендер, '
@@ -86,6 +87,9 @@ class EventType(Base, Mixin, ActiveMixin):
             'keywords',
             postgresql_using='gin',
         ),
+        CheckConstraint(
+            'name = btrim(name)', name='ck_event_type_name_trimmed'
+        ),
     )
 
 
@@ -93,9 +97,13 @@ class Channel(Base, Mixin, ActiveMixin):
     """Справочник каналов доставки."""
 
     name: Mapped[str] = mapped_column(
-        String(64),
+        StrippedString(64),
         unique=True,
         comment='Канал доставки: telegram, email, dashboard',
+    )
+
+    __table_args__ = (
+        CheckConstraint('name = btrim(name)', name='ck_channel_name_trimmed'),
     )
 
 
@@ -109,7 +117,7 @@ class User(Base, Mixin, ActiveMixin):
     """
 
     full_name: Mapped[str | None] = mapped_column(
-        String(256),
+        StrippedString(256),
         comment='ФИО — для читаемости в админке, не критично',
     )
     department_id: Mapped[int | None] = mapped_column(
@@ -117,7 +125,7 @@ class User(Base, Mixin, ActiveMixin):
         comment='В каком отделе числится (справочно, не для маршрутизации)',
     )
     email: Mapped[str] = mapped_column(
-        String(256),
+        StrippedString(256),
         unique=True,
         comment='Адрес для канала email',
     )
@@ -128,6 +136,13 @@ class User(Base, Mixin, ActiveMixin):
             'Числовой chat_id для канала telegram (sendMessage требует '
             'id, не @username)'
         ),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'full_name = btrim(full_name)', name='ck_user_full_name_trimmed'
+        ),
+        CheckConstraint('email = btrim(email)', name='ck_user_email_trimmed'),
     )
 
 

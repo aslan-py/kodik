@@ -24,8 +24,10 @@ constants.py — таблицы очистки текста, antinoise.py - ва
     и внутри данного оркестратора двигайся сверху вниз.
 """
 
+import asyncio
 import html
 import re
+import sys
 import unicodedata
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -238,20 +240,83 @@ def apply_filters(
 
 
 # ============================================================================
+#  Общая часть конвейера (шаги 2-6): снимки → строки normalized_item
+# ============================================================================
+
+
+def build_normalized_rows(
+    raw_items: Sequence,
+    *,
+    competitor_map: dict[str, int],
+    region_map: dict[str, int],
+    source_map: dict[int, int],
+    black_domains: set[str],
+    stop_words: Sequence[StopWord],
+) -> list[dict]:
+    """Прогнать снимки через split → validate → normalize → filters.
+
+    Общий шаг для run_bp2 в обоих режимах (reparse=False/True) — они
+    отличаются только тем, какие raw_items сюда попадают и как
+    записывается результат (upsert с update=False/True).
+    """
+    rows: list[dict] = []
+    for raw_item in raw_items:
+        for event_dict in split_items(raw_item.raw_data or {}):
+            event = RawEventIn.model_validate(event_dict)
+            row = normalize_item(
+                event,
+                raw_item_id=raw_item.id,
+                competitor_map=competitor_map,
+                region_map=region_map,
+                source_map=source_map,
+            )
+            apply_filters(
+                row, black_domains=black_domains, stop_words=stop_words
+            )
+            rows.append(row)
+    return rows
+
+
+# ============================================================================
 #  Оркестратор — весь конвейер BP-2 в один прогон (шаги помечены ниже)
 # ============================================================================
 
 
-async def run_bp2() -> dict:
+async def run_bp2(
+    *, reparse: bool = False, raw_item_ids: Sequence[int] | None = None
+) -> dict:
     """Один прогон конвейера BP-2: сырьё → normalized_item.
 
-    Открывает сессию, один раз грузит справочники, отбирает свежие
-    необработанные снимки и по каждому событию проходит цепочку
-    split_items → RawEventIn → normalize_item → apply_filters, копит строки
-    и пишет их одним upsert (дедуп по dedup_key). В конце — антишум.
+    Открывает сессию, один раз грузит справочники и по каждому событию
+    проходит цепочку split_items → RawEventIn → normalize_item →
+    apply_filters, копит строки и пишет их одним upsert (дедуп по
+    dedup_key). В конце — антишум (reject_over_limit).
+
+    reparse=False (по умолчанию) — обычный инкрементальный прогон: берутся
+    только свежие снимки, которых ещё нет в normalized_item
+    (select_pending_raw_items), запись идёт с ON CONFLICT DO NOTHING.
+
+    reparse=True — переразбор УЖЕ нормализованных снимков новыми правилами
+    (например, поправили стоп-слова или чёрные домены и надо пересчитать
+    status/reject_reason без повторного захода на сайт). Берутся все
+    свежие снимки или только raw_item_ids (select_reparse_raw_items), запись
+    идёт с ON CONFLICT DO UPDATE — существующая строка правится на месте
+    (тот же id), дублей и удалений нет. raw_item_ids имеет смысл только
+    вместе с reparse=True.
+
+    Антишум (topic_limit) выполняется в обоих режимах, но у него есть
+    известное ограничение: reject_over_limit умеет только ОТКЛОНЯТЬ строки
+    сверх лимита. Если max_count впоследствии УВЕЛИЧАТ, ранее отклонённые
+    (status=rejected, reject_reason=noise_limit) строки автоматически
+    обратно в ok не вернутся — операция однонаправленная. Ужесточение
+    лимита (max_count уменьшили), наоборот, отработает верно при следующем
+    вызове.
 
     Возвращает сводку прогона (сколько снимков и строк обработано).
     """
+    if raw_item_ids is not None and not reparse:
+        raise ValueError('raw_item_ids допустим только вместе с reparse=True')
+
     run_started_at = datetime.now(UTC)
 
     async with AsyncSessionLocal() as session:
@@ -265,31 +330,25 @@ async def run_bp2() -> dict:
         stop_words = await crud.load_stop_words()
         topic_limits = await crud.load_topic_limits()
 
-        # Шаг 1 — отобрать свежие необработанные снимки
-        pending = await crud.select_pending_raw_items()
+        # Шаг 1 — отобрать снимки: свежие необработанные или под переразбор
+        if reparse:
+            raw_items = await crud.select_reparse_raw_items(raw_item_ids)
+        else:
+            raw_items = await crud.select_pending_raw_items()
 
-        rows: list[dict] = []
-        for raw_item in pending:
-            # Шаг 2 — разбить снимок на события + предочистка
-            for event_dict in split_items(raw_item.raw_data or {}):
-                # Шаг 3 — провалидировать событие (типы, парс даты)
-                event = RawEventIn.model_validate(event_dict)
-                # Шаг 4 — имена справочников → id, посчитать dedup_key
-                row = normalize_item(
-                    event,
-                    raw_item_id=raw_item.id,
-                    competitor_map=competitor_map,
-                    region_map=region_map,
-                    source_map=source_map,
-                )
-                # Шаги 5-6 — отсев по чёрным доменам и стоп-словам
-                apply_filters(
-                    row, black_domains=black_domains, stop_words=stop_words
-                )
-                rows.append(row)
+        # Шаги 2-6 — разбить, провалидировать, нормализовать, отфильтровать
+        rows = build_normalized_rows(
+            raw_items,
+            competitor_map=competitor_map,
+            region_map=region_map,
+            source_map=source_map,
+            black_domains=black_domains,
+            stop_words=stop_words,
+        )
 
-        # Шаг 7 — записать пачку с дедупом (ON CONFLICT)
-        await crud.upsert_normalized_items(rows)
+        # Шаг 7 — записать пачку (DO NOTHING на обычном прогоне,
+        # DO UPDATE status/reject_reason на переразборе)
+        await crud.upsert_normalized_items(rows, update=reparse)
         await session.commit()
 
         # Шаг 8 — антишум: самые старые сверх лимита → rejected(noise_limit)
@@ -301,14 +360,19 @@ async def run_bp2() -> dict:
             await session.commit()
 
         return {
-            'pending': len(pending),
+            'raw_items': len(raw_items),
             'rows': len(rows),
             'noise_rejected': noise_rejected,
         }
 
 
-# import asyncio
-
-# if __name__ == '__main__':
-#     result = asyncio.run(run_bp2())
-#     print(result)
+if __name__ == '__main__':
+    # python -m src.bp2.pipeline                  — обычный прогон (только new)
+    # python -m src.bp2.pipeline reparse           — переразобрать всё свежее
+    # python -m src.bp2.pipeline reparse 157 160   — переразобрать только id
+    if len(sys.argv) > 1 and sys.argv[1] == 'reparse':
+        ids = [int(x) for x in sys.argv[2:]] or None
+        result = asyncio.run(run_bp2(reparse=True, raw_item_ids=ids))
+    else:
+        result = asyncio.run(run_bp2())
+    print(result)

@@ -15,7 +15,7 @@ FastAPI-обвязка (Depends) добавляется отдельно в api/
 import re
 from collections.abc import AsyncGenerator
 
-from sqlalchemy import text
+from sqlalchemy import String, TypeDecorator, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -94,3 +94,20 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await async_session.close()
+
+
+# ============================================================================
+#  Переопределяем собственные типы данных для удобства валидации
+# ============================================================================
+
+
+class StrippedString(TypeDecorator):
+    """Свой кастомный тип: это строковый тип но в котором убираются пробелы."""
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is not None and isinstance(value, str):
+            return value.strip()
+        return value

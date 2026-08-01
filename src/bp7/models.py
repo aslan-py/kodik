@@ -17,16 +17,16 @@ Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
-    String,
     Text,
     func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import Base, Mixin
+from core.database import Base, Mixin, StrippedString
 from core.enums import CandidateStatus, candidate_status
 
 
@@ -39,7 +39,7 @@ class SourceCandidate(Base, Mixin):
     """
 
     domain: Mapped[str] = mapped_column(
-        String(256),
+        StrippedString(256),
         unique=True,
         comment='Найденный домен-кандидат. UNIQUE — не предлагать дважды',
     )
@@ -48,7 +48,7 @@ class SourceCandidate(Base, Mixin):
         comment='По какому конкуренту/запросу нашли',
     )
     evidence_url: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Ссылка-доказательство: где упомянут конкурент',
     )
     llm_assessment: Mapped[str | None] = mapped_column(
@@ -62,7 +62,7 @@ class SourceCandidate(Base, Mixin):
         comment='pending → approved / rejected',
     )
     moderated_by: Mapped[str | None] = mapped_column(
-        String(128),
+        StrippedString(128),
         comment='Кто промодерировал',
     )
     moderated_at: Mapped[datetime | None] = mapped_column(
@@ -74,4 +74,18 @@ class SourceCandidate(Base, Mixin):
         default=lambda: datetime.now(UTC),
         server_default=func.now(),
         comment='Когда агент предложил',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'domain = btrim(domain)', name='ck_source_candidate_domain_trimmed'
+        ),
+        CheckConstraint(
+            'evidence_url = btrim(evidence_url)',
+            name='ck_source_candidate_evidence_url_trimmed',
+        ),
+        CheckConstraint(
+            'moderated_by = btrim(moderated_by)',
+            name='ck_source_candidate_moderated_by_trimmed',
+        ),
     )

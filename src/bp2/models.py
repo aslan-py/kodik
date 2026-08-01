@@ -19,6 +19,7 @@ Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 from datetime import UTC, date, datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -36,7 +37,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import ActiveMixin, Base, Mixin
+from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import (
     LimitScope,
     LimitWindow,
@@ -68,7 +69,7 @@ class Region(Base, Mixin):
     """
 
     name_display: Mapped[str] = mapped_column(
-        String(128),
+        StrippedString(128),
         unique=True,
         comment=(
             'Каноническое имя для витрины и карты: «Волгоград». '
@@ -83,7 +84,7 @@ class Region(Base, Mixin):
         ),
     )
     macro_region: Mapped[str | None] = mapped_column(
-        String(64),
+        StrippedString(64),
         comment='Федеральный округ: ЦФО, ЮФО — для карты рынка',
     )
     latitude: Mapped[float | None] = mapped_column(
@@ -101,6 +102,16 @@ class Region(Base, Mixin):
             'name_aliases',
             postgresql_using='gin',
         ),
+        # StrippedString чистит пробелы только на пути через SQLAlchemy;
+        # CHECK ловит и правку напрямую в БД (DBeaver, сырой SQL).
+        CheckConstraint(
+            'name_display = btrim(name_display)',
+            name='ck_region_name_display_trimmed',
+        ),
+        CheckConstraint(
+            'macro_region = btrim(macro_region)',
+            name='ck_region_macro_region_trimmed',
+        ),
     )
 
 
@@ -112,7 +123,7 @@ class BlackDomain(Base, Mixin, ActiveMixin):
     """
 
     domain: Mapped[str] = mapped_column(
-        String(256),
+        StrippedString(256),
         unique=True,
         comment=(
             'Домен публикатора новости (напр. kompromat.ru). '
@@ -120,7 +131,7 @@ class BlackDomain(Base, Mixin, ActiveMixin):
         ),
     )
     reason: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Почему в списке: заказной / компрометирующий ресурс',
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -128,6 +139,15 @@ class BlackDomain(Base, Mixin, ActiveMixin):
         default=lambda: datetime.now(UTC),
         server_default=func.now(),
         comment='Время добавления домена в чёрный список',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'domain = btrim(domain)', name='ck_black_domain_domain_trimmed'
+        ),
+        CheckConstraint(
+            'reason = btrim(reason)', name='ck_black_domain_reason_trimmed'
+        ),
     )
 
 
@@ -140,7 +160,7 @@ class StopWord(Base, Mixin, ActiveMixin):
     """
 
     phrase: Mapped[str] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment=(
             'Слово или фраза для отсева (проверяется вхождением в title/text)'
         ),
@@ -153,12 +173,16 @@ class StopWord(Base, Mixin, ActiveMixin):
         ),
     )
     note: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Пояснение для аналитика: почему добавили и от чего защищает',
     )
 
     __table_args__ = (
         UniqueConstraint('phrase', 'type', name='uq_stop_word_phrase_type'),
+        CheckConstraint(
+            'phrase = btrim(phrase)', name='ck_stop_word_phrase_trimmed'
+        ),
+        CheckConstraint('note = btrim(note)', name='ck_stop_word_note_trimmed'),
     )
 
 
@@ -191,8 +215,14 @@ class TopicLimit(Base, Mixin, ActiveMixin):
         comment='Окно подсчёта: run — один прогон, day — сутки, week — неделя',
     )
     note: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Напр.: «СКС занимает ~40% отчёта 5 недель подряд»',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'note = btrim(note)', name='ck_topic_limit_note_trimmed'
+        ),
     )
 
 
@@ -246,22 +276,22 @@ class NormalizedItem(Base, Mixin):
         ),
     )
     title: Mapped[str] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Заголовок события',
     )
     media_name: Mapped[str | None] = mapped_column(
-        String(256),
+        StrippedString(256),
         comment=(
             'СМИ-публикатор: «Big-news.ru, Москва». '
             'NULL для источников без публикатора (напр. hh.ru)'
         ),
     )
     media_domain: Mapped[str | None] = mapped_column(
-        String(256),
+        StrippedString(256),
         comment='Домен публикатора — для сверки с black_domain',
     )
     url: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Ссылка на конкретное событие (НЕ запрос парсера)',
     )
     text: Mapped[str | None] = mapped_column(
@@ -301,4 +331,21 @@ class NormalizedItem(Base, Mixin):
         default=lambda: datetime.now(UTC),
         server_default=func.now(),
         comment='Время нормализации события',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'title = btrim(title)', name='ck_normalized_item_title_trimmed'
+        ),
+        CheckConstraint(
+            'media_name = btrim(media_name)',
+            name='ck_normalized_item_media_name_trimmed',
+        ),
+        CheckConstraint(
+            'media_domain = btrim(media_domain)',
+            name='ck_normalized_item_media_domain_trimmed',
+        ),
+        CheckConstraint(
+            'url = btrim(url)', name='ck_normalized_item_url_trimmed'
+        ),
     )

@@ -97,6 +97,34 @@ class Bp2Crud:
             .order_by(latest.search_task_id)
         )
 
+    async def select_reparse_raw_items(
+        self, raw_item_ids: Sequence[int] | None = None
+    ) -> Sequence[RawItem]:
+        """Снимки для ПЕРЕРАЗБОРА — в отличие от select_pending_raw_items не
+
+        проверяет NOT EXISTS: сюда попадают и уже нормализованные снимки.
+
+        raw_item_ids=None — переразобрать все свежие снимки (тот же «латест
+        на search_task_id», что и в обычном отборе, только без фильтра «уже
+        нормализован»). raw_item_ids=[...] — точечный переразбор КОНКРЕТНЫХ
+        строк по id напрямую, без редукции «латест на задачу»: пользователь
+        просит именно эти снимки, а не последний на их search_task_id (иначе
+        запрос старого снимка по id молча вернул бы пусто, если для его
+        задачи с тех пор пришёл более новый). error (raw_data=NULL) всё
+        равно исключаем — там нечего разбирать.
+        """
+        if raw_item_ids is not None:
+            return await self._scalars(
+                select(RawItem)
+                .where(RawItem.id.in_(raw_item_ids))
+                .where(RawItem.status != RawItemStatus.error)
+                .order_by(RawItem.id)
+            )
+        latest = aliased(RawItem, self._select_latest_raw_items())
+        return await self._scalars(
+            select(latest).order_by(latest.search_task_id)
+        )
+
     async def get_raw_item(self, raw_item_id: int) -> RawItem | None:
         """Точечная загрузка снимка по id (переразбор конкретной строки)."""
         return await self.session.get(RawItem, raw_item_id)

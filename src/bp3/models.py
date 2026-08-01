@@ -21,16 +21,16 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
     Numeric,
-    String,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import ActiveMixin, Base, Mixin
+from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import (
     PriorityLevel,
     TonalityLevel,
@@ -53,7 +53,7 @@ class Category(Base, Mixin, ActiveMixin):
     """
 
     name: Mapped[str] = mapped_column(
-        String(128),
+        StrippedString(128),
         unique=True,
         comment=(
             'Категория события (напр. надзорная санкция и юр.риск, '
@@ -61,8 +61,13 @@ class Category(Base, Mixin, ActiveMixin):
         ),
     )
     note: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Определение категории для аналитика: что под неё подпадает',
+    )
+
+    __table_args__ = (
+        CheckConstraint('name = btrim(name)', name='ck_category_name_trimmed'),
+        CheckConstraint('note = btrim(note)', name='ck_category_note_trimmed'),
     )
 
 
@@ -74,13 +79,22 @@ class Department(Base, Mixin, ActiveMixin):
     """
 
     name: Mapped[str] = mapped_column(
-        String(128),
+        StrippedString(128),
         unique=True,
         comment='Отдел: PR, Юристы, Аналитика, Маркетинг',
     )
     note: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Зона ответственности отдела: какие категории он ведёт',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'name = btrim(name)', name='ck_department_name_trimmed'
+        ),
+        CheckConstraint(
+            'note = btrim(note)', name='ck_department_note_trimmed'
+        ),
     )
 
 
@@ -129,7 +143,7 @@ class CategorizedEvent(Base, Mixin):
         ),
     )
     action: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Требуемое действие (черновик от LLM)',
     )
     deadline: Mapped[date | None] = mapped_column(
@@ -141,16 +155,16 @@ class CategorizedEvent(Base, Mixin):
         comment='Ответственный отдел (LLM → lookup id)',
     )
     comment: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Комментарий от LLM',
     )
 
     llm_model: Mapped[str | None] = mapped_column(
-        String(64),
+        StrippedString(64),
         comment='Какая модель разметила (для аудита)',
     )
     prompt_version: Mapped[str | None] = mapped_column(
-        String(32),
+        StrippedString(32),
         comment='Версия промпта/правил (для перекатегоризации)',
     )
     categorized_at: Mapped[datetime] = mapped_column(
@@ -170,5 +184,24 @@ class CategorizedEvent(Base, Mixin):
             'технически INSERT, не UPDATE) и при правке в обход '
             'SQLAlchemy — сырой SQL, DBeaver, pgAdmin: там колонку нужно '
             'проставлять руками'
+        ),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'action = btrim(action)',
+            name='ck_categorized_event_action_trimmed',
+        ),
+        CheckConstraint(
+            'comment = btrim(comment)',
+            name='ck_categorized_event_comment_trimmed',
+        ),
+        CheckConstraint(
+            'llm_model = btrim(llm_model)',
+            name='ck_categorized_event_llm_model_trimmed',
+        ),
+        CheckConstraint(
+            'prompt_version = btrim(prompt_version)',
+            name='ck_categorized_event_prompt_version_trimmed',
         ),
     )

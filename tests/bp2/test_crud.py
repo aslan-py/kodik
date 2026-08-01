@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
-from core.enums import NormStatus, RawItemStatus
+from core.enums import NormStatus, RawItemStatus, RejectReason
 from src.bp1.models import Competitor, RawItem, SearchTask, Source
 from src.bp2.crud import Bp2Crud
 from src.bp2.models import NormalizedItem
@@ -145,6 +145,64 @@ async def test_tiebreak_by_id(session, task):
 
 
 # ============================================================================
+#  select_reparse_raw_items
+# ============================================================================
+
+
+async def test_reparse_includes_already_normalized(session, task):
+    """В отличие от select_pending_raw_items, уже нормализованный снимок
+
+    для переразбора не исключается — правкам справочника нужно видеть
+    и его тоже.
+    """
+    raw = _raw(task.id)
+    session.add(raw)
+    await session.flush()
+
+    norm = NormalizedItem(
+        raw_item_id=raw.id,
+        title='Тест',
+        dedup_key='reparse_key_001',
+        status=NormStatus.ok,
+    )
+    session.add(norm)
+    await session.flush()
+
+    crud = Bp2Crud(session)
+    reparse = await crud.select_reparse_raw_items()
+    ids = [r.id for r in reparse]
+    assert raw.id in ids
+
+
+async def test_reparse_filters_by_raw_item_ids(session, task):
+    """raw_item_ids сужает выборку до конкретных id (точечный переразбор)."""
+    raw_a = _raw(task.id)
+    raw_b = _raw(task.id)
+    session.add_all([raw_a, raw_b])
+    await session.flush()
+
+    crud = Bp2Crud(session)
+    reparse = await crud.select_reparse_raw_items([raw_a.id])
+    ids = [r.id for r in reparse]
+    assert ids == [raw_a.id]
+
+
+async def test_reparse_excludes_error_status(session, task):
+    """error-снимки (raw_data=NULL) не годятся для переразбора, как и для
+
+    обычного отбора.
+    """
+    raw = _raw(task.id, status=RawItemStatus.error)
+    session.add(raw)
+    await session.flush()
+
+    crud = Bp2Crud(session)
+    reparse = await crud.select_reparse_raw_items()
+    ids = [r.id for r in reparse]
+    assert raw.id not in ids
+
+
+# ============================================================================
 #  upsert_normalized_items
 # ============================================================================
 
@@ -189,3 +247,47 @@ async def test_upsert_duplicate_dedup_key_ignored(session, task):
     )
     rows = result.scalars().all()
     assert len(rows) == 1
+
+
+async def test_upsert_update_true_updates_existing_row_in_place(session, task):
+    """update=True (переразбор) правит status/reject_reason у существующей
+
+    строки на месте — id не меняется, дубль не создаётся.
+    """
+    raw = _raw(task.id)
+    session.add(raw)
+    await session.flush()
+
+    crud = Bp2Crud(session)
+    row = _norm_row(raw.id, 'key_reparse_001')
+    await crud.upsert_normalized_items([row])
+    await session.flush()
+
+    original = (
+        await session.execute(
+            select(NormalizedItem).where(
+                NormalizedItem.dedup_key == 'key_reparse_001'
+            )
+        )
+    ).scalar_one()
+    original_id = original.id
+
+    updated_row = dict(row)
+    updated_row['status'] = NormStatus.rejected
+    updated_row['reject_reason'] = RejectReason.stop_word
+    await crud.upsert_normalized_items([updated_row], update=True)
+    await session.flush()
+    # ON CONFLICT DO UPDATE идёт мимо ORM unit-of-work: уже загруженный
+    # объект original в identity map не узнает про изменение сам собой.
+    session.expire_all()
+
+    result = await session.execute(
+        select(NormalizedItem).where(
+            NormalizedItem.dedup_key == 'key_reparse_001'
+        )
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 1
+    assert rows[0].id == original_id
+    assert rows[0].status == NormStatus.rejected
+    assert rows[0].reject_reason == RejectReason.stop_word

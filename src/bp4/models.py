@@ -20,18 +20,18 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     Float,
     ForeignKey,
     Numeric,
-    String,
     Text,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import Base, Mixin
+from core.database import Base, Mixin, StrippedString
 
 
 class ShowcaseEvent(Base, Mixin):
@@ -67,19 +67,19 @@ class ShowcaseEvent(Base, Mixin):
         comment='Дата события',
     )
     title: Mapped[str] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Заголовок',
     )
     media: Mapped[str | None] = mapped_column(
-        String(256),
+        StrippedString(256),
         comment='СМИ-публикатор (normalized_item.media_name)',
     )
     region: Mapped[str | None] = mapped_column(
-        String(128),
+        StrippedString(128),
         comment='Регион (region.name_display)',
     )
     macro_region: Mapped[str | None] = mapped_column(
-        String(64),
+        StrippedString(64),
         comment='Федеральный округ (region.macro_region)',
     )
     latitude: Mapped[float | None] = mapped_column(
@@ -91,28 +91,28 @@ class ShowcaseEvent(Base, Mixin):
         comment='Долгота центра региона (WGS-84) — метка на карте рынка',
     )
     competitor: Mapped[str | None] = mapped_column(
-        String(256),
+        StrippedString(256),
         index=True,
         comment='Конкурент / объект (competitor.name)',
     )
     source_url: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Ссылка на событие (normalized_item.url)',
     )
 
     # ---- СМЫСЛЫ (денормализовано, готовые к показу строки) ----
     priority: Mapped[str] = mapped_column(
-        String(8),
+        StrippedString(8),
         index=True,
         comment='Приоритет П1..П4',
     )
     category: Mapped[str] = mapped_column(
-        String(128),
+        StrippedString(128),
         index=True,
         comment='Категория (category.name)',
     )
     tonality: Mapped[str] = mapped_column(
-        String(32),
+        StrippedString(32),
         comment='Тональность',
     )
     media_index: Mapped[Decimal | None] = mapped_column(
@@ -120,7 +120,7 @@ class ShowcaseEvent(Base, Mixin):
         comment='Медиаиндекс',
     )
     action: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Требуемое действие',
     )
     deadline: Mapped[date | None] = mapped_column(
@@ -128,7 +128,7 @@ class ShowcaseEvent(Base, Mixin):
         comment='Срок реакции',
     )
     department: Mapped[str | None] = mapped_column(
-        String(128),
+        StrippedString(128),
         comment='Ответственный отдел (department.name)',
     )
     comment: Mapped[str | None] = mapped_column(
@@ -152,5 +152,48 @@ class ShowcaseEvent(Base, Mixin):
             'Не по журналу alert — там легитимны события с нулём алертов, '
             'и по нему нельзя было бы отличить «ещё не проверено» от '
             '«проверено, но не значимо»'
+        ),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'title = btrim(title)', name='ck_showcase_event_title_trimmed'
+        ),
+        CheckConstraint(
+            'media = btrim(media)', name='ck_showcase_event_media_trimmed'
+        ),
+        CheckConstraint(
+            'region = btrim(region)', name='ck_showcase_event_region_trimmed'
+        ),
+        CheckConstraint(
+            'macro_region = btrim(macro_region)',
+            name='ck_showcase_event_macro_region_trimmed',
+        ),
+        CheckConstraint(
+            'competitor = btrim(competitor)',
+            name='ck_showcase_event_competitor_trimmed',
+        ),
+        CheckConstraint(
+            'source_url = btrim(source_url)',
+            name='ck_showcase_event_source_url_trimmed',
+        ),
+        CheckConstraint(
+            'priority = btrim(priority)',
+            name='ck_showcase_event_priority_trimmed',
+        ),
+        CheckConstraint(
+            'category = btrim(category)',
+            name='ck_showcase_event_category_trimmed',
+        ),
+        CheckConstraint(
+            'tonality = btrim(tonality)',
+            name='ck_showcase_event_tonality_trimmed',
+        ),
+        CheckConstraint(
+            'action = btrim(action)', name='ck_showcase_event_action_trimmed'
+        ),
+        CheckConstraint(
+            'department = btrim(department)',
+            name='ck_showcase_event_department_trimmed',
         ),
     )

@@ -9,21 +9,13 @@ RANDOM_DELAY_RANGE_SEC = (1.0, 3.0)
 HUMAN_DELAY_RANGE_SEC = (0.3, 0.5)
 MS_PER_SECOND = 1000
 
-# === Браузер ===
-VIEWPORT_WIDTH = 1920
-VIEWPORT_HEIGHT = 1080
-VIEWPORT = {'width': VIEWPORT_WIDTH, 'height': VIEWPORT_HEIGHT}
-BROWSER_ARGS = [
-    '--disable-blink-features=AutomationControlled',
-]
-
 # === CSS-селекторы ===
 SELECTORS = {
     # Поле ввода "Участник дела" — это textarea с классом g-ph
     'participant_input': "textarea.g-ph[placeholder*='название']",
     # Кнопка "Найти"
     'search_button': "button[alt='Найти']",
-    # Контейнер результатов
+    # Контейнер результатов (строки таблицы с данными)
     'results_container': '#b-cases tbody tr',
     # Индикатор загрузки
     'loading_indicator': '.b-loading',

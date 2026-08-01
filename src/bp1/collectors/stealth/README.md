@@ -14,7 +14,7 @@ playwright install chromium
 ```
 stealth/
 ├── __init__.py          # Публичный API
-├── js_evasions.js       # JS-скрипты обнаружения (navigator, plugins, WebGL)
+├── js_evasions.js       # JS-скрипты обнаружения (5 секций: webdriver, chrome, plugins, navigator, webgl)
 ├── browser_config.py    # Конфигурация запуска браузера и контекста
 └── qrator_bypass.py     # Логика обхода QRATOR anti-bot
 ```
@@ -67,21 +67,31 @@ asyncio.run(main())
 
 ## API
 
-### `get_launch_args(headless=True)`
+### `get_launch_args(headless=True, headless_mode='new')`
 
 Возвращает список аргументов для запуска Chromium с обходом детекции.
 
-| Аргумент | Описание |
-|----------|----------|
-| `headless` | `True` — режим `--headless=new` (по умолчанию), `False` — обычный режим |
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|-------------|----------|
+| `headless` | `bool` | `True` | `True` — headless-режим, `False` — видимый режим |
+| `headless_mode` | `str` | `'new'` | Режим headless: `'new'` — `--headless=new`, `'old'` — `--headless`, `'legacy'` — без флага (только при `headless=False`) |
 
 **Возвращаемое значение:** `list[str]`
 
 **Пример:**
 ```python
+# Современный headless (по умолчанию)
 args = get_launch_args(headless=True)
 # ['--headless=new', '--disable-blink-features=AutomationControlled',
 #  '--no-sandbox', '--disable-dev-shm-usage', '--window-size=1920,1080']
+
+# Классический headless (лучшая маскировка для некоторых сайтов)
+args = get_launch_args(headless=True, headless_mode='old')
+# ['--headless', '--disable-blink-features=AutomationControlled', ...]
+
+# Видимый режим
+args = get_launch_args(headless=False)
+# ['--disable-blink-features=AutomationControlled', ...]
 ```
 
 ---
@@ -112,28 +122,43 @@ context = await browser.new_context(**config)
 
 ---
 
-### `apply_stealth(context, js_path=None)`
+### `apply_stealth(context, js_path=None, *, skip_webdriver=False, skip_chrome=False, skip_plugins=False, skip_navigator=False, skip_webgl=False)`
 
 Инжектирует JS-скрипты обмана в контекст браузера. **Вызывать ДО создания страниц.**
 
-| Параметр | Тип | Описание |
-|----------|-----|----------|
-| `context` | `BrowserContext` | Playwright контекст |
-| `js_path` | `str \| None` | Путь к кастомному JS-файлу. Если `None` — используется встроенный `js_evasions.js` |
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|-------------|----------|
+| `context` | `BrowserContext` | — | Playwright контекст |
+| `js_path` | `str \| None` | `None` | Путь к кастомному JS-файлу. Если `None` — используется встроенный `js_evasions.js` |
+| `skip_webdriver` | `bool` | `False` | Не скрывать `navigator.webdriver` |
+| `skip_chrome` | `bool` | `False` | Не эмулировать `window.chrome` |
+| `skip_plugins` | `bool` | `False` | Не подменять `navigator.plugins` |
+| `skip_navigator` | `bool` | `False` | Не подменять `navigator.languages/platform/vendor/hardwareConcurrency/deviceMemory/maxTouchPoints` |
+| `skip_webgl` | `bool` | `False` | Не спуфить WebGL vendor/renderer |
 
-**Что делает скрипт `js_evasions.js`:**
-- `navigator.webdriver` → `undefined` (скрывает признак автоматизации)
-- Эмуляция `window.chrome` (app, runtime, csi, loadTimes)
-- Фейковые плагины (Chrome PDF Plugin, Chrome PDF Viewer, Native Client)
-- Подмена `navigator.languages`, `platform`, `vendor`
-- `navigator.hardwareConcurrency` = 8, `deviceMemory` = 8, `maxTouchPoints` = 0
-- `window.outerWidth/outerHeight` = 1920x1080
-- WebGL vendor/renderer spoofing (Intel UHD 630)
+> **Важно:** По умолчанию все `skip_*` флаги `False` — применяется полный стелс (полная обратная совместимость).
 
-**Пример:**
+**Что делает скрипт `js_evasions.js` (5 секций):**
+1. **webdriver** — `navigator.webdriver` → `undefined` (скрывает признак автоматизации)
+2. **chrome** — Эмуляция `window.chrome` (app, runtime, csi, loadTimes)
+3. **plugins** — Фейковые плагины (Chrome PDF Plugin, Chrome PDF Viewer, Native Client)
+4. **navigator** — Подмена `navigator.languages`, `platform`, `vendor`, `hardwareConcurrency`, `deviceMemory`, `maxTouchPoints`, `window.outerWidth/outerHeight`
+5. **webgl** — WebGL vendor/renderer spoofing (Intel UHD 630)
+
+**Примеры:**
 ```python
-# Со встроенным скриптом
+# Полный стелс (по умолчанию) — для fedresurs.ru и др.
 await apply_stealth(context)
+
+# Выборочный стелс — для kad.arbitr.ru (проблемные секции отключены)
+await apply_stealth(
+    context,
+    skip_webdriver=True,
+    skip_chrome=True,
+    skip_plugins=True,
+    skip_navigator=True,
+    skip_webgl=True,
+)
 
 # С кастомным скриптом
 await apply_stealth(context, js_path='./my_evasions.js')
@@ -222,7 +247,47 @@ class BrowserManager:
         return context
 ```
 
-**Параметр `qrator_bypass` в SearchRequest:**
+### Пример для kad.arbitr.ru (выборочный стелс)
+
+Сайт kad.arbitr.ru использует JS-обработчики, которые ломаются при полном стелсе.
+Решение — отключить проблемные секции JS-инъекций:
+
+```python
+from stealth.browser_config import (
+    apply_stealth,
+    get_context_config,
+    get_launch_args,
+)
+
+
+class BrowserManager:
+    async def start(self):
+        pw = await async_playwright().start()
+
+        # Для kad.arbitr.ru используем классический headless
+        launch_args = get_launch_args(
+            headless=self._headless,
+            headless_mode='old' if self._headless else 'new',
+        )
+        browser = await pw.chromium.launch(
+            headless=self._headless,
+            args=launch_args,
+        )
+        context = await browser.new_context(**get_context_config())
+
+        # Отключаем проблемные JS-инъекции
+        await apply_stealth(
+            context,
+            skip_webdriver=True,
+            skip_chrome=True,
+            skip_plugins=True,
+            skip_navigator=True,
+            skip_webgl=True,
+        )
+        return context
+```
+
+### Параметр `qrator_bypass` в SearchRequest
 
 Пакет `fedresurs_rpa` поддерживает опциональный QRATOR bypass через параметр `qrator_bypass` в `SearchRequest`:
 
@@ -268,4 +333,3 @@ python -m fedresurs_rpa.test_headless
 ```bash
 cd Testing/fedresurs_all_browsers
 node test_all_browsers.mjs
-```

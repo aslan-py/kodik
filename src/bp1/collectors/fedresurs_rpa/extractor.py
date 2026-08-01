@@ -7,9 +7,8 @@ from typing import Any
 from playwright.async_api import Page
 
 from .constants import SELECTORS
-from .logger import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class ExtractionError(Exception):
@@ -28,7 +27,7 @@ class CompanyDataExtractor:
     """
 
     def __init__(self, logger: logging.Logger | None = None):
-        self._logger = logger or get_logger(self.__class__.__name__)
+        self._logger = logger or logging.getLogger(self.__class__.__name__)
 
     async def extract_company_data(self, page: Page) -> dict[str, Any]:
         """Извлечь все данные компании со страницы карточки.

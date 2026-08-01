@@ -61,7 +61,7 @@ QRATOR_LOGO_CLICK_WAIT_MS = 5000
 
 # Путь для сохранения HTML файлов (относительно пакета fedresurs_rpa)
 OUTPUT_DIR = str(
-    Path(__file__).resolve().parent.parent.parent / 'data' / 'parser'
+    Path(__file__).resolve().parent.parent.parent / 'data' / 'html_pages'
 )
 
 

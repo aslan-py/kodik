@@ -1,5 +1,6 @@
 """Управление браузером и контекстом с антидетект-стелсом."""
 
+import logging
 import sys
 from pathlib import Path
 
@@ -13,10 +14,9 @@ from src.bp1.collectors.stealth.browser_config import (
 
 from .constants import get_random_user_agent
 from .exceptions import BrowserStartError, ProxyError
-from .logger import get_logger
 from .schemas import ProxyConfig
 
-logger = get_logger()
+logger = logging.getLogger(__name__)
 
 _testing_root = str(Path(__file__).resolve().parent.parent)
 if _testing_root not in sys.path:

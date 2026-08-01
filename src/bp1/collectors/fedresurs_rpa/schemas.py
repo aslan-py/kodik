@@ -41,20 +41,27 @@ class DirectorInfo(BaseModel):
 class SearchResult(BaseModel):
     """Модель результата операции поиска."""
 
-    success: bool
-    name: str
-    inn: str | None = None
+    success: bool  # Успешность операции
+    # Meta
+    name: str  # Название конкурента
+    inn: str | None = None  # ИНН конкурента
+    search_url: str | None = None  # URL страницы запроса
+    timestamp: datetime = Field(
+        default_factory=datetime.now
+    )  # Дата и время операции
+    # Items
+    url: str | None = None  # URL страницы компании
     status: str | None = None  # Статус компании (Действующее/Ликвидировано)
-    raw_text: str | None = None  # Полный текст из карточки компании
+    raw_text: str | None = None  # Полный текст из карточки компании Items.Text
     published_at: str | None = None  # Дата регистрации (из raw_text)
     region: str | None = None  # Город регистрации (из raw_text)
     extra: str | None = None  # Блок с руководителем (текст из raw_text)
-    file_path: str | None = None
-    error: str | None = None
-    error_type: str | None = None
-    timestamp: datetime = Field(default_factory=datetime.now)
-    proxy_used: str | None = None
-    user_agent_used: str | None = None
+    # metadata
+    file_path: str | None = None  # Путь к файлу HTML страницы
+    error: str | None = None  # Ошибка, если операция не удалась
+    error_type: str | None = None  # Тип ошибки, если операция не удалась
+    proxy_used: str | None = None  # Прокси, использованный для операции
+    user_agent_used: str | None = None  # User-Agent для операции
 
     @property
     def html_content(self) -> str | None:

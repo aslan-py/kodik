@@ -1,6 +1,7 @@
 """Основная RPA-логика для fedresurs.ru с обходом QRATOR."""
 
 import asyncio
+import logging
 import os
 import sys
 from datetime import datetime
@@ -22,11 +23,10 @@ from .exceptions import (
     SearchExecutionError,
 )
 from .extractor import CompanyDataExtractor
-from .logger import get_logger
 from .schemas import ProxyConfig, SearchRequest, SearchResult
 from .utils import format_proxy_string, generate_filename
 
-logger = get_logger()
+logger = logging.getLogger(__name__)
 
 _testing_root = str(Path(__file__).resolve().parent.parent)
 if _testing_root not in sys.path:
@@ -151,9 +151,11 @@ class FedresursRPA:
             logger.info('Главная страница загружена успешно')
 
             await self._select_category(page)
-            search_term = request.inn or request.name
+            search_term = request.inn
             await self._perform_search(page, search_term)
+
             await self._wait_for_results(page, request.timeout)
+            source_request_url = page.url
 
             # Клик по первому результату для открытия карточки компании
             await self._open_company_card(page)
@@ -170,20 +172,26 @@ class FedresursRPA:
 
             # Извлечение структурированных данных из карточки компании
             company_data = await self._extract_data_from_page(page)
-
+            current_url = page.url
+            logger.info(f'Текущий URL поиска: {current_url}')
             logger.info('Поиск успешно завершён: %s', filepath)
 
             return SearchResult(
-                success=True,
+                success=True,  # отчет о  выполнении
+                # блок в Meta
                 name=request.name,
                 inn=request.inn,
+                search_url=source_request_url,
+                timestamp=timestamp,
+                # блок в Items
+                url=current_url,
                 status=company_data.get('status'),
                 raw_text=company_data.get('full_text'),
                 published_at=company_data.get('published_at'),
                 region=company_data.get('region'),
                 extra=company_data.get('extra'),
+                # Мета данные
                 file_path=filepath,
-                timestamp=timestamp,
                 proxy_used=format_proxy_string(proxy),
                 user_agent_used=browser_manager.user_agent,
             )

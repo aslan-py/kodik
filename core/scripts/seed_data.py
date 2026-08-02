@@ -8,11 +8,11 @@
 CSV-файлы лежат рядом: core/data/*.csv.
 
 Запуск (из корня проекта):
-    python -m core.seed_data                       # полный прогон из CSV
-    python -m core.seed_data --dry-run             # показать что будет сделано
-    python -m core.seed_data --only competitors    # только конкуренты
-    python -m core.seed_data --clear             # очистить и заполнить заново
-    python -m core.seed_data --csv-dir ./custom/path  # свой путь к CSV
+    python -m core.scripts.seed_data                     # полный прогон из CSV
+    python -m core.scripts.seed_data --dry-run     # показать что будет сделано
+    python -m core.scripts.seed_data --only competitors     # только конкуренты
+    python -m core.scripts.seed_data --clear      # очистить и заполнить заново
+    python -m core.scripts.seed_data --csv-dir ./custom/path  # свой путь к CSV
 
 Или напрямую:
     python core/seed_data.py
@@ -33,7 +33,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import AsyncSessionLocal
-from src.bp1.models import Competitor, SearchTask, Source, Trigger
+from src.bp1.models import Competitor, RawItem, SearchTask, Source, Trigger
 
 # Добавляем корень проекта в PYTHONPATH для импорта моделей
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -49,7 +49,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # Путь к CSV-файлам по умолчанию (рядом со скриптом, в подпапке data/)
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parent / 'data'
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / 'data'
 
 
 # ──────────────────────────── Модели данных ────────────────────────────
@@ -386,10 +386,10 @@ async def insert_search_tasks(
 async def clear_tables(session: AsyncSession) -> None:
     """Очищает таблицы в правильном порядке (с учётом FK).
 
-    Порядок: search_task → trigger → source → competitor.
-    RAW_ITEM не трогаем — это данные парсинга, а не конфигурация.
+    Порядок: raw_item → search_task → trigger → source → competitor.
     """
     log.info('Очистка таблиц...')
+    await session.execute(delete(RawItem))
     await session.execute(delete(SearchTask))
     await session.execute(delete(Trigger))
     await session.execute(delete(Source))

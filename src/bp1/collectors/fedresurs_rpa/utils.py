@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from .models import ProxyConfig
+from .schemas import ProxyConfig
 
 
 def format_proxy_string(proxy: ProxyConfig | None) -> str | None:

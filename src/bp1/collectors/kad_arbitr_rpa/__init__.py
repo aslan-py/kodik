@@ -1,7 +1,7 @@
 """Парсер kad.arbitr.ru через Playwright (RPA)."""
 
-from .models import ParsingRequest, ParsingResult, ProxyConfig
 from .parser import KadArbitrParser
+from .schemas import ParsingRequest, ParsingResult, ProxyConfig
 from .utils import validate_inn
 
 __all__ = [

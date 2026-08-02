@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..constants import (
-    DEFAULT_BASE_PATH,
+    DEFAULT_BASE_PATH_RAW,
     FILE_EXTENSION,
     RAW_FILE_PREFIX,
     TRIGGER_DIR_PREFIX,
@@ -25,7 +25,7 @@ class PathGenerator:
     Каждый триггер получает свою директорию.
     """
 
-    def __init__(self, base_path: str = DEFAULT_BASE_PATH) -> None:
+    def __init__(self, base_path: str = DEFAULT_BASE_PATH_RAW) -> None:
         self._base = Path(base_path)
 
     def generate(

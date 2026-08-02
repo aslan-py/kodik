@@ -157,4 +157,6 @@ __pycache__/
 my_folder
 .ipynb_checkpoints
 bp_parsing/
+
+# ── Сырые данные (HTML, JSONB) — не коммитятся ──────────────────────────────
 /data/

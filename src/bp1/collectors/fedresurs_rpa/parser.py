@@ -1,6 +1,7 @@
 """Основная RPA-логика для fedresurs.ru с обходом QRATOR."""
 
 import asyncio
+import logging
 import os
 import sys
 from datetime import datetime
@@ -21,11 +22,11 @@ from .exceptions import (
     PageLoadError,
     SearchExecutionError,
 )
-from .logger import get_logger
-from .models import ProxyConfig, SearchRequest, SearchResult
+from .extractor import CompanyDataExtractor
+from .schemas import ProxyConfig, SearchRequest, SearchResult
 from .utils import format_proxy_string, generate_filename
 
-logger = get_logger()
+logger = logging.getLogger(__name__)
 
 _testing_root = str(Path(__file__).resolve().parent.parent)
 if _testing_root not in sys.path:
@@ -150,9 +151,11 @@ class FedresursRPA:
             logger.info('Главная страница загружена успешно')
 
             await self._select_category(page)
-            search_term = request.inn or request.name
+            search_term = request.inn
             await self._perform_search(page, search_term)
+
             await self._wait_for_results(page, request.timeout)
+            source_request_url = page.url
 
             # Клик по первому результату для открытия карточки компании
             await self._open_company_card(page)
@@ -167,14 +170,28 @@ class FedresursRPA:
 
             await self._save_page(page, filepath)
 
+            # Извлечение структурированных данных из карточки компании
+            company_data = await self._extract_data_from_page(page)
+            current_url = page.url
+            logger.info(f'Текущий URL поиска: {current_url}')
             logger.info('Поиск успешно завершён: %s', filepath)
 
             return SearchResult(
-                success=True,
+                success=True,  # отчет о  выполнении
+                # блок в Meta
                 name=request.name,
                 inn=request.inn,
-                file_path=filepath,
+                search_url=source_request_url,
                 timestamp=timestamp,
+                # блок в Items
+                url=current_url,
+                status=company_data.get('status'),
+                raw_text=company_data.get('full_text'),
+                published_at=company_data.get('published_at'),
+                region=company_data.get('region'),
+                extra=company_data.get('extra'),
+                # Мета данные
+                file_path=filepath,
                 proxy_used=format_proxy_string(proxy),
                 user_agent_used=browser_manager.user_agent,
             )
@@ -280,6 +297,32 @@ class FedresursRPA:
             except Exception:
                 pass
 
+            # Ожидание загрузки данных компании (information-content)
+            try:
+                await page.wait_for_selector(
+                    SELECTORS.get(
+                        'company_info_container', '.information-content'
+                    ),
+                    timeout=15000,
+                )
+                logger.info('Контейнер информации о компании загружен')
+            except Exception:
+                logger.info(
+                    'Контейнер .information-content не найден, продолжаем'
+                )
+
+            # Проверка наличия статуса компании
+            try:
+                status_selector = SELECTORS.get(
+                    'company_status', '.label-item-text'
+                )
+                status_el = page.locator(status_selector).first
+                if await status_el.count() > 0:
+                    status_text = await status_el.inner_text()
+                    logger.info('Статус компании: %s', status_text.strip())
+            except Exception:
+                logger.info('Статус компании не обнаружен')
+
             logger.info('Карточка компании загружена')
         except Exception as e:
             logger.warning('Не удалось открыть карточку компании: %s', e)
@@ -309,3 +352,30 @@ class FedresursRPA:
             raise PageLoadError(
                 f'Не удалось сохранить страницу в {filepath}: {e}'
             ) from e
+
+    async def _extract_data_from_page(self, page: Page) -> dict:
+        """Извлечь структурированные данные из карточки компании.
+
+        Args:
+            page: Playwright Page с открытой карточкой компании.
+
+        Returns:
+            Словарь с извлечёнными данными.
+        """
+        logger.info('Извлечение данных из карточки компании...')
+        extractor = CompanyDataExtractor()
+        data = await extractor.extract_company_data(page)
+
+        extra = data.get('extra')
+        extra_lines = len(extra.split('\n')) if extra else 0
+
+        logger.info(
+            'Извлечено: статус="%s", текст=%d символов, дата=%s, '
+            'регион=%s, extra=%d строк',
+            data.get('status'),
+            len(data.get('full_text') or ''),
+            data.get('published_at'),
+            data.get('region'),
+            extra_lines,
+        )
+        return data

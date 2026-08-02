@@ -1,14 +1,17 @@
 import logging
 
-from .constants import LOG_FORMAT, LOG_LEVEL
-
 
 def get_logger(name: str = 'kad_arbitr_rpa') -> logging.Logger:
-    """Создаёт и возвращает логгер с стандартным форматом."""
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        logger.addHandler(handler)
-        logger.setLevel(getattr(logging, LOG_LEVEL))
-    return logger
+    """Получить логгер.
+
+    Функция не создаёт хендлеры — это ответственность точки входа.
+    Используется как тонкая обёртка над logging.getLogger() для
+    совместимости с существующим кодом.
+
+    Args:
+        name: Имя логгера (по умолчанию 'kad_arbitr_rpa').
+
+    Returns:
+        logging.Logger: Экземпляр логгера.
+    """
+    return logging.getLogger(name)

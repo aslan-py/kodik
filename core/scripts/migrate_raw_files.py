@@ -73,8 +73,14 @@ def _migrate_item(item: dict) -> dict:
 def _migrate_meta(meta: dict) -> dict:
     """Сконвертировать meta из старого формата в новый (удалить status)."""
     new_meta = {}
-    for key in ('search_task_id', 'source', 'competitor', 'trigger',
-                'source_request_url', 'fetched_at'):
+    for key in (
+        'search_task_id',
+        'source',
+        'competitor',
+        'trigger',
+        'source_request_url',
+        'fetched_at',
+    ):
         if key in meta:
             new_meta[key] = meta[key]
 
@@ -88,7 +94,7 @@ def _migrate_meta(meta: dict) -> dict:
 def migrate_file(filepath: Path, dry_run: bool = False) -> bool:
     """Мигрировать один файл. Возвращает True, если были изменения."""
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, encoding='utf-8') as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.error('Ошибка чтения %s: %s', filepath, e)

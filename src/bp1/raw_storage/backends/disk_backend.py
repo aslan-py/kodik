@@ -16,7 +16,7 @@ import aiofiles
 
 from ..constants import (
     CHECKSUM_LOG_LENGTH,
-    DEFAULT_BASE_PATH,
+    DEFAULT_BASE_PATH_RAW,
     ENCODING_UTF8,
     FILE_MODE_READ,
     FILE_MODE_WRITE,
@@ -59,7 +59,7 @@ class DiskBackend(BaseStorage):
     Файлы иммутабельны после записи (кроме поля meta.status).
     """
 
-    def __init__(self, base_path: str = DEFAULT_BASE_PATH) -> None:
+    def __init__(self, base_path: str = DEFAULT_BASE_PATH_RAW) -> None:
         self._path_gen = PathGenerator(base_path)
 
     async def save(self, raw_data_file: RawDataFile) -> str:

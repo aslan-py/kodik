@@ -1,3 +1,5 @@
+"""Pydantic-схемы для запроса/ответа парсинга kad.arbitr.ru."""
+
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -27,6 +29,7 @@ class ParsingRequest(BaseModel):
     output_dir: str = DEFAULT_OUTPUT_DIR
     timeout: int = DEFAULT_TIMEOUT_MS
     retry_count: int = DEFAULT_RETRY_COUNT
+    use_stealth: bool = True
 
 
 class ParsingResult(BaseModel):

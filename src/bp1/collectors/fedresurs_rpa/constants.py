@@ -1,6 +1,7 @@
 """Все константы: URL, селекторы, таймауты, пул UA, задержки."""
 
 import random
+from pathlib import Path
 
 BASE_URL = 'https://fedresurs.ru'
 
@@ -14,6 +15,19 @@ SELECTORS = {
     'results_link_text': 'Вся информация',
     'logo': 'a[href="/"]',
     'loading_indicator': '.loading',
+    # Селекторы для извлечения данных из карточки компании
+    'company_status': '.label-item-text',
+    'company_info_container': '.information-content',
+    'company_name': '.company-name, .entity-header',
+    'company_inn': '[data-testid="inn"], .inn-value',
+    'company_address': '.company-address, .address-value',
+    # НОВЫЕ селекторы для расширенного парсинга
+    'registration_date': '.info-item-value',  # Для даты регистрации
+    'director_block': '.ieb-item',  # Блок с руководителем
+    'director_name': '.ieb-name span',  # Имя руководителя
+    'director_inn': '.info-item-name:has-text("ИНН") + .info-item-value',
+    'director_position': '.info-item-name:has-text("Должность") + .info-item-value',  # noqa: E501
+    'director_date': '.info-item-name:has-text("Дата внесения") + .info-item-value',  # noqa: E501
 }
 
 # User-Agent Pool (Chromium-based for consistency with stealth)
@@ -43,6 +57,12 @@ VIEWPORT = {'width': 1920, 'height': 1080}
 QRATOR_CHALLENGE_WAIT_MS = 25000
 QRATOR_POST_NAVIGATION_WAIT_MS = 3000
 QRATOR_LOGO_CLICK_WAIT_MS = 5000
+
+
+# Путь для сохранения HTML файлов (относительно пакета fedresurs_rpa)
+OUTPUT_DIR = str(
+    Path(__file__).resolve().parent.parent.parent / 'data' / 'html_pages'
+)
 
 
 def get_random_user_agent() -> str:

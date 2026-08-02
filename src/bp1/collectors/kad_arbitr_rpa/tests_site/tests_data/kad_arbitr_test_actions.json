@@ -1,0 +1,278 @@
+{
+  "meta": {
+    "test_file": "kodik/src/bp1/collectors/kad_arbitr_rpa/tests_site/tests/test-1.spec.ts",
+    "site": "https://kad.arbitr.ru/",
+    "description": "Результат выполнения теста поиска по ИНН на kad.arbitr.ru",
+    "timestamp": "2026-08-01T06:50:00Z",
+    "inn": "9718266074",
+    "found_cases_count": 4
+  },
+  "actions": [
+    {
+      "step": 1,
+      "action": "goto",
+      "description": "Переход на сайт kad.arbitr.ru",
+      "url": "https://kad.arbitr.ru/",
+      "wait_until": "load",
+      "selectors": {
+        "playwright": "page.goto('https://kad.arbitr.ru/')",
+        "css": null
+      },
+      "result": {
+        "page_url": "https://kad.arbitr.ru/",
+        "page_title": "Картотека арбитражных дел",
+        "status": "success"
+      }
+    },
+    {
+      "step": 2,
+      "action": "fill",
+      "description": "Заполнение поля 'Участник дела' ИНН 9718266074",
+      "target": "Поле ввода 'название, ИНН или ОГРН'",
+      "value": "9718266074",
+      "selectors": {
+        "playwright": "page.getByRole('textbox', { name: 'название, ИНН или ОГРН' }).fill('9718266074')",
+        "css": "textarea.g-ph[placeholder*='название']",
+        "xpath": "//textarea[@placeholder='название, ИНН или ОГРН']"
+      },
+      "result": {
+        "status": "success",
+        "field_value": "9718266074"
+      }
+    },
+    {
+      "step": 3,
+      "action": "click",
+      "description": "Клик по 4-му элементу i для открытия дропдауна выбора типа участника",
+      "target": "i[4] (четвёртый элемент i на странице)",
+      "selectors": {
+        "playwright": "page.locator('i').nth(4).click()",
+        "css": "i:nth-child(4)",
+        "js": "document.querySelectorAll('i')[4].click()"
+      },
+      "result": {
+        "status": "success",
+        "note": "Открывает выпадающий список выбора типа участника (Любой/Истец/Ответчик/Третье лицо/Иное лицо)"
+      }
+    },
+    {
+      "step": 4,
+      "action": "click",
+      "description": "Клик по span с текстом 'Любой' для фокуса на элементе списка",
+      "target": "span с текстом 'Любой'",
+      "selectors": {
+        "playwright": "page.locator('span').filter({ hasText: /^Любой$/ }).click()",
+        "css": "span.type-switcher-text span.js-current-text",
+        "xpath": "//span[@class='js-current-text' and text()='Любой']"
+      },
+      "result": {
+        "status": "success"
+      }
+    },
+    {
+      "step": 5,
+      "action": "click",
+      "description": "Выбор пункта 'Любой' в выпадающем списке",
+      "target": "listitem с текстом 'Любой'",
+      "selectors": {
+        "playwright": "page.getByRole('listitem').filter({ hasText: 'Любой' }).click()",
+        "css": "ul li.selected",
+        "xpath": "//ul/li[@class='selected' and contains(text(),'Любой')]"
+      },
+      "result": {
+        "status": "success",
+        "note": "Выбран тип участника 'Любой' (значение -1)"
+      }
+    },
+    {
+      "step": 6,
+      "action": "click",
+      "description": "Нажатие кнопки 'Найти' для выполнения поиска",
+      "target": "Кнопка 'Найти'",
+      "selectors": {
+        "playwright": "page.getByRole('button', { name: 'Найти' }).click()",
+        "css": "button[alt='Найти']",
+        "xpath": "//button[contains(text(),'Найти')]"
+      },
+      "result": {
+        "status": "success",
+        "found_text": "Найдено 4 дел"
+      }
+    },
+    {
+      "step": 7,
+      "action": "verify",
+      "description": "Проверка видимости и текста кнопки 'Найти'",
+      "checks": [
+        {
+          "check": "button visible",
+          "playwright": "expect(page.getByRole('button', { name: 'Найти' })).toBeVisible()",
+          "result": true
+        },
+        {
+          "check": "button contains text 'Найти'",
+          "playwright": "expect(page.getByRole('button')).toContainText('Найти')",
+          "result": true,
+          "actual_text": "Найти"
+        },
+        {
+          "check": "button aria snapshot",
+          "playwright": "expect(page.getByRole('button')).toMatchAriaSnapshot('- button \"Найти\"')",
+          "result": true
+        }
+      ],
+      "result": {
+        "status": "success",
+        "button_text": "Найти",
+        "button_visible": true
+      }
+    }
+  ],
+  "browser_state": {
+    "url": "https://kad.arbitr.ru/",
+    "title": "Картотека арбитражных дел",
+    "search_params": {
+      "participant_type": "Любой",
+      "participant_value": "9718266074",
+      "judge": "",
+      "court": "",
+      "case_number": "",
+      "date_from": "",
+      "date_to": ""
+    },
+    "results": {
+      "total_found": 4,
+      "total_displayed": 4,
+      "total_in_card_index": "044179110",
+      "pages_count": 1,
+      "cases": [
+        {
+          "date": "27.03.2024",
+          "case_number": "А40-64960/2024",
+          "case_type": "civil",
+          "judge": "Михайлова А. Э.",
+          "court": "АС города Москвы",
+          "plaintiff": "ДЕПАРТАМЕНТ ГОРОДСКОГО ИМУЩЕСТВА ГОРОДА МОСКВЫ",
+          "plaintiff_inn": "7705031674",
+          "plaintiff_address": "123112, Россия, г Москва, г. Москва, ул. 1-й Красногвардейский, д. 21 строение 1",
+          "respondents": [
+            {
+              "name": "АО \"ПРОИЗВОДСТВЕННО-ТРАНСПОРТНОЕ ПРЕДПРИЯТИЕ \"СТАНДАРТ\"",
+              "inn": "7721763065",
+              "address": "109472, Россия, г Москва, г. Москва, ул. Академика Скрябина, д. 21 строение 1"
+            },
+            {
+              "name": "ООО ПТП Стандарт",
+              "inn": null,
+              "address": "107113, Россия, г. Москва, г. Москва, ул. Лобачика, д. 17"
+            }
+          ],
+          "card_url": "https://kad.arbitr.ru/Card/44e2410e-4719-41e8-8fc2-d368760b8111"
+        },
+        {
+          "date": "06.03.2024",
+          "case_number": "А40-47165/2024",
+          "case_type": "civil",
+          "judge": "Кантор К. А.",
+          "court": "АС города Москвы",
+          "plaintiff": "АО \"ПРОИЗВОДСТВЕННО-ТРАНСПОРТНОЕ ПРЕДПРИЯТИЕ \"СТАНДАРТ\"",
+          "plaintiff_inn": "7721763065",
+          "plaintiff_address": "109472, Россия, г Москва, г. Москва, ул. Академика Скрябина, д. 21 строение 1",
+          "respondents": [
+            {
+              "name": "ООО \"МАГНАТ\"",
+              "inn": "9701093747",
+              "address": "143007, Россия, Московская область, г о Одинцовский, г. Одинцово, ул. Молодежная, д. 46, офис 427/5"
+            }
+          ],
+          "card_url": "https://kad.arbitr.ru/Card/59e74fcf-41d2-42f4-a811-a26ac273863f"
+        },
+        {
+          "date": "06.03.2024",
+          "case_number": "А40-47160/2024",
+          "case_type": "civil_simple",
+          "judge": "Фортунатова Е. О.",
+          "court": "АС города Москвы",
+          "plaintiffs": [
+            {
+              "name": "АО \"ПРОИЗВОДСТВЕННО-ТРАНСПОРТНОЕ ПРЕДПРИЯТИЕ \"СТАНДАРТ\"",
+              "inn": "7721763065",
+              "address": "109472, Россия, г Москва, г. Москва, ул. Академика Скрябина, д. 21 строение 1"
+            },
+            {
+              "name": "ООО \"ПРОИЗВОДСТВЕННО-ТРАНСПОРТНОЕ ПРЕДПРИЯТИЕ \"СТАНДАРТ\"",
+              "inn": "9718266074",
+              "address": "107113, Россия, г Москва, г вн тер Муниципальный Округ Сокольники, г. Москва, ул. Лобачика, д. 17"
+            }
+          ],
+          "respondents": [
+            {
+              "name": "ООО \"САБУР\"",
+              "inn": "7721788768",
+              "address": "109378, Россия, г Москва, г. Москва, ул. Шумилова, д. 8, кв. 43"
+            }
+          ],
+          "card_url": "https://kad.arbitr.ru/Card/41d688a7-982c-464a-834a-098c495a3378"
+        },
+        {
+          "date": "12.11.2021",
+          "case_number": "А40-243849/2021",
+          "case_type": "civil_simple",
+          "judge": "Орлова Н. В.",
+          "court": "АС города Москвы",
+          "plaintiff": "АО \"ПРОИЗВОДСТВЕННО-ТРАНСПОРТНОЕ ПРЕДПРИЯТИЕ \"СТАНДАРТ\"",
+          "plaintiff_inn": "7721763065",
+          "plaintiff_address": "109472, Россия, г Москва, г. Москва, ул. Академика Скрябина, д. 21 строение 1",
+          "respondents": [
+            {
+              "name": "Маркова Наталья Владимировна",
+              "inn": "511002086559",
+              "address": "Данные скрыты"
+            }
+          ],
+          "card_url": "https://kad.arbitr.ru/Card/361f7a8c-3332-4eee-9a30-374121023d98"
+        }
+      ]
+    },
+    "saved_html": "kad_inn_9718266074_20260801.html"
+  },
+  "selectors_summary": {
+    "participant_input": {
+      "description": "Поле ввода ИНН/названия участника дела",
+      "css": "textarea.g-ph[placeholder*='название']",
+      "playwright_role": "textbox",
+      "playwright_name": "название, ИНН или ОГРН"
+    },
+    "participant_type_dropdown_trigger": {
+      "description": "Элемент i[4] для открытия дропдауна типа участника",
+      "css": "i:nth-child(4)",
+      "playwright": "page.locator('i').nth(4)"
+    },
+    "participant_type_span": {
+      "description": "Span с текущим выбранным типом участника",
+      "css": "span.type-switcher-text span.js-current-text",
+      "playwright": "page.locator('span').filter({ hasText: /^Любой$/ })"
+    },
+    "participant_type_listitem": {
+      "description": "Пункт списка выбора типа участника",
+      "css": "ul li.selected",
+      "playwright": "page.getByRole('listitem').filter({ hasText: 'Любой' })"
+    },
+    "search_button": {
+      "description": "Кнопка поиска",
+      "css": "button[alt='Найти']",
+      "playwright_role": "button",
+      "playwright_name": "Найти"
+    },
+    "results_container": {
+      "description": "Таблица с результатами поиска",
+      "css": "#b-cases tbody tr",
+      "playwright": "page.locator('#b-cases tbody tr')"
+    },
+    "results_total": {
+      "description": "Строка с количеством найденных дел",
+      "css": ".b-found-total",
+      "playwright": "page.locator('.b-found-total')"
+    }
+  }
+}

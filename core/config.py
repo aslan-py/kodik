@@ -8,6 +8,8 @@ host, port, db) берутся из переменных POSTGRES_*, а database
 Используется везде: database.py (engine), Alembic (env.py), воркеры.
 """
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,6 +37,33 @@ class Settings(BaseSettings):
             f'{self.postgres_password}@{self.postgres_host}:'
             f'{self.postgres_port}/{self.postgres_db}'
         )
+
+    # ===== Redis =====
+    redis_host: str = 'localhost'
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: str | None = None
+
+    @property
+    def redis_url(self) -> str:
+        """Собирает URL для подключения к Redis."""
+        if self.redis_password:
+            return f'redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}'
+        return f'redis://{self.redis_host}:{self.redis_port}/{self.redis_db}'
+
+    # ===== Пути для хранения данных =====
+    # Корневая папка для данных BP-1
+    bp1_data_root: str = './src/bp1/data'
+
+    @property
+    def bp1_html_dir(self) -> str:
+        """Папка для сохранения HTML файлов."""
+        return str(Path(self.bp1_data_root) / 'html_pages')
+
+    @property
+    def bp1_raw_dir(self) -> str:
+        """Папка для сохранения raw данных (JSON)."""
+        return str(Path(self.bp1_data_root) / 'raw')
 
     # ===== Mail =====
     mail_username: str

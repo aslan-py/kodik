@@ -3,8 +3,9 @@
 Система data-driven — поведение задаётся данными справочников, а не кодом:
 кого ищем (competitor), где (source), по каким словам (trigger), что
 отсеиваем (black_domain, stop_word, topic_limit), какими категориями и
-отделами размечаем (category, department), куда шлём алерты (event_type,
-channel, routing_rule). Без них не запустится ни один этап пайплайна.
+отделами размечаем (category, department), кому и куда шлём алерты
+(event_type, channel, user, routing_rule). Без них не запустится ни один
+этап пайплайна.
 
 Запуск:
     python -m core.scripts.stages.dictionaries
@@ -13,7 +14,10 @@ channel, routing_rule). Без них не запустится ни один э
 сами справочники — иначе FK не дадут удалить конкурента, на которого
 ссылается задача сбора. То есть это самая разрушительная очистка в проекте.
 
-Регионы (1100+ строк) грузятся из src/bp2/files/cities.json.
+Регионы (1100+ строк) грузятся из core/scripts/scripts_data/cities.json.
+Список конкурентов не дублируется руками — он выводится из демо-набора
+новостей (core/scripts/stages/news_data.py): кого упоминает CSV, тот и
+попадает в справочник.
 """
 
 import json
@@ -29,13 +33,14 @@ from core.scripts.stages.cascade import (
     PIPELINE_ORDER,
     clear_from,
 )
+from core.scripts.stages.news_data import NEWS
 from src.bp1.models import Competitor, Source, Trigger
 from src.bp2.models import BlackDomain, Region, StopWord, TopicLimit
 from src.bp3.models import Category, Department
-from src.bp5.models import Channel, EventType, RoutingRule
+from src.bp5.models import Channel, EventType, RoutingRule, User
 
-PROJECT_ROOT = Path(__file__).parents[3]
-CITIES_FILE = PROJECT_ROOT / 'src' / 'bp2' / 'files' / 'cities.json'
+SCRIPTS_DATA = Path(__file__).parents[1] / 'scripts_data'
+CITIES_FILE = SCRIPTS_DATA / 'cities.json'
 
 # Единственный источник демо — новостной агрегатор (его «парсим»).
 # name источника = URL, откуда парсим (а не человекочитаемое имя).
@@ -46,29 +51,28 @@ SOURCE_NAME = 'https://newssearch.yandex.ru'
 #  Данные справочников
 # ============================================================================
 
+# Кого отслеживаем — разработчики LLM/ML-продуктов из демо-набора новостей.
+# Список НЕ дублируется руками: имена берутся из CSV в порядке первого
+# упоминания, поэтому новая компания в новостях сама попадает в справочник.
 COMPETITORS = [
-    {'name': 'Топ-Сервис'},
-    {'name': 'МУП «Школьное питание»'},
-    {'name': 'Виво Маркет'},
-    {'name': 'Комбинат питания Иркутска'},
-    {'name': 'Комбинат школьного питания Сургута'},
-    {'name': 'Деп. продовольствия и соцпитания Казани'},
-    {'name': 'Комбинат соц. питания «Охта»'},
-    {'name': 'Мусороуборочная компания'},
-    {'name': 'СКС'},
+    {'name': name} for name in dict.fromkeys(news.competitor for news in NEWS)
 ]
 
 TRIGGERS = [
-    {'keyword': 'школьное питание'},
+    {'keyword': 'искусственный интеллект'},
+    {'keyword': 'языковая модель'},
+    {'keyword': 'утечка данных'},
     {'keyword': 'тендер'},
-    {'keyword': 'прокуратура'},
 ]
 
 # domain = полный ХОСТ как в ссылке, БЕЗ схемы (https://) и пути — именно
 # так его отдаёт urlparse(items[].url).netloc, по которому идёт сверка в BP-2.
 # С поддоменом, если публикатор сидит на поддомене (напр. spb.bezformata.com).
 BLACK_DOMAINS = [
-    {'domain': 'critics24.com', 'reason': 'Заказной/компрометирующий (Киев)'},
+    {
+        'domain': 'insider-leaks.info',
+        'reason': 'Анонимный слив без проверяемых источников',
+    },
     {'domain': 'kompromat.ru', 'reason': 'Компрометирующий ресурс'},
 ]
 
@@ -84,9 +88,14 @@ STOP_WORDS = [
         'note': 'Рекламные материалы',
     },
     {
-        'phrase': 'бегемот в зоопарке',
+        'phrase': 'скидка',
+        'type': StopType.stop_word,
+        'note': 'Промо-рассылки и продающие тексты',
+    },
+    {
+        'phrase': 'крейсер',
         'type': StopType.false_positive,
-        'note': 'Ложное срабатывание по конкуренту «Бегемот» (животное)',
+        'note': 'Ложное срабатывание: крейсер «Аврора» — не разработчик ИИ',
     },
 ]
 
@@ -195,54 +204,113 @@ DEPARTMENTS = [
     },
 ]
 
+# keywords ищутся как ПОДСТРОКА заголовка (detect_event_type, BP-5), поэтому
+# коротких форм вроде «иск» здесь нет: они срабатывали бы на «риск», «поиск».
 EVENT_TYPES = [
     {
         'name': 'судебный/надзорный риск',
-        'keywords': 'прокуратура, суд, иск, нарушения, надзор',
+        'keywords': [
+            'прокуратура',
+            'роскомнадзор',
+            'фас ',
+            'штраф',
+            'предписание',
+            'суд ',
+        ],
     },
     {
         'name': 'выигранный тендер',
-        'keywords': 'тендер, контракт, закупка, аукцион',
+        'keywords': ['тендер', 'контракт', 'закупка', 'аукцион'],
     },
-    {'name': 'активный наём', 'keywords': 'вакансия, наём, набор персонала'},
+    {
+        'name': 'активный наём',
+        'keywords': ['вакансия', 'наём', 'набор ', 'стажировк'],
+    },
     {
         'name': 'расширение',
-        'keywords': 'расширение, открытие, новый объект, реконструкция',
+        'keywords': [
+            'центр разработки',
+            'расширение',
+            'новый офис',
+            'дата-центр',
+        ],
     },
     {
-        'name': 'закрытие объекта',
-        'keywords': 'закрытие, банкротство, ликвидация',
+        'name': 'уход с рынка',
+        'keywords': ['закрытие', 'банкротство', 'ликвидация', 'уход с рынка'],
     },
 ]
 
 CHANNELS = ['telegram', 'email']
 
-# (тип события, приоритет, отдел, канал, режим доставки)
+# Получатели алертов — конкретные люди, не абстрактный «отдел». department —
+# справочно (в каком отделе числится), резолвится в department_id при
+# заливке. email/telegram_id обязательны — это и есть адрес доставки.
+# telegram_id — фейковые числовые id (не настоящие chat_id): сидер работает
+# с deliver=False (src/bp5/pipeline.py), в сеть не стучится, поэтому эти
+# значения нужны только чтобы удовлетворить NOT NULL/unique в БД.
+USERS = [
+    {
+        'full_name': 'Иванов Пётр',
+        'department': 'Юристы',
+        'email': 'ivanov@kodik.example',
+        'telegram_id': 100000001,
+    },
+    {
+        'full_name': 'Петрова Анна',
+        'department': 'Юристы',
+        'email': 'petrova@kodik.example',
+        'telegram_id': 100000002,
+    },
+    {
+        'full_name': 'Сидоров Олег',
+        'department': 'Аналитика',
+        'email': 'sidorov@kodik.example',
+        'telegram_id': 100000003,
+    },
+]
+
+# (тип события, приоритет, получатель, канал, режим доставки)
+# Получатель — user.full_name, НЕ отдел: список курируется вручную и может
+# не совпадать со штатом отдела. Пример ниже — у «судебного риска» на П1
+# ДВА получателя, и у одного из них ДВА канала: три строки под одну пару
+# (тип, приоритет) дают три алерта на одно и то же событие.
 ROUTING = [
     (
         'судебный/надзорный риск',
         PriorityLevel.p1,
-        'Юристы',
+        'Иванов Пётр',
         'telegram',
         DeliveryMode.instant,
     ),
     (
         'судебный/надзорный риск',
         PriorityLevel.p1,
-        'Юристы',
+        'Иванов Пётр',
         'email',
         DeliveryMode.instant,
     ),
     (
-        # Тендеры как отдел упразднён — выигранный тендер конкурента
-        # это рыночный сигнал, его ведёт Аналитика (см. DEPARTMENTS.note).
+        'судебный/надзорный риск',
+        PriorityLevel.p1,
+        'Петрова Анна',
+        'telegram',
+        DeliveryMode.instant,
+    ),
+    (
         'выигранный тендер',
         PriorityLevel.p2,
-        'Аналитика',
+        'Сидоров Олег',
         'email',
         DeliveryMode.digest,
     ),
-    ('расширение', PriorityLevel.p3, 'Аналитика', 'email', DeliveryMode.digest),
+    (
+        'расширение',
+        PriorityLevel.p3,
+        'Сидоров Олег',
+        'email',
+        DeliveryMode.digest,
+    ),
 ]
 
 
@@ -309,9 +377,14 @@ async def _is_empty(session: AsyncSession, model) -> bool:
     return await session.scalar(select(model.id).limit(1)) is None
 
 
-async def _name_to_id(session: AsyncSession, model) -> dict[str, int]:
-    """{name: id} справочника — для резолва связей routing_rule."""
-    rows = await session.execute(select(model.name, model.id))
+async def _key_to_id(session: AsyncSession, model, key_column) -> dict:
+    """{значение key_column: id} — для резолва связей (routing_rule, user).
+
+    key_column передаётся явно (Department.name, User.full_name, ...),
+    а не берётся по умолчанию как model.name — у User естественный ключ
+    называется full_name, не name.
+    """
+    rows = await session.execute(select(key_column, model.id))
     return dict(rows.all())
 
 
@@ -347,19 +420,37 @@ async def seed(session: AsyncSession) -> int:
         added += await _insert(session, TopicLimit, TOPIC_LIMITS)
     await session.flush()
 
+    # user: email И telegram_id по отдельности unique (не пара), поэтому
+    # обычный _insert с ON CONFLICT по двум колонкам сразу не подходит —
+    # тот же count-guard, что и у routing_rule. department_id резолвится
+    # из уже залитых Department.
+    if await _is_empty(session, User):
+        dept = await _key_to_id(session, Department, Department.name)
+        session.add_all(
+            User(
+                full_name=u['full_name'],
+                department_id=dept[u['department']],
+                email=u['email'],
+                telegram_id=u['telegram_id'],
+            )
+            for u in USERS
+        )
+        added += len(USERS)
+    await session.flush()
+
     if await _is_empty(session, RoutingRule):
-        etype = await _name_to_id(session, EventType)
-        channel = await _name_to_id(session, Channel)
-        dept = await _name_to_id(session, Department)
+        etype = await _key_to_id(session, EventType, EventType.name)
+        channel = await _key_to_id(session, Channel, Channel.name)
+        user = await _key_to_id(session, User, User.full_name)
         session.add_all(
             RoutingRule(
                 event_type_id=etype[etype_name],
                 priority=priority,
-                department_id=dept[dep_name],
+                user_id=user[full_name],
                 channel_id=channel[chan_name],
                 mode=mode,
             )
-            for etype_name, priority, dep_name, chan_name, mode in ROUTING
+            for etype_name, priority, full_name, chan_name, mode in ROUTING
         )
         added += len(ROUTING)
     await session.flush()

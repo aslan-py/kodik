@@ -32,4 +32,6 @@ TONALITY_DISPLAY: dict[TonalityLevel, str] = {
     TonalityLevel.positive: 'позитивная',
     TonalityLevel.neutral: 'нейтральная',
     TonalityLevel.negative: 'негативная',
+    TonalityLevel.alarming: 'тревожная',
+    TonalityLevel.irrelevant: 'нерелевантная',
 }

@@ -89,6 +89,21 @@ pip install -r requirements-dev.txt  # Тут чисто линтеры и пр�
 pip install -r requirements.txt
 ```
 
+#### Браузеры для RPA-сборщиков
+
+`pip install` ставит библиотеку `playwright`, но НЕ сам браузер: это бинарники
+(~150 МБ), они качаются отдельной командой и в requirements.txt их положить
+нельзя. Без неё RPA-сборщики (`kad_arbitr`, `fedresurs`) и `src/run_pipeline.py`
+падают при старте браузера.
+
+```bash
+python -m playwright install chromium
+```
+
+Ставится один раз на машину (в `%LOCALAPPDATA%\ms-playwright`), не в venv —
+при пересоздании окружения повторять не нужно. Проверить, что установилось:
+`python -m playwright install --dry-run chromium`.
+
 ### 3. Активировать pre-commit хуки (один раз)
 
 ```bash

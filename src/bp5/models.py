@@ -3,11 +3,21 @@
 Справочники:
 - EventType: типы значимых событий + слова-маркеры для детекции
 - Channel: каналы доставки (telegram, email, dashboard)
-- RoutingRule: матрица маршрутизации (тип + приоритет → отдел + канал + режим)
+- User: конкретные получатели алертов (email, telegram)
+- RoutingRule: матрица маршрутизации (тип + приоритет → получатель + канал
+  + режим)
 
 Журнал:
 - Alert: что/кому/куда отправлено. История + защита от повторной отправки
-  через UNIQUE(showcase_event_id, channel_id).
+  через UNIQUE(showcase_event_id, channel_id, user_id).
+
+Адресат — конкретный User, а не Department. Список получателей курируется
+вручную и может не совпадать со штатом отдела («сегодня трое, завтра один»),
+поэтому Department не годится источником рассылки — он не говорит, КОМУ
+конкретно слать. Отдел при этом не теряется: он виден через
+User.department_id, просто не хранится отдельным полем в RoutingRule/Alert
+(тот же принцип, что и у priority/mode — снимок факта, а не ссылка, которая
+может разъехаться).
 
 priority_level переиспользуется из BP-3 (enum общий для разметки и правил).
 delivery_mode и alert_status — локальные enum'ы BP-5.
@@ -19,17 +29,21 @@ Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import ActiveMixin, Base, Mixin
+from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import (
     AlertStatus,
     DeliveryMode,
@@ -52,18 +66,29 @@ class EventType(Base, Mixin, ActiveMixin):
     """
 
     name: Mapped[str] = mapped_column(
-        String(256),
+        StrippedString(256),
         unique=True,
         comment=(
             'Название типа: судебный/надзорный риск, выигранный тендер, '
             'активный наём, расширение, M&A, закрытие объекта'
         ),
     )
-    keywords: Mapped[str] = mapped_column(
-        Text,
+    keywords: Mapped[list[str]] = mapped_column(
+        ARRAY(String),
         comment=(
-            'Слова-маркеры через запятую: «прокуратура, суд, иск, нарушения». '
-            'По ним детектор матчит title события'
+            'Слова-маркеры: [«прокуратура», «суд», «иск», «нарушения»]. '
+            'По ним детектор матчит title события (вхождение подстроки)'
+        ),
+    )
+
+    __table_args__ = (
+        Index(
+            'ix_event_type_keywords',
+            'keywords',
+            postgresql_using='gin',
+        ),
+        CheckConstraint(
+            'name = btrim(name)', name='ck_event_type_name_trimmed'
         ),
     )
 
@@ -72,19 +97,64 @@ class Channel(Base, Mixin, ActiveMixin):
     """Справочник каналов доставки."""
 
     name: Mapped[str] = mapped_column(
-        String(64),
+        StrippedString(64),
         unique=True,
         comment='Канал доставки: telegram, email, dashboard',
     )
 
+    __table_args__ = (
+        CheckConstraint('name = btrim(name)', name='ck_channel_name_trimmed'),
+    )
+
+
+class User(Base, Mixin, ActiveMixin):
+    """Получатели алертов — конкретные люди, не отделы.
+
+    department_id — справочно (в каком отделе числится), НЕ источник для
+    рассылки: список получателей курируется вручную в routing_rule и может
+    не совпадать со штатом отдела. is_active — уволен/в отпуске, гасим
+    флагом, не удаляем (иначе потеряется история alert через FK RESTRICT).
+    """
+
+    full_name: Mapped[str | None] = mapped_column(
+        StrippedString(256),
+        comment='ФИО — для читаемости в админке, не критично',
+    )
+    department_id: Mapped[int | None] = mapped_column(
+        ForeignKey('department.id', ondelete='RESTRICT'),
+        comment='В каком отделе числится (справочно, не для маршрутизации)',
+    )
+    email: Mapped[str] = mapped_column(
+        StrippedString(256),
+        unique=True,
+        comment='Адрес для канала email',
+    )
+    telegram_id: Mapped[int] = mapped_column(
+        BigInteger,
+        unique=True,
+        comment=(
+            'Числовой chat_id для канала telegram (sendMessage требует '
+            'id, не @username)'
+        ),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'full_name = btrim(full_name)', name='ck_user_full_name_trimmed'
+        ),
+        CheckConstraint('email = btrim(email)', name='ck_user_email_trimmed'),
+    )
+
 
 class RoutingRule(Base, Mixin, ActiveMixin):
-    """Матрица маршрутизации: тип + приоритет → отдел + канал + режим.
+    """Матрица маршрутизации: тип + приоритет → получатель + канал + режим.
 
     Аналитик заполняет заранее. Детектор находит event_type_id и priority
     события, читает подходящие строки правила: «если событие такого типа
-    и такого приоритета — шли туда-то». Несколько каналов на пару
-    (тип, приоритет) = несколько строк = несколько доставок.
+    и такого приоритета — шли туда-то». Несколько получателей и/или каналов
+    на пару (тип, приоритет) = несколько строк = несколько доставок; чтобы
+    добавить или убрать адресата, просто добавляют/деактивируют строку —
+    без правки кода.
     """
 
     event_type_id: Mapped[int] = mapped_column(
@@ -95,9 +165,9 @@ class RoutingRule(Base, Mixin, ActiveMixin):
         priority_level,
         comment='Для какого приоритета срабатывает правило',
     )
-    department_id: Mapped[int] = mapped_column(
-        ForeignKey('department.id', ondelete='RESTRICT'),
-        comment='На какой отдел маршрутизируем',
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey('user.id', ondelete='RESTRICT'),
+        comment='Кому конкретно отправлять',
     )
     channel_id: Mapped[int] = mapped_column(
         ForeignKey('channel.id', ondelete='RESTRICT'),
@@ -113,7 +183,8 @@ class RoutingRule(Base, Mixin, ActiveMixin):
             'event_type_id',
             'priority',
             'channel_id',
-            name='uq_routing_rule_type_priority_channel',
+            'user_id',
+            name='uq_routing_rule_type_priority_channel_user',
         ),
     )
 
@@ -126,10 +197,11 @@ class RoutingRule(Base, Mixin, ActiveMixin):
 class Alert(Base, Mixin):
     """Журнал алертинга BP-5: что/кому/куда отправлено.
 
-    Одна строка = одна доставка. priority и mode — СНИМОК факта на момент
-    алерта (правило завтра поменяют, а история остаётся). Порядок: пишем
-    queued → отправляем → обновляем на sent/failed. UNIQUE(событие, канал)
-    защищает от повторной отправки.
+    Одна строка = одна доставка одному получателю. priority, mode и user_id —
+    СНИМОК факта на момент алерта (правило завтра поменяют, пользователь
+    сменит отдел — а история остаётся). Порядок: пишем queued → отправляем →
+    обновляем на sent/failed. UNIQUE(событие, канал, получатель) защищает
+    от повторной отправки.
     """
 
     showcase_event_id: Mapped[int] = mapped_column(
@@ -144,9 +216,9 @@ class Alert(Base, Mixin):
         priority_level,
         comment='Приоритет события на момент алерта (снимок)',
     )
-    department_id: Mapped[int] = mapped_column(
-        ForeignKey('department.id', ondelete='RESTRICT'),
-        comment='Кому ушло (отдел)',
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey('user.id', ondelete='RESTRICT'),
+        comment='Кому ушло',
     )
     channel_id: Mapped[int] = mapped_column(
         ForeignKey('channel.id', ondelete='RESTRICT'),
@@ -184,6 +256,7 @@ class Alert(Base, Mixin):
         UniqueConstraint(
             'showcase_event_id',
             'channel_id',
-            name='uq_alert_event_channel',
+            'user_id',
+            name='uq_alert_event_channel_user',
         ),
     )

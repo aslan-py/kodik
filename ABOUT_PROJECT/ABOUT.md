@@ -420,11 +420,13 @@ flowchart LR
 
 **Назначение:** своевременно уведомить ответственных о значимых событиях.
 
-**Отдельная задача Celery**, триггерится новыми строками витрины. Два режима: П1 — мгновенно, П2 — сводкой (Celery Beat).
+**Отдельная задача Celery** (пока не подключена — конвейер вызывается напрямую, как `run_bp2`/`run_bp4`),
+триггерится новыми/изменившимися строками витрины. Два режима: П1 — мгновенно, П2 — сводкой (Celery Beat).
 
 ### Итог BP-5 — строка в `alert`
 
-Журнал отправленного: что распознали, кому и куда ушло, с каким результатом. Одна строка = одна доставка.
+Журнал отправленного: что распознали, кому и куда ушло, с каким результатом. Одна строка = одна доставка
+**одному получателю**.
 
 | поле | значение (пример) | откуда |
 |---|---|---|
@@ -432,7 +434,7 @@ flowchart LR
 | `showcase_event_id` | `501` | по какому событию витрины сработало |
 | `event_type_id` | `1` → «судебный/надзорный риск» | результат детекции (шаг 2) |
 | `priority` | `p1` | снимок приоритета события |
-| `department_id` | `4` → «Юристы» | из `routing_rule` |
+| `user_id` | `7` → «Иванов Пётр» | из `routing_rule` |
 | `channel_id` | `1` → «telegram» | из `routing_rule` |
 | `mode` | `немедленно` | из `routing_rule` |
 | `status` | `sent` | `queued` → `sent` / `failed` |
@@ -444,74 +446,93 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  A[взять событие<br/>из витрины] --> B{значимость?<br/>слова + порог} -->|значимо| C[маршрутизация<br/>routing_rule] --> D[доставить<br/>telegram/email] --> E[записать alert]
-  B -->|нет| Z[стоп]
+  A[отобрать pending<br/>alerted_at watermark] --> B{значимость?<br/>keywords + routing_rule} -->|значимо| C[маршрутизация<br/>routing_rule → user] --> D[доставить<br/>telegram/email] --> E[записать alert]
+  B -->|нет| Z[пометить проверенным]
+  D --> Z
 ```
 
 ### Ключевые решения
 
-1. **Заполнить справочники:** `event_type` (типы значимых событий + слова-маркеры), `channel` (telegram, email, dashboard),
-   `routing_rule` (матрица: тип + приоритет → отдел + канал + режим). `department` уже заполнены с BP-3.
+1. **Заполнить справочники:** `event_type` (типы значимых событий + слова-маркеры), `channel` (telegram, email,
+   dashboard), `user` (конкретные получатели), `routing_rule` (матрица: тип + приоритет → получатель + канал +
+   режим). `department` уже заполнены с BP-3.
 
-2. **Значимость — две проверки подряд:**
+2. **Критерий «событие нужно проверить» — watermark на самой витрине, не по журналу `alert`:**
+
+   ```
+   showcase_event.alerted_at IS NULL  OR  showcase_event.updated_at > showcase_event.alerted_at
+   ```
+
+   `showcase_event → alert` — связь 1:N, и легитимно N=0 (проверили, значимых типов не нашли). Если критерием
+   «новое» считать «id отсутствует в `alert`», такое событие проверялось бы заново на каждом прогоне впустую —
+   по журналу результатов нельзя отличить «ещё не проверено» от «проверено, но не значимо». `alerted_at`
+   проставляется детектором **независимо от результата**, тот же приём, что `raw_item.updated_at` в BP-1
+   и `categorized_at > showcase_event.updated_at` в BP-4.
+
+3. **Значимость — не хардкод «p1/p2», а сам справочник `routing_rule`:**
 
    ```
    showcase_event.title  →  ищем вхождения слов из  event_type.keywords
-   showcase_event.priority  →  проходит ли порог (p1 / p2)
    ```
 
-   Обе прошли → событие значимо, запоминаем найденный `event_type_id`. Хоть одна не прошла → стоп, алерта нет.
+   Нашёлся тип → ищем в `routing_rule` строки на пару (тип, приоритет события). Нашлись → событие значимо.
+   Не нашлись → не значимо, алерта нет. Порог — это то, какие строки аналитик завёл в `routing_rule`, а не
+   константа в коде: если завтра решат алертить и на П3 (как уже сделано для «расширение» в демо-данных) —
+   это новая строка справочника, а не правка кода. Единственная трактовка, которая согласуется с требованием
+   ТЗ «настраивается без доработки кода».
 
    Ищем **по полю `keywords`**, а не по `name`. Оба поля нужны, но для разного: `keywords` — то, чем **ловим**
-   (`«прокуратура, суд, иск, нарушения»`), `name` — как этот тип **называется** (`«судебный/надзорный риск»`),
-   для отчёта и для поиска правила маршрутизации.
+   (`[«прокуратура», «суд», «иск», «нарушения»]` — массив, не строка через запятую, по образцу
+   `region.name_aliases`), `name` — как этот тип **называется** (`«судебный/надзорный риск»`), для отчёта.
 
    Базово это `if kw in title` — без LLM, дёшево, правит аналитик. Когда начнёт ловить лишнее («суд» в «присуждать») —
    апгрейд: регэксп с границами слова → лемматизация (pymorphy2) → полнотекстовый поиск Postgres.
 
-3. **Маршрутизация — это поиск строки в таблице-матрице.** `routing_rule` аналитик заполняет заранее,
-   она читается как «если событие такого типа и такого приоритета — шли туда-то»:
+4. **Адресат — конкретный `user`, а не `department`.** Список получателей курируется вручную и может не совпадать
+   со штатом отдела («сегодня трое, завтра один»), поэтому отдел не годится источником рассылки — он не говорит,
+   КОМУ конкретно слать. Гибкость достигается тем же способом, каким `routing_rule` и так умеет несколько каналов
+   на одну пару (тип, приоритет) — несколькими строками:
 
-   | event_type_id | priority | department_id | channel_id | mode |
+   | event_type_id | priority | user_id | channel_id | mode |
    |---|---|---|---|---|
-   | 1 — судебный риск | `p1` | 4 — Юристы | 1 — telegram | `instant` |
-   | 1 — судебный риск | `p1` | 4 — Юристы | 2 — email | `instant` |
-   | 2 — выигранный тендер | `p2` | 3 — Аналитика | 2 — email | `digest` |
+   | 1 — судебный риск | `p1` | 7 — Иванов Пётр | 1 — telegram | `instant` |
+   | 1 — судебный риск | `p1` | 7 — Иванов Пётр | 2 — email | `instant` |
+   | 1 — судебный риск | `p1` | 8 — Петрова Анна | 1 — telegram | `instant` |
 
-   Детектор на шаге 2 определил `event_type_id = 1`, у события `priority = p1`. Ищем правило по этой паре:
+   Детектор определил `event_type_id = 1`, у события `priority = p1`. Ищем правило по этой паре:
 
    ```sql
-   SELECT department_id, channel_id, mode
+   SELECT user_id, channel_id, mode
    FROM routing_rule
    WHERE event_type_id = 1 AND priority = 'p1' AND is_active = true;
    ```
 
-   Вернулись **две строки** (telegram и email) → значит доставок тоже две, и в `alert` появятся две записи
-   (`unique(showcase_event_id, channel_id)` это разрешает — ключ по паре событие+канал).
-   Если правило не нашлось — алерта нет, событие просто не маршрутизируется.
+   Вернулись **три строки** → значит доставок тоже три, и в `alert` появятся три записи
+   (`unique(showcase_event_id, channel_id, user_id)` это разрешает — ключ по тройке событие+канал+получатель).
 
-   То есть «куда и кому» мы не вычисляем, а **считываем из строки матрицы**, которую ведёт аналитик без кода.
+   Отдел не теряется — он виден через `user.department_id`, справочно, не как поле маршрутизации.
 
-4. **`mode` — способ доставки, а не статус.** Значений два (ТЗ: «П1 доставляется незамедлительно, П2 — в составе
+5. **`mode` — способ доставки, а не статус.** Значений два (ТЗ: «П1 доставляется незамедлительно, П2 — в составе
    регулярной сводки»):
    - `instant` — отправляем **сразу** по событию;
-   - `digest` — **не шлём сразу**, строка ложится со `status=queued`, а отдельная джоба по расписанию (Celery Beat)
-     собирает накопленное и отправляет одним письмом.
+   - `digest` — **не шлём сразу**, строка ложится со `status=queued`, а отдельная джоба по расписанию (Celery Beat,
+     пока не реализована) собирает накопленное и отправляет одним письмом.
 
-   Заполняется на **шаге 4**, копируется из найденного правила `routing_rule.mode`. Нужен именно в `alert`,
-   потому что джоба-сводка ищет свои задания запросом `WHERE mode='digest' AND status='queued'`.
+   Копируется из найденного правила `routing_rule.mode`. Нужен именно в `alert`, потому что джоба-сводка ищет
+   свои задания запросом `WHERE mode='digest' AND status='queued'`.
 
-   Отдельная таблица под него **не нужна** — набор значений фиксирован ТЗ, доп. атрибутов нет, аналитик его не расширяет.
-   Поэтому `enum delivery_mode`, как и `alert_status` (`queued/sent/failed`).
+   Отдельная таблица под него **не нужна** — набор значений фиксирован ТЗ, доп. атрибутов нет, аналитик его не
+   расширяет. Поэтому `enum delivery_mode`, как и `alert_status` (`queued/sent/failed`).
 
-5. **Порядок доставки:** сначала пишем `alert` со `status=queued` → отправляем → обновляем статус (`sent`/`failed`).
-   Не наоборот: упадём после отправки, но до записи — отправим второй раз.
-   `unique(showcase_event_id, channel_id)` — защита от дублей.
+6. **Порядок доставки:** сначала пишем `alert` со `status=queued` → отправляем (сейчас — заглушка, без реального
+   обращения к API) → обновляем статус (`sent`/`failed`). Не наоборот: упадём после отправки, но до записи —
+   отправим второй раз. `unique(showcase_event_id, channel_id, user_id)` — защита от дублей.
 
-6. **`priority` и `mode` в `alert` — снимок факта**, а не ссылка на правило: правило завтра поменяют,
-   а история должна остаться прежней.
+7. **`priority`, `mode` и `user_id` в `alert` — снимок факта**, а не ссылка: правило завтра поменяют, пользователь
+   сменит отдел — а история должна остаться прежней.
 
-**Таблицы:** справочники `event_type`, `channel`, `routing_rule`; журнал `alert`.
+**Таблицы:** справочники `event_type`, `channel`, `user`, `routing_rule`; журнал `alert`.
+**Код:** `src/bp5/` — `pipeline.py`, `crud.py`.
 
 ---
 
@@ -602,451 +623,5 @@ flowchart LR
 
 ## Полная модель данных (DBML для dbdiagram.io)
 
-```dbml
-Project "Кодик - конкурентная разведка" {
-  database_type: 'PostgreSQL'
-  Note: 'ПРОЕКТ: Кодик - конкурентная разведка\n\nBP-1: слой сырых данных и справочников сбора.\nBP-2: нормализация, фильтрация, дедупликация -> normalized_item + справочники фильтрации.\nBP-3: LLM-категоризация -> categorized_event + справочники разметки.\nBP-4: витрина showcase_event - ФИЗИЧЕСКАЯ плоская таблица под BI, инкрементальный UPSERT поверх normalized_item + categorized_event + ссылка на raw_item (вариант с VIEW отклонён: BI нужны индексы и стабильный контракт колонок).'
-}
-
-enum raw_item_status {
-  new
-  changed
-  error
-}
-
-// ============================================================================
-//  BP-1 — СБОР ДАННЫХ (СПРАВОЧНИКИ ЗАДАЧ + СЫРЬЁ)
-// ============================================================================
-
-// 1. Чистый справочник конкурентов (Только имена)
-Table competitor {
-  id int [pk, increment, note: "Уникальный ID конкурента"]
-  name varchar [not null, unique, note: "Название компании (например, Бегемот, Рога и Копыта). Уникально — не допускаем дублей в справочнике"]
-  inn varchar [null, unique, note: "ИНН конкурента (опционально). Для поиска по гос-реестрам ЮЛ. Уникально — no duplication в БД"]
-  is_active boolean [not null, default: true, note: "Мягкое выключение справочника (ActiveMixin), не удаляя из БД"]
-}
-
-// 2. Чистый справочник источников
-Table source {
-  id int [pk, increment, note: "Уникальный ID источника"]
-  name varchar [not null, unique, note: "Имя сайта/ресурса (например, hh.ru, авито, судебный_реестр). Уникально — не допускаем дублей в справочнике"]
-  is_active boolean [not null, default: true, note: "Мягкое выключение справочника (ActiveMixin), не удаляя из БД"]
-}
-
-// 3. Чистый справочник триггеров (Общие ключевые слова)
-Table trigger {
-  id int [pk, increment, note: "Уникальный ID ключевого слова"]
-  keyword varchar [not null, unique, note: "Само поисковое слово/навык (например, Юрист, Python, Django, Суд). Уникально — не допускаем дублей в справочнике"]
-  is_active boolean [not null, default: true, note: "Мягкое выключение справочника (ActiveMixin), не удаляя из БД"]
-}
-
-// 4. Матрица задач (Many-to-Many связующая таблица конфигурации)
-Table search_task {
-  id int [pk, increment, note: "ID конкретной настроенной задачи на парсинг. Используется как КЛЮЧ в Redis (значение = последний хэш)"]
-  competitor_id int [not null, ref: > competitor.id, note: "ОБЯЗАТЕЛЬНО: Какого конкурента ищем. **FK ON DELETE RESTRICT**: нельзя удалить конкурента, пока есть задачи (историю не рушим, справочник гасим is_active)"]
-  source_id int [not null, ref: > source.id, note: "ОБЯЗАТЕЛЬНО: На каком источнике ищем. **FK ON DELETE RESTRICT** — см. competitor_id"]
-  trigger_id int [null, ref: > trigger.id, note: "НЕОБЯЗАТЕЛЬНО: По какому слову. Если NULL - парсим источник 'в лоб' без ключевых слов. **FK ON DELETE RESTRICT** — триггер не удаляем, а гасим is_active"]
-  is_active boolean [not null, default: true, note: "Активна ли задача. Celery Beat берёт в перебор только активные строки. Выключаем флагом, не удаляя (иначе теряем FK-историю в raw_item)"]
-
-  indexes {
-    (competitor_id, source_id, trigger_id) [unique, note: "Не плодить дубли конфигов. ВНИМАНИЕ: в Postgres NULL != NULL, поэтому строки с trigger_id=NULL этот индекс НЕ защитит от дублей. Для полной защиты — partial unique index с COALESCE(trigger_id, 0) в миграции"]
-  }
-
-  Note: "Служебная таблица конфигурации: связывает кто, где и что ищет. На неё опирается Celery Beat при старте. id строки = ключ в Redis."
-}
-
-// 5. Таблица хранения результатов сбора (Твоя основная модель для BP-1)
-Table raw_item {
-  id int [pk, increment, note: "Уникальный ID записи сырого материала. Одна строка = одна выгрузка (снимок)"]
-  search_task_id int [not null, ref: > search_task.id, note: "СТРОГО ОБЯЗАТЕЛЬНО: Ссылка на задачу конфигурации. Через неё вытягиваем конкурента, источник и триггер. **FK ON DELETE RESTRICT** — сырьё не должно терять привязку к задаче"]
-  status raw_item_status [not null, default: "new", note: "Статус СНИМКА на момент вставки. new/changed = новая строка; error = сбой сбора. При совпадении хэша новую строку НЕ создаём и статус НЕ трогаем, обновляем только updated_at у последней. Статус после вставки не перезаписываем"]
-
-  // Поля контента - NULLABLE, т.к. при status=error парсинг не дал ни HTML, ни JSON, ни хэша
-  content_hash varchar [null, note: "Хэш от JSON контента для сверки через Redis. NULL при status=error"]
-  raw_data jsonb [null, note: "Сырой извлечённый контент страницы в формате JSON. NULL при status=error"]
-  html_file_path varchar [null, note: "Путь к сохранённому слепку HTML на диске/S3 для истории. NULL при status=error"]
-  source_request_url varchar [null, note: "Ссылка на оригинальный веб-запрос парсера. Заполняется для успешных выгрузок; может быть NULL при ранней ошибке"]
-
-  // Техническое уведомление о сбое (ТЗ BP-1: 'при сбое формируется техническое уведомление')
-  error_message varchar [null, note: "Текст ошибки при status=error. NULL для успешных выгрузок"]
-
-  created_at timestamp [not null, default: `now()`, note: "Время первой фиксации этого снимка в системе"]
-  updated_at timestamp [not null, default: `now()`, note: "Время последней СВЕРКИ. При совпадении хэша обновляем ТОЛЬКО это поле у последней строки (status не трогаем) — видно, когда последний раз проверяли актуальность"]
-
-  Note: "Центральное хранилище сырых материалов (BP-1). Хранит метаданные задачи, обе ссылки (сеть и диск) и сам сырой JSON. new/changed добавляют новую строку (история версий); при совпадении хэша строку не создаём и статус не трогаем, обновляем только updated_at; error пишет строку с пустым контентом и error_message."
-}
-
-// ============================================================================
-//  BP-2 — СПРАВОЧНИКИ НОРМАЛИЗАЦИИ И ФИЛЬТРАЦИИ
-// ============================================================================
-
-// 6. Справочник регионов (нормализация: сырое имя -> красивое имя). Зона разработчика
-Table region {
-  id           int     [pk, increment, note: "Уникальный ID региона"]
-  name_display varchar [not null, unique, note: "Каноническое имя для витрины и карты: 'Волгоград'. По нему группируем в дашборде"]
-  name_aliases text[]  [null, note: "Варианты написания в нижнем регистре: ['волгоград', 'г. волгоград', 'г волгоград']. Lookup: lower(:raw) = ANY(name_aliases). GIN-индекс ix_region_name_aliases"]
-  macro_region varchar [null, note: "Федеральный округ: Сибирский, Южный и т.д."]
-  latitude     float   [null, note: "Широта центра региона (WGS-84), для карты рынка"]
-  longitude    float   [null, note: "Долгота центра региона (WGS-84), для карты рынка"]
-
-  indexes {
-    name_aliases [type: gin, name: "ix_region_name_aliases", note: "Быстрый поиск по ANY(name_aliases)"]
-  }
-}
-
-// 7. Справочник чёрных доменов (публикаторы, которых выкидываем целиком). Зона аналитика
-Table black_domain {
-  id int [pk, increment, note: "Уникальный ID записи"]
-  domain varchar [not null, unique, note: "Домен ПУБЛИКАТОРА новости (напр. kompromat.ru). НЕ путать с source - это НЕ то, что мы парсим, а откуда пришёл контент"]
-  reason varchar [null, note: "Почему в списке: заказной / компрометирующий ресурс"]
-  is_active boolean [not null, default: true, note: "Выключаем флагом, не удаляя"]
-  created_at timestamp [not null, default: `now()`]
-}
-
-// 8. Стоп-слова / стоп-темы / ложные срабатывания (одна универсальная таблица по type). Зона аналитика
-enum stop_type {
-  stop_word
-  stop_topic
-  false_positive
-}
-Table stop_word {
-  id int [pk, increment, note: "Уникальный ID записи"]
-  phrase varchar [not null, note: "Слово или тема для отсева"]
-  type stop_type [not null, note: "stop_word - стоп-слово; stop_topic - стоп-тема; false_positive - ложное срабатывание ключевого слова"]
-  is_active boolean [not null, default: true]
-  note varchar [null, note: "Пояснение для аналитика"]
-
-  indexes {
-    (phrase, type) [unique, note: "Не дублировать одну фразу в одном типе"]
-  }
-}
-
-// 9. Лимиты анти-шума (АГГРЕГАТНЫЙ фильтр: одна группа не должна занимать непропорц. долю). Зона аналитика
-enum limit_scope {
-  competitor
-  source
-  media
-  region
-}
-enum limit_window {
-  run
-  day
-  week
-}
-Table topic_limit {
-  id int [pk, increment, note: "Уникальный ID правила"]
-  scope limit_scope [not null, note: "По какой группе считаем долю: конкурент / источник / СМИ / регион"]
-  max_count int [not null, note: "Максимум событий на ОДНУ группу за окно; сверх -> rejected(noise_limit)"]
-  window limit_window [not null, default: "week", note: "Окно подсчёта: прогон / день / неделя"]
-  is_active boolean [not null, default: true]
-  note varchar [null, note: "Напр.: 'СКС занимает ~40% отчёта 5 недель подряд'"]
-}
-
-// ============================================================================
-//  BP-2 — ВЫХОД: НОРМАЛИЗОВАННЫЕ СОБЫТИЯ (silver-слой)
-// ============================================================================
-
-enum norm_status {
-  ok
-  rejected
-}
-enum reject_reason_t {
-  black_domain
-  stop_word
-  stop_topic
-  false_positive
-  noise_limit
-  parse_error
-}
-
-// 10. Нормализованные события — отдельные строки, только ФАКТЫ
-Table normalized_item {
-  id int [pk, increment, note: "Уникальный ID события"]
-  raw_item_id int [not null, ref: > raw_item.id, note: "Ссылка НАЗАД на сырьё (drill-down, требование прозрачности ТЗ)"]
-  competitor_id int [null, ref: > competitor.id, note: "Конкурент / Объект. NULL если из текста однозначно не вытащили"]
-  region_id int [null, ref: > region.id, note: "Регион после lookup в region. NULL если не определён"]
-  source_id int [null, ref: > source.id, note: "С какого источника собрано. Денормализовано из raw_item -> search_task -> source, чтобы не джойнить в два прыжка. Закрывает атрибут 'источник' из ТЗ и антишум scope='source'"]
-
-  // ---- ФАКТЫ со страницы (зона BP-2) ----
-  published_at date [null, note: "Дата события, нормализована к ISO"]
-  title varchar [not null, note: "Заголовок"]
-  media_name varchar [null, note: "СМИ-публикатор: 'Big-news.ru, Москва'"]
-  media_domain varchar [null, note: "Домен публикатора — для сверки с black_domain"]
-  url varchar [null, note: "Ссылка на событие"]
-  text varchar [null, note: "Тело события: описание вакансии / текст новости. Вход для стоп-слов в BP-2 и для промпта LLM в BP-3"]
-  extra jsonb [null, note: "Источник-специфичные факты, которым не место в общих колонках. Напр. для вакансий: {salary_from: 150000, salary_to: 200000, currency: RUB}"]
-
-  dedup_key varchar [not null, unique, note: "Бизнес-ключ события. Лучше URL; иначе хэш(конкурент+заголовок+регион). Уникальный индекс = дедуп через INSERT ... ON CONFLICT"]
-  status norm_status [not null, default: "ok", note: "ok -> идут в BP-3; rejected -> лежат помеченными, не удаляем"]
-  reject_reason reject_reason_t [null, note: "Причина отсева. NULL для status=ok"]
-  created_at timestamp [not null, default: `now()`]
-
-  Note: "Silver-слой BP-2: отдельные события с ФАКТАМИ (дата, заголовок, СМИ, регион, конкурент, url). Атрибуты СМЫСЛА добавляет BP-3 в categorized_event."
-}
-
-// ============================================================================
-//  BP-3 — СПРАВОЧНИКИ РАЗМЕТКИ + РЕЗУЛЬТАТ LLM-КАТЕГОРИЗАЦИИ (gold-слой)
-// ============================================================================
-
-// 11. Справочник категорий событий (контролируемый словарь для LLM). Зона аналитика
-Table category {
-  id int [pk, increment, note: "Уникальный ID категории"]
-  name varchar [not null, unique, note: "Напр.: надзорная санкция и юр.риск; репутационный риск; PR-активность; системная проблема; признание качества; косвенное упоминание; инфошум"]
-  note varchar [null, note: "Определение категории для аналитика: что под неё подпадает (напр. 'Любое действие госорганов ... которое создаёт материальные финансовые потери или угрозу остановки/изменения бизнес-модели конкурента')"]
-  is_active boolean [not null, default: true]
-}
-
-// 12. Справочник отделов (маршрутизация ответственного). Зона аналитика
-Table department {
-  id int [pk, increment, note: "Уникальный ID отдела"]
-  name varchar [not null, unique, note: "Напр.: PR, Юристы, Аналитика, Маркетинг"]
-  note varchar [null, note: "Зона ответственности отдела: какие категории он ведёт (напр. Юристы — 'Держат санкции и иски')"]
-  is_active boolean [not null, default: true]
-}
-
-enum priority_level {
-  p1  // П1 — реагировать немедленно, срок 48ч
-  p2  // П2 — отслеживать, срок 1 неделя
-  p3  // П3 — к сведению
-  p4  // П4 — игнорировать (шум)
-}
-enum tonality_level {
-  positive
-  neutral
-  negative
-}
-
-// 13. Результат LLM-категоризации — СМЫСЛЫ (1:1 к normalized_item)
-Table categorized_event {
-  id int [pk, increment, note: "Уникальный ID разметки"]
-  normalized_item_id int [not null, unique, ref: > normalized_item.id, note: "1:1 ссылка на факты события. UNIQUE = одна разметка на событие"]
-
-  // ---- атрибуты СМЫСЛА от LLM ----
-  priority priority_level [not null, note: "Приоритет П1–П4"]
-  category_id int [not null, ref: > category.id, note: "Категория события из справочника"]
-  tonality tonality_level [not null, note: "Тональность"]
-  media_index numeric [null, note: "Медиаиндекс (охват/заметность), если применимо"]
-  action varchar [null, note: "Требуемое действие"]
-  deadline date [null, note: "Срок реакции"]
-  department_id int [null, ref: > department.id, note: "Ответственный отдел (маршрутизация)"]
-  comment varchar [null, note: "Комментарий от LLM"]
-
-  // ---- метаданные прогона LLM (для перекатегоризации и аудита) ----
-  llm_model varchar [null, note: "Какая модель разметила"]
-  prompt_version varchar [null, note: "Версия промпта/правил"]
-  categorized_at timestamp [not null, default: `now()`, note: "Когда разметили. По этой отметке BP-4 находит переразмеченные события: categorized_at > showcase_event.updated_at"]
-
-  indexes {
-    categorized_at [name: "ix_categorized_event_categorized_at", note: "Под отбор переразмеченных событий в BP-4"]
-  }
-
-  Note: "Gold-слой BP-3: смысловые атрибуты. Факты берутся из normalized_item по FK. Перекатегоризация = UPDATE этой строки, факты не трогаются."
-}
-
-// ============================================================================
-//  BP-4 — ВИТРИНА (плоская таблица под BI, слой представления)
-// ============================================================================
-
-// 14. Плоская витрина: одна широкая строка на событие (денормализовано, под BI)
-Table showcase_event {
-  id int [pk, increment, note: "Уникальный ID строки витрины"]
-  categorized_event_id int [not null, unique, ref: > categorized_event.id, note: "Ключ для инкрементального UPSERT: одна строка витрины на размеченное событие"]
-  raw_item_id int [not null, ref: > raw_item.id, note: "Drill-down до сырья (требование прозрачности ТЗ: из строки витрины -> к исходнику)"]
-
-  // ---- ФАКТЫ (денормализовано: id из слоёв заменены на ИМЕНА через справочники) ----
-  published_at date [null, note: "Дата"]
-  title varchar [not null, note: "Заголовок"]
-  media varchar [null, note: "СМИ"]
-  region varchar [null, note: "Регион (region.name_display)"]
-  macro_region varchar [null, note: "Федеральный округ"]
-  latitude float [null, note: "Широта центра региона (WGS-84) из region.latitude — метка на карте рынка. Лежит в витрине, а НЕ берётся джойном к region: BI читает одну таблицу"]
-  longitude float [null, note: "Долгота центра региона (WGS-84) из region.longitude — метка на карте рынка"]
-  competitor varchar [null, note: "Конкурент / Объект (competitor.name)"]
-  source_url varchar [null, note: "Ссылка на событие"]
-
-  // ---- СМЫСЛЫ (денормализовано) ----
-  priority varchar [not null, note: "П1..П4"]
-  category varchar [not null, note: "Категория (category.name)"]
-  tonality varchar [not null, note: "Тональность"]
-  media_index numeric [null, note: "МедиаИндекс"]
-  action varchar [null, note: "Требуемое действие"]
-  deadline date [null, note: "Срок реакции"]
-  department varchar [null, note: "Ответственный отдел (department.name)"]
-  comment varchar [null, note: "Комментарий"]
-
-  updated_at timestamp [not null, default: `now()`, note: "Когда строку последний раз собрали. Инкрементальный UPSERT, без полной перезагрузки. ВАЖНО: ставится временем Python (datetime.now(UTC)), а НЕ now() — в Postgres now() отдаёт время начала транзакции, и при сборке в одной транзакции с BP-3 строка навсегда осталась бы 'устаревшей'"]
-
-  indexes {
-    published_at [name: "ix_showcase_event_published_at", note: "Лента событий по датам"]
-    competitor [name: "ix_showcase_event_competitor", note: "Паспорт конкурента"]
-    priority [name: "ix_showcase_event_priority", note: "Срез по приоритетам"]
-    category [name: "ix_showcase_event_category", note: "Срез по категориям"]
-  }
-
-  Note: "Плоская витрина BP-4 под BI. Денормализована: id из слоёв заменены на читаемые имена через справочники, enum'ы — на подписи ('p1' -> 'П1', 'positive' -> 'позитивная'). РЕАЛИЗОВАНА физической таблицей с UPSERT по categorized_event_id (вариант с VIEW отклонён: BI нужны индексы и стабильный контракт колонок). Отбор инкрементальный: строки нет в витрине ИЛИ categorized_at > updated_at (перекатегоризация BP-3 доезжает сама). Витрина — ПРОИЗВОДНАЯ таблица: руками не редактируется, любая правка будет затёрта следующим UPSERT'ом, источник правды — categorized_event. raw_item_id обеспечивает drill-down к исходнику."
-}
-
-// ============================================================================
-//  BP-5 — ДЕТЕКТОР ЗНАЧИМЫХ СОБЫТИЙ + АЛЕРТИНГ + МАРШРУТИЗАЦИЯ
-// ============================================================================
-
-// 15. Типы значимых событий + слова-маркеры для детекции. Зона аналитика
-Table event_type {
-  id int [pk, increment, note: "Уникальный ID типа значимого события"]
-  name varchar [not null, unique, note: "судебный/надзорный риск, выигранный тендер, активный наём, расширение, M&A, закрытие объекта"]
-  keywords varchar [not null, note: "Слова-маркеры через запятую: 'прокуратура, суд, иск, нарушения'. По ним детектор матчит title события"]
-  is_active boolean [not null, default: true]
-}
-
-// 16. Каналы доставки. Зона аналитика/админа
-Table channel {
-  id int [pk, increment, note: "Уникальный ID канала"]
-  name varchar [not null, unique, note: "telegram, email, dashboard"]
-  is_active boolean [not null, default: true]
-}
-
-enum delivery_mode {
-  instant  // немедленно — шлём сразу по событию (П1)
-  digest   // сводка — копим и отправляем пакетом по расписанию (П2)
-}
-enum alert_status {
-  queued   // строка заведена, доставка ещё не выполнена
-  sent     // доставлено
-  failed   // доставка сорвалась, см. error_message
-}
-
-// 17. Матрица маршрутизации: тип + приоритет -> отдел + канал + режим. Зона аналитика
-Table routing_rule {
-  id int [pk, increment, note: "Уникальный ID правила маршрутизации"]
-  event_type_id int [not null, ref: > event_type.id, note: "Для какого типа значимого события"]
-  priority priority_level [not null, note: "Для какого приоритета срабатывает правило"]
-  department_id int [not null, ref: > department.id, note: "На какой отдел маршрутизируем"]
-  channel_id int [not null, ref: > channel.id, note: "В какой канал доставляем"]
-  mode delivery_mode [not null, note: "instant (П1) | digest (П2)"]
-  is_active boolean [not null, default: true]
-
-  indexes {
-    (event_type_id, priority, channel_id) [unique, note: "Несколько каналов на (тип,приоритет) = несколько строк"]
-  }
-}
-
-// 18. Журнал алертов: что/кому/куда отправлено. История + защита от повторной отправки
-Table alert {
-  id int [pk, increment, note: "Уникальный ID алерта"]
-  showcase_event_id int [not null, ref: > showcase_event.id, note: "По какому событию витрины сработал алерт"]
-  event_type_id int [not null, ref: > event_type.id, note: "Какой тип значимого события распознан"]
-  priority priority_level [not null, note: "Приоритет события на момент алерта (снимок)"]
-  department_id int [not null, ref: > department.id, note: "Кому ушло (отдел)"]
-  channel_id int [not null, ref: > channel.id, note: "Каким каналом"]
-  mode delivery_mode [not null, note: "Снимок режима из правила: instant | digest. По нему джоба-сводка находит свои алерты"]
-  status alert_status [not null, default: "queued", note: "queued -> sent / failed"]
-  error_message varchar [null, note: "Текст ошибки при status=failed"]
-  created_at timestamp [not null, default: `now()`]
-  sent_at timestamp [null, note: "Когда фактически доставлено"]
-
-  indexes {
-    (showcase_event_id, channel_id) [unique, note: "Один алерт на событие+канал — не слать дважды"]
-  }
-
-  Note: "Журнал алертинга BP-5. Значимость решается в памяти (event_type + порог приоритета), маршрут — по routing_rule; сюда пишется факт и статус доставки."
-}
-
-// ============================================================================
-//  BP-6 — ПЛАН ДЕЙСТВИЙ (единственная запись-часть; дашборды — в DataLens)
-// ============================================================================
-
-enum action_status {
-  open         // открыта
-  in_progress  // в работе
-  done         // закрыта
-}
-
-// 19. План действий: по событию П1/П2 человек заводит задачу, отдел меняет статус.
-//     Поля строго из ТЗ: задача -> отдел -> срок -> ожидаемый результат -> статус.
-Table action_item {
-  id int [pk, increment, note: "Уникальный ID задачи"]
-  showcase_event_id int [not null, ref: > showcase_event.id, note: "По какому событию витрины заведена задача"]
-  task varchar [not null, note: "Задача: что конкретно сделать (решение человека)"]
-  department_id int [not null, ref: > department.id, note: "Ответственный отдел"]
-  deadline date [null, note: "Срок"]
-  expected_result varchar [null, note: "Ожидаемый результат"]
-  status action_status [not null, default: "open", note: "Статус: open -> in_progress -> done. Меняют отделы через веб-форму"]
-  created_at timestamp [not null, default: `now()`]
-  updated_at timestamp [not null, default: `now()`, note: "Обновляется при смене статуса"]
-
-  Note: "BP-6: план действий. Единственная часть BP-6 с записью — заполняется человеком через веб-форму (не DataLens). DataLens читает эту таблицу для дашборда 'план действий'."
-}
-
-// ============================================================================
-//  BP-7 — АГЕНТ РАСШИРЕНИЯ ИСТОЧНИКОВ (админка = CRUD над существующими справочниками)
-// ============================================================================
-
-enum candidate_status {
-  pending    // предложен агентом, ждёт модерации
-  approved   // одобрен -> уходит в source
-  rejected   // отклонён человеком
-}
-
-// 20. Очередь предложений новых источников на модерацию.
-//     Агент ПИШЕТ pending; человек approve/reject; при approve -> INSERT в source.
-Table source_candidate {
-  id int [pk, increment, note: "Уникальный ID кандидата"]
-  domain varchar [not null, unique, note: "Найденный домен-кандидат. UNIQUE — не предлагать дважды"]
-  competitor_id int [null, ref: > competitor.id, note: "По какому конкуренту/запросу нашли"]
-  evidence_url varchar [null, note: "Ссылка-доказательство: где упомянут конкурент"]
-  llm_assessment varchar [null, note: "Краткая оценка LLM: что за ресурс, релевантность, публичность"]
-  status candidate_status [not null, default: "pending", note: "pending -> approved / rejected"]
-  moderated_by varchar [null, note: "Кто промодерировал"]
-  moderated_at timestamp [null, note: "Когда промодерировали"]
-  created_at timestamp [not null, default: `now()`, note: "Когда агент предложил"]
-
-  Note: "BP-7: очередь модерации источников. Агент пишет pending (шаг 6), человек в админке approve/reject (шаг 7). При approve домен уходит в source (шаг 8), и следующий цикл его парсит. Автоподключения нет — только через модерацию (правило ТЗ)."
-}
-
-// ============================================================================
-//  ГРУППЫ ДЛЯ ВИЗУАЛА В dbdiagram.io
-//  Рисуют подписанные рамки вокруг таблиц каждого BP на холсте.
-//  Названия таблиц в БД НЕ меняются — это только визуальная разметка.
-// ============================================================================
-
-TableGroup "BP-1 — Сбор данных" {
-  trigger
-  competitor
-  source
-  search_task
-  raw_item
-}
-
-TableGroup "BP-2 — Нормализация и фильтрация" {
-  region
-  black_domain
-  stop_word
-  topic_limit
-  normalized_item
-}
-
-TableGroup "BP-3 — LLM-категоризация" {
-  category
-  department
-  categorized_event
-}
-
-TableGroup "BP-4 — Витрина (BI)" {
-  showcase_event
-}
-
-TableGroup "BP-5 — Алертинг и маршрутизация" {
-  event_type
-  channel
-  routing_rule
-  alert
-}
-
-TableGroup "BP-6 — План действий" {
-  action_item
-}
-
-TableGroup "BP-7 — Расширение источников" {
-  source_candidate
-}
-```
+Вынесена в отдельный файл — `DIAGRAMM_IO.md` — так удобнее копировать
+целиком в редактор на dbdiagram.io.

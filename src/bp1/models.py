@@ -21,10 +21,10 @@ Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
-    String,
     Text,
     UniqueConstraint,
     func,
@@ -33,7 +33,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from core.database import ActiveMixin, Base, Mixin
+from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import RawItemStatus, raw_item_status
 
 
@@ -47,10 +47,16 @@ class Trigger(Base, Mixin, ActiveMixin):
     """
 
     keyword: Mapped[str] = mapped_column(
-        String(128),
+        StrippedString(128),
         unique=True,
-        comment=(
-            'Само поисковое слово/навык (например, Юрист, Python, Django, Суд)'
+        comment=('Само поисковое слово/навык (например, Юрист, Python, Суд)'),
+    )
+
+    __table_args__ = (
+        # StrippedString чистит пробелы только на пути через SQLAlchemy;
+        # CHECK ловит и правку напрямую в БД (DBeaver, сырой SQL).
+        CheckConstraint(
+            'keyword = btrim(keyword)', name='ck_trigger_keyword_trimmed'
         ),
     )
 
@@ -63,14 +69,21 @@ class Competitor(Base, Mixin, ActiveMixin):
     """
 
     name: Mapped[str] = mapped_column(
-        String(256),
+        StrippedString(256),
         unique=True,
         comment='Название компании (например, Бегемот, Рога и Копыта)',
     )
     inn: Mapped[str | None] = mapped_column(
-        String(12),
+        StrippedString(12),
         unique=True,
         comment='ИНН конкурента (опционально, поиск по гос-реестрам)',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'name = btrim(name)', name='ck_competitor_name_trimmed'
+        ),
+        CheckConstraint('inn = btrim(inn)', name='ck_competitor_inn_trimmed'),
     )
 
 
@@ -82,9 +95,13 @@ class Source(Base, Mixin, ActiveMixin):
     """
 
     name: Mapped[str] = mapped_column(
-        String(256),
+        StrippedString(256),
         unique=True,
         comment='Имя сайта/ресурса (например, hh.ru, авито, суд_реестр)',
+    )
+
+    __table_args__ = (
+        CheckConstraint('name = btrim(name)', name='ck_source_name_trimmed'),
     )
 
 
@@ -181,7 +198,7 @@ class RawItem(Base, Mixin):
         ),
     )
     content_hash: Mapped[str | None] = mapped_column(
-        String(64),
+        StrippedString(64),
         comment=(
             'Хэш от JSON контента для сверки через Redis. NULL при status=error'
         ),
@@ -194,14 +211,14 @@ class RawItem(Base, Mixin):
         ),
     )
     html_file_path: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment=(
             'Путь к сохранённому слепку HTML на диске/S3 для '
             'истории. NULL при status=error'
         ),
     )
     source_request_url: Mapped[str | None] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment=(
             'Ссылка на оригинальный веб-запрос парсера. NULL при ранней ошибке'
         ),
@@ -224,5 +241,20 @@ class RawItem(Base, Mixin):
         comment=(
             'Время последней СВЕРКИ. При совпадении хэша обновляем '
             'ТОЛЬКО это поле (статус не трогаем)'
+        ),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            'content_hash = btrim(content_hash)',
+            name='ck_raw_item_content_hash_trimmed',
+        ),
+        CheckConstraint(
+            'html_file_path = btrim(html_file_path)',
+            name='ck_raw_item_html_file_path_trimmed',
+        ),
+        CheckConstraint(
+            'source_request_url = btrim(source_request_url)',
+            name='ck_raw_item_source_request_url_trimmed',
         ),
     )

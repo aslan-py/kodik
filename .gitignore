@@ -142,7 +142,6 @@ AGENTS.md
 
 .env
 /venv
-**/test*
 **/node_modules
 **package-lock.json
 **package.json

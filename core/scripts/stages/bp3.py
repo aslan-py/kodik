@@ -7,9 +7,11 @@
 Запуск:
     python -m core.scripts.stages.bp3
 
-Разметка задаётся вручную по url события (MARKUP). Для события, которого нет
-в MARKUP, берётся DEFAULT_MARKUP — так набор переживает добавление новых
-фактов в stages/bp2 без правки этого файла.
+Разметка лежит в демо-наборе новостей (stages/news_data.py) — колонки
+category / priority / tonality / department / action / comment того же CSV,
+из которого BP-1 и BP-2 берут контент; событие находится по url. Для
+события, которого в наборе нет, берётся DEFAULT_MARKUP — так набор
+переживает появление новых фактов без правки этого файла.
 
 Что здесь имитирует LLM, а что делает код (как и в бою):
   - LLM: приоритет, категория, тональность, действие, комментарий, отдел;
@@ -27,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.enums import NormStatus, PriorityLevel, TonalityLevel
 from core.scripts.stages.cascade import clear_from
+from core.scripts.stages.news_data import NEWS
 from src.bp2.models import NormalizedItem
 from src.bp3.models import CategorizedEvent, Category, Department
 
@@ -34,82 +37,20 @@ LLM_MODEL = 'gpt-4o-mini'
 PROMPT_VERSION = 'v1.0'
 
 # ============================================================================
-#  Разметка: url события → смыслы
+#  Разметка: url события → смыслы (из CSV, только у чистых событий)
 # ============================================================================
 
 MARKUP: dict[str, dict] = {
-    'https://big-news.ru/kaluga/12045': {
-        'priority': PriorityLevel.p1,
-        'category': 'надзорная санкция и юридический риск',
-        'tonality': TonalityLevel.negative,
-        'department': 'Юристы',
-        'action': 'Подготовить юридическую позицию и оценить риски',
-        'comment': 'Надзорный риск: представление прокуратуры',
-    },
-    'https://www.forbes.ru/biznes/456-den': {
-        'priority': PriorityLevel.p2,
-        'category': 'PR-активность конкурента',
-        'tonality': TonalityLevel.positive,
-        'department': 'PR',
-        'action': 'Подготовить ответный PR-кейс',
-        'comment': 'Активная промо-акция конкурента',
-    },
-    'https://argumenti.ru/irkutsk/2026/06/35let': {
-        'priority': PriorityLevel.p3,
-        'category': 'PR-активность конкурента',
-        'tonality': TonalityLevel.positive,
-        'department': 'PR',
-        'action': None,
-        'comment': 'Юбилейная активность, к сведению',
-    },
-    'https://ugra-news.ru/surgut/reforma': {
-        'priority': PriorityLevel.p2,
-        'category': 'системная проблема (возможность для входа)',
-        'tonality': TonalityLevel.negative,
-        'department': 'Аналитика',
-        'action': 'Оценить возможность входа на рынок Сургута',
-        'comment': 'Системная проблема у конкурента — окно возможностей',
-    },
-    'https://www.kzn.ru/meta/news/600': {
-        'priority': PriorityLevel.p3,
-        'category': 'косвенное упоминание',
-        'tonality': TonalityLevel.neutral,
-        'department': 'Аналитика',
-        'action': None,
-        'comment': 'Косвенное упоминание, фоновая активность',
-    },
-    'https://spb.bezformata.com/stolovye': {
-        'priority': PriorityLevel.p3,
-        'category': 'признание качества и конкурсы',
-        'tonality': TonalityLevel.positive,
-        'department': 'Маркетинг',
-        'action': None,
-        'comment': 'Признание качества конкурента',
-    },
-    'https://samadm.ru/news/rekonstrukciya': {
-        'priority': PriorityLevel.p3,
-        'category': 'PR-активность конкурента',
-        'tonality': TonalityLevel.neutral,
-        'department': 'PR',
-        'action': None,
-        'comment': 'Инфраструктурная активность',
-    },
-    'https://samara450.ru/dolg': {
-        'priority': PriorityLevel.p2,
-        'category': 'репутационный риск',
-        'tonality': TonalityLevel.negative,
-        'department': 'PR',
-        'action': 'Мониторить репутационный фон конкурента',
-        'comment': 'Рост задолженности — репутационный риск',
-    },
-    'https://news.rambler.ru/incident/54321': {
-        'priority': PriorityLevel.p1,
-        'category': 'надзорная санкция и юридический риск',
-        'tonality': TonalityLevel.negative,
-        'department': 'Юристы',
-        'action': 'Отследить ход судебного разбирательства',
-        'comment': 'Судебный процесс вокруг конкурента',
-    },
+    news.url: {
+        'priority': news.priority,
+        'category': news.category,
+        'tonality': news.tonality,
+        'department': news.department,
+        'action': news.action,
+        'comment': news.comment,
+    }
+    for news in NEWS
+    if news.is_clean
 }
 
 DEFAULT_MARKUP = {
@@ -193,4 +134,4 @@ async def clear(session: AsyncSession) -> int:
 if __name__ == '__main__':
     from core.scripts.stages.cascade import run_stage
 
-    run_stage('BP-3 (разметка)', clear, seed)
+    run_stage('BP-3 (categorized_event)', clear, seed)

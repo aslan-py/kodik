@@ -1,0 +1,21 @@
+{
+  "meta": {
+    "search_task_id": 120,
+    "source": "https://fedresurs.ru/",
+    "competitor": "Тестовый ",
+    "trigger": "7736207543",
+    "source_request_url": "https://fedresurs.ru/search?q=7736207543",
+    "fetched_at": "2026-07-31T11:44:43.260609+00:00"
+  },
+  "items": [
+    {
+      "url": "https://fedresurs.ru/search?q=7736207543",
+      "title": "Parsed: Тестовый ",
+      "text": "некий заголовок",
+      "published_at": null,
+      "region": null,
+      "media_name": null,
+      "extra": {}
+    }
+  ]
+}

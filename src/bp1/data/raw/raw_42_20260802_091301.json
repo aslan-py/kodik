@@ -1,0 +1,9 @@
+{
+  "meta": {
+    "source": "https://api.hh.ru/",
+    "search_task_id": 42,
+    "competitor": "ООО \"ПТП \"СТАНДАРТ\"",
+    "trigger": "Москва"
+  },
+  "items": []
+}

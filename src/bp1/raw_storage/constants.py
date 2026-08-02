@@ -4,8 +4,12 @@
 для единого управления конфигурацией модуля.
 """
 
+from pathlib import Path
+
 # ── Пути и файловая система ──────────────────────────────────────────────────
-DEFAULT_BASE_PATH = 'data/raw'
+DEFAULT_BASE_PATH_RAW = OUTPUT_DIR = str(
+    Path(__file__).resolve() / 'src' / 'data' / 'raw'
+)
 JSON_INDENT = 2
 FILE_EXTENSION = '.json'
 JSON_GLOB_PATTERN = '*.json'

@@ -31,7 +31,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import RawItemStatus, raw_item_status
@@ -150,6 +150,23 @@ class SearchTask(Base, Mixin, ActiveMixin):
             unique=True,
             postgresql_where=text('trigger_id IS NULL'),
         ),
+    )
+
+    # Relationships для удобного доступа к связанным данным
+    competitor: Mapped['Competitor'] = relationship(
+        'Competitor',
+        backref='search_tasks',
+        lazy='selectin',
+    )
+    source: Mapped['Source'] = relationship(
+        'Source',
+        backref='search_tasks',
+        lazy='selectin',
+    )
+    trigger: Mapped['Trigger | None'] = relationship(
+        'Trigger',
+        backref='search_tasks',
+        lazy='selectin',
     )
 
 

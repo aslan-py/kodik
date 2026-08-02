@@ -252,11 +252,40 @@ async def run_parser_async(
                     settings.bp1_html_dir, html_filename
                 )
 
-                # Копируем файл
+                # Копируем файл с повторными попытками (на Windows файл может
+                # быть временно заблокирован антивирусом/индексацией)
                 import shutil
+                import time
 
-                shutil.copy2(parser_file_path, html_file_path)
-                logger.info(f'HTML file copied to: {html_file_path}')
+                max_retries = 3
+                copy_ok = False
+                for copy_attempt in range(1, max_retries + 1):
+                    try:
+                        shutil.copy2(parser_file_path, html_file_path)
+                        copy_ok = True
+                        break
+                    except PermissionError as e:
+                        if copy_attempt < max_retries:
+                            delay = 0.5 * copy_attempt
+                            logger.warning(
+                                'Copy attempt %d/%d failed: %s. '
+                                'Retrying in %.1fs...',
+                                copy_attempt,
+                                max_retries,
+                                e,
+                                delay,
+                            )
+                            time.sleep(delay)
+                        else:
+                            logger.error(
+                                'Failed to copy HTML after %d attempts: %s',
+                                max_retries,
+                                e,
+                            )
+                            html_file_path = None
+
+                if copy_ok:
+                    logger.info('HTML file copied to: %s', html_file_path)
 
         # 11. Сохраняем raw_data как JSON файл
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')

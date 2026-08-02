@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "source": "https://kad.arbitr.ru/",
+    "search_task_id": 41,
+    "competitor": "ООО \"АРХИТЕХ ИИ\"",
+    "trigger": "Суд"
+  },
+  "items": [
+    {
+      "url": "https://kad.arbitr.ru/9745",
+      "title": "[stub] Заглушка",
+      "text": "Адаптер ещё не реализован",
+      "published_at": null,
+      "region": null,
+      "media_name": null,
+      "extra": {}
+    }
+  ]
+}

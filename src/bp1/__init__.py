@@ -19,6 +19,9 @@ from .base_parser import (
     ParsedResponse,
     ParserFactory,
 )
+
+# Celery задачи (для production режима)
+from .celery_tasks import run_parser_task
 from .parsers import (
     FedresursAdapter,
     FipsAdapter,
@@ -30,9 +33,21 @@ from .parsers import (
     VKAdapter,
     ZakupkiAdapter,
 )
+
+# Runner - оркестратор пайплайна
+from .runner import (
+    BPRunner,
+    RunMode,
+    run_pipeline,
+    run_pipeline_sync,
+)
 from .tasks import run_parser_async
 
+# CLI интерфейс (импортируется для удобства, но не экспортируется)
+# from .cli import main
+
 __all__ = [
+    'BPRunner',
     'BaseParser',
     'Competitor',
     'FedresursAdapter',
@@ -47,10 +62,15 @@ __all__ = [
     'ParserFactory',
     'RawItem',
     'RawItemStatus',
+    'RunMode',
     'SearchTask',
     'Source',
     'Trigger',
     'VKAdapter',
     'ZakupkiAdapter',
+    'create_runner',
     'run_parser_async',
+    'run_parser_task',
+    'run_pipeline',
+    'run_pipeline_sync',
 ]

@@ -65,11 +65,6 @@ class Settings(BaseSettings):
         """Папка для сохранения raw данных (JSON)."""
         return str(Path(self.bp1_data_root) / 'raw')
 
-    @property
-    def bp1_parser_dir(self) -> str:
-        """Папка для сохранения HTML от парсера."""
-        return str(Path(self.bp1_data_root) / 'parser')
-
     # ===== Mail =====
     mail_username: str
     mail_password: str

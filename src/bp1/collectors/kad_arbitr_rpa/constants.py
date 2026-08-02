@@ -1,3 +1,5 @@
+from pathlib import Path
+
 # === URL ===
 BASE_URL = 'https://kad.arbitr.ru/'
 
@@ -39,7 +41,10 @@ USER_AGENTS = [
 ]
 
 # === Файлы ===
-DEFAULT_OUTPUT_DIR = './parsed_pages'
+
+DEFAULT_OUTPUT_DIR = str(
+    Path(__file__).resolve().parent.parent.parent / 'data' / 'html_pages'
+)
 FILE_TIMESTAMP_FORMAT = '%Y%m%d_%H%M%S'
 FILE_NAME_PREFIX = 'kad_inn_'
 FILE_EXTENSION = '.html'

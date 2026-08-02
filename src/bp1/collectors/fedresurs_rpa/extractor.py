@@ -27,7 +27,9 @@ class CompanyDataExtractor:
     """
 
     def __init__(self, logger: logging.Logger | None = None):
-        self._logger = logger or logging.getLogger(self.__class__.__name__)
+        self._logger = logger or logging.getLogger(
+            f'{__name__}.{self.__class__.__name__}'
+        )
 
     async def extract_company_data(self, page: Page) -> dict[str, Any]:
         """Извлечь все данные компании со страницы карточки.

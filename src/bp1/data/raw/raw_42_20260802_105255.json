@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "source": "https://api.hh.ru/",
+    "search_task_id": 42,
+    "competitor": "ООО \"ПТП \"СТАНДАРТ\"",
+    "trigger": "Москва"
+  },
+  "items": [
+    {
+      "url": "https://api.hh.ru/5347",
+      "title": "[stub] Заглушка",
+      "text": "Адаптер ещё не реализован",
+      "published_at": null,
+      "region": null,
+      "media_name": null,
+      "extra": {}
+    }
+  ]
+}

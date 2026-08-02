@@ -8,7 +8,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ============================================================================
 # ЕДИНЫЙ ВЫХОДНОЙ ФОРМАТ ДЛЯ ВСЕХ ПАРСЕРОВ
@@ -41,8 +41,8 @@ class ParsedItem(BaseModel):
         description='Источник-специфичные поля (зарплата, статус, ИНН и т.д.)',
     )
 
-    class Config:
-        json_schema_extra: ClassVar[dict] = {
+    model_config = ConfigDict(
+        json_schema_extra={
             'example': {
                 'url': 'https://fedresurs.ru/company/123',
                 'title': 'ООО "Ромашка"',
@@ -57,6 +57,7 @@ class ParsedItem(BaseModel):
                 },
             }
         }
+    )
 
 
 class ParsedResponse(BaseModel):
@@ -76,8 +77,8 @@ class ParsedResponse(BaseModel):
         ..., description='Список извлеченных событий'
     )
 
-    class Config:
-        json_schema_extra: ClassVar[dict] = {
+    model_config = ConfigDict(
+        json_schema_extra={
             'example': {
                 'meta': {
                     'search_task_id': 1,
@@ -102,6 +103,7 @@ class ParsedResponse(BaseModel):
                 ],
             }
         }
+    )
 
 
 # ============================================================================

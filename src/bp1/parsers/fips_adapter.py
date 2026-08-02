@@ -5,8 +5,9 @@
 """
 
 import logging
+import random
 
-from ..base_parser import BaseParser, ParsedResponse
+from ..base_parser import BaseParser, ParsedItem, ParsedResponse
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +20,24 @@ class FipsAdapter(BaseParser):
 
     async def parse(self, url: str, **kwargs) -> ParsedResponse:
         logger.info('Выполняется модуль парсинга: fips.ru')
+
+        source = self.get_source_name()
+        stub_url = f'{source}{random.randint(1000, 9999)}'
+
         return ParsedResponse(
             meta={
-                'source': self.get_source_name(),
+                'source': source,
                 'search_task_id': kwargs.get('search_task_id'),
                 'competitor': kwargs.get('competitor'),
                 'trigger': kwargs.get('trigger'),
             },
-            items=[],
+            items=[
+                ParsedItem(
+                    url=stub_url,
+                    title='[stub] Заглушка',
+                    text='Адаптер ещё не реализован',
+                ),
+            ],
         )
 
     def get_source_name(self) -> str:

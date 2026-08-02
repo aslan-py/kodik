@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .browser import BrowserManager
 from .config import get_human_delay, get_random_delay
-from .constants import BASE_URL, MS_PER_SECOND, SELECTORS
+from .constants import BASE_URL, FILE_NAME_PREFIX, MS_PER_SECOND, SELECTORS
 from .exceptions import ElementNotFoundError, TimeoutExceededError
 from .schemas import ParsingRequest, ParsingResult
 from .utils import format_proxy_string, format_timestamp
@@ -148,7 +148,9 @@ class KadArbitrParser:
                 ) from err
             logger.info('Результаты загружены')
 
-            filename = f'kad_inn_{request.inn}_{format_timestamp()}.html'
+            filename = (
+                f'{FILE_NAME_PREFIX}{request.inn}_{format_timestamp()}.html'
+            )
             file_path = output_dir / filename
             file_path.write_text(await page.content(), encoding='utf-8')
             logger.info('HTML сохранён: %s', file_path)

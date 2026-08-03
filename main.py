@@ -18,9 +18,9 @@ from src.bp3.modules.tone_analysis_module import ToneAnalysisModule
 
 if __name__ == '__main__':
     load_dotenv()
-    api_key = os.getenv('OPENROUTER_API_KEY')
+    api_key = os.getenv('KODIK_API_KEY')
     if not api_key:
-        raise ValueError('OPENROUTER_API_KEY не найден')
+        raise ValueError('KODIK_API_KEY не найден')
 
     llm = get_llm()
 

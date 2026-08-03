@@ -1,9 +1,10 @@
 import os
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, exists, not_, select
+from sqlalchemy import and_, create_engine, exists, func, not_, select
 from sqlalchemy.orm import sessionmaker
 
+from src.bp1.models import Source
 from src.bp2.models import NormalizedItem
 from src.bp3.models import CategorizedEvent, Category, Department
 
@@ -20,12 +21,20 @@ Session = sessionmaker(bind=engine)
 
 def fetch_data():
     with Session() as session:
-        stmt_items = select(NormalizedItem.id, NormalizedItem.text).where(
-            not_(
-                exists().where(
-                    CategorizedEvent.normalized_item_id == NormalizedItem.id
+        stmt_items = (
+            select(NormalizedItem.id, NormalizedItem.text)
+            .where(
+                and_(
+                    NormalizedItem.status == 'ok',
+                    not_(
+                        exists().where(
+                            CategorizedEvent.normalized_item_id
+                            == NormalizedItem.id
+                        )
+                    ),
                 )
             )
+            .limit(10)
         )
 
         rows_items = session.execute(stmt_items).mappings().all()
@@ -42,3 +51,44 @@ def fetch_data():
         depart_list = [{row['name']: row['note']} for row in rows_dep]
 
     return news_list, cat_list, depart_list
+
+
+def fetch_news_stats():
+    with Session() as session:
+        stmt = (
+            select(
+                NormalizedItem.competitor_id,
+                func.count().label('news_count'),
+                func.count(func.distinct(NormalizedItem.source_id)).label(
+                    'source_count'
+                ),
+            )
+            .where(
+                and_(
+                    NormalizedItem.status == 'ok',
+                    not_(
+                        exists().where(
+                            CategorizedEvent.normalized_item_id
+                            == NormalizedItem.id
+                        )
+                    ),
+                )
+            )
+            .group_by(NormalizedItem.competitor_id)
+        )
+
+        rows = session.execute(stmt).mappings().all()
+        news_stats = {
+            row['competitor_id']: {
+                'news_count': row['news_count'],
+                'source_count': row['source_count'],
+            }
+            for row in rows
+        }
+
+        stmt_sources = select(func.count(func.distinct(Source.id))).where(
+            Source.is_active == 'True'
+        )
+        count_sources = session.execute(stmt_sources).scalar()
+
+    return news_stats, count_sources

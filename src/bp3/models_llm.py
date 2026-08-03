@@ -11,6 +11,8 @@ class ProjectContext(BaseModel):
     news: list[dict] | None = None
     manual_cat: list[dict] | None = None
     manual_dept: list[dict] | None = None
+    news_stats: dict[int, dict[str, int]] | None = None
+    count_sources: int | None = None
 
     # Категоризация
     category_news: list[dict] | None = None
@@ -26,6 +28,9 @@ class ProjectContext(BaseModel):
     # Комментарии и действия
     comments: list[dict] | None = None
     actions: list[dict] | None = None
+
+    # Расчет медиа активности
+    media_activity_index: list[dict] | None = None
 
 
 # ========== Базовые классы модулей ==========
@@ -66,14 +71,12 @@ class CategorizedResponse(BaseModel):
     )
 
 
-ToneCategory = Literal[
-    'Позитивная', 'Негативная', 'Тревожная', 'Нейтральная', 'Нерелевантно'
-]
+ToneLevel = Literal['positive', 'negative', 'alarming', 'neutral', 'irrelevant']
 
 
 class ToneItem(BaseModel):
     id: int
-    tone_of_news: ToneCategory
+    tone_of_news: ToneLevel
 
 
 class ToneResponse(BaseModel):

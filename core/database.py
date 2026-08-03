@@ -9,7 +9,7 @@
 - get_async_session: генератор сессий для использования в парсерах/воркерах
 
 Используется парсерами, Celery-тасками, скриптами напрямую.
-FastAPI-обвязка (Depends) добавляется отдельно в api/deps.py.
+FastAPI-обвязка (Depends) добавляется отдельно в api/dependencies.py.
 """
 
 import re

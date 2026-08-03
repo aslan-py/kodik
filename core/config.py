@@ -90,5 +90,13 @@ class Settings(BaseSettings):
     # parsing_headless: bool = True
     # parsing_timeout_ms: int = 30000
 
+    # ===== FASTAPI SETTINGS =====
+    app_title: str = 'Конкурентная разведка'
+    description: str = 'API управлния проектом конкурентная разведка'
+
+    # ===== JWT =====
+    jwt_secret_key: str
+    jwt_expire_minutes: int = 60
+
 
 settings = Settings()

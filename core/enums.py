@@ -139,6 +139,26 @@ class AlertStatus(enum.StrEnum):
 
 
 # ============================================================================
+#  API — авторизация (роль ≠ отдел, роль — отдельная ось прав доступа)
+# ============================================================================
+
+
+class UserRole(enum.StrEnum):
+    """Роль пользователя API — уровень доступа, не отдел (department_id).
+
+    pending — только что зарегистрировался, доступа нет (кроме GET /users/me);
+    viewer — читает витрину/свои задачи, править не может;
+    analyst — правит витрину, подтверждает pending → viewer/analyst;
+    admin — + управление пользователями/справочниками.
+    """
+
+    pending = 'pending'
+    viewer = 'viewer'
+    analyst = 'analyst'
+    admin = 'admin'
+
+
+# ============================================================================
 #  BP-6 — план действий
 # ============================================================================
 
@@ -180,3 +200,4 @@ delivery_mode = Enum(DeliveryMode, name='delivery_mode')
 alert_status = Enum(AlertStatus, name='alert_status')
 action_status = Enum(ActionStatus, name='action_status')
 candidate_status = Enum(CandidateStatus, name='candidate_status')
+user_role = Enum(UserRole, name='user_role')

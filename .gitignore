@@ -159,3 +159,5 @@ my_folder
 
 # ── Сырые данные (HTML, JSONB) — не коммитятся ──────────────────────────────
 /data/
+src/bp1/data/html_pages/*
+src/bp1/data/raw/*

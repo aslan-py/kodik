@@ -162,6 +162,7 @@ async def user(session, department):
         department_id=department.id,
         email=f'{uuid4().hex[:8]}@test.ru',
         telegram_id=uuid4().int % 1_000_000_000,
+        password_hash='test-hash',
     )
     session.add(u)
     await session.flush()
@@ -551,12 +552,14 @@ async def test_multiple_recipients_create_multiple_alerts(
         department_id=department.id,
         email=f'{uuid4().hex[:8]}@test.ru',
         telegram_id=uuid4().int % 1_000_000_000,
+        password_hash='test-hash',
     )
     u2 = User(
         full_name='Получатель Два',
         department_id=department.id,
         email=f'{uuid4().hex[:8]}@test.ru',
         telegram_id=uuid4().int % 1_000_000_000,
+        password_hash='test-hash',
     )
     session.add_all([u1, u2])
     await session.flush()

@@ -27,6 +27,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.security import hash_password
 from core.enums import DeliveryMode, PriorityLevel, StopType
 from core.scripts.stages.cascade import (
     DICTIONARY_ORDER,
@@ -249,6 +250,12 @@ CHANNELS = ['telegram', 'email']
 # telegram_id — фейковые числовые id (не настоящие chat_id): сидер работает
 # с deliver=False (src/bp5/pipeline.py), в сеть не стучится, поэтому эти
 # значения нужны только чтобы удовлетворить NOT NULL/unique в БД.
+#
+# password_hash тоже NOT NULL (User — ещё и логин API, см. FASTAPI_PLAN.md):
+# у всех демо-пользователей один и тот же демо-пароль, реальный вход через
+# них не предполагается — это получатели алертов, а не боевые аккаунты.
+DEMO_USER_PASSWORD = 'Kodik-Demo-2026!'
+
 USERS = [
     {
         'full_name': 'Иванов Пётр',
@@ -426,12 +433,14 @@ async def seed(session: AsyncSession) -> int:
     # из уже залитых Department.
     if await _is_empty(session, User):
         dept = await _key_to_id(session, Department, Department.name)
+        demo_password_hash = hash_password(DEMO_USER_PASSWORD)
         session.add_all(
             User(
                 full_name=u['full_name'],
                 department_id=dept[u['department']],
                 email=u['email'],
                 telegram_id=u['telegram_id'],
+                password_hash=demo_password_hash,
             )
             for u in USERS
         )

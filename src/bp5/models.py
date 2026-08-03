@@ -48,9 +48,11 @@ from core.enums import (
     AlertStatus,
     DeliveryMode,
     PriorityLevel,
+    UserRole,
     alert_status,
     delivery_mode,
     priority_level,
+    user_role,
 )
 
 # ============================================================================
@@ -110,10 +112,19 @@ class Channel(Base, Mixin, ActiveMixin):
 class User(Base, Mixin, ActiveMixin):
     """Получатели алертов — конкретные люди, не отделы.
 
+    Также пользователь API: логинится по email+паролю (`password_hash`),
+    доступ определяется `role` (ось прав, НЕ путать с department_id — тот
+    просто «в каком отделе числится», справочно).
+
     department_id — справочно (в каком отделе числится), НЕ источник для
     рассылки: список получателей курируется вручную в routing_rule и может
     не совпадать со штатом отдела. is_active — уволен/в отпуске, гасим
     флагом, не удаляем (иначе потеряется история alert через FK RESTRICT).
+
+    telegram_id нужен для алертов, но неизвестен на момент self-service
+    регистрации по email — поэтому nullable: пользователь может залогиниться
+    и работать в системе, но не получать telegram-алерты, пока сам не
+    привяжет telegram_id.
     """
 
     full_name: Mapped[str | None] = mapped_column(
@@ -127,14 +138,26 @@ class User(Base, Mixin, ActiveMixin):
     email: Mapped[str] = mapped_column(
         StrippedString(256),
         unique=True,
-        comment='Адрес для канала email',
+        comment='Адрес для канала email, он же логин API',
     )
-    telegram_id: Mapped[int] = mapped_column(
+    telegram_id: Mapped[int | None] = mapped_column(
         BigInteger,
         unique=True,
         comment=(
             'Числовой chat_id для канала telegram (sendMessage требует '
-            'id, не @username)'
+            'id, не @username). NULL, пока пользователь не привязал telegram'
+        ),
+    )
+    password_hash: Mapped[str] = mapped_column(
+        StrippedString(256),
+        comment='bcrypt-хэш пароля для логина в API',
+    )
+    role: Mapped[UserRole] = mapped_column(
+        user_role,
+        default=UserRole.pending,
+        server_default=text("'pending'"),
+        comment=(
+            'Уровень доступа к API (не отдел): pending/viewer/analyst/admin'
         ),
     )
 

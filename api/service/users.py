@@ -25,8 +25,13 @@ class UserService:
     async def get_me(self, user: User) -> UserRead:
         return UserRead.model_validate(user)
 
-    async def list_users(self) -> list[UserRead]:
-        users = await self.crud.list_all()
+    async def list_users(
+        self,
+        full_name: str | None = None,
+        email: str | None = None,
+        department_id: int | None = None,
+    ) -> list[UserRead]:
+        users = await self.crud.list_all(full_name, email, department_id)
         return [UserRead.model_validate(u) for u in users]
 
     async def update_role(self, user_id: int, data: UserRoleUpdate) -> UserRead:

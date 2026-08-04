@@ -5,9 +5,12 @@
 flush, так что состояние видно внутри транзакции).
 """
 
+from uuid import uuid4
+
 from api.crud.users import MAX_RESET_ATTEMPTS, UserCRUD
 from api.schemas.users import UserRegister
 from api.security import hash_password, verify_password
+from src.bp3.models import Department
 from src.bp5.models import User
 
 
@@ -79,3 +82,51 @@ class TestPasswordResetCode:
 
         assert code.used_at is not None
         assert await crud.get_active_reset_code(user.id) is None
+
+
+class TestListAllFilters:
+    async def test_filters_by_full_name_substring(self, session):
+        crud = UserCRUD(session)
+        marker = uuid4().hex[:8]
+        await _make_user(
+            session,
+            email=f'{uuid4().hex[:8]}@example.com',
+            full_name=f'Иванов {marker}',
+        )
+        await _make_user(
+            session,
+            email=f'{uuid4().hex[:8]}@example.com',
+            full_name='Совсем другое имя',
+        )
+
+        users = await crud.list_all(full_name=marker)
+
+        assert len(users) == 1
+        assert marker in users[0].full_name
+
+    async def test_filters_by_email_substring(self, session):
+        crud = UserCRUD(session)
+        marker = uuid4().hex[:8]
+        await _make_user(session, email=f'{marker}@example.com')
+        await _make_user(session, email=f'{uuid4().hex[:8]}@example.com')
+
+        users = await crud.list_all(email=marker)
+
+        assert len(users) == 1
+        assert marker in users[0].email
+
+    async def test_filters_by_department_id(self, session):
+        department = Department(name=f'__тест-отдел-{uuid4().hex[:8]}__')
+        session.add(department)
+        await session.flush()
+        crud = UserCRUD(session)
+        target = await _make_user(
+            session,
+            email=f'{uuid4().hex[:8]}@example.com',
+            department_id=department.id,
+        )
+        await _make_user(session, email=f'{uuid4().hex[:8]}@example.com')
+
+        users = await crud.list_all(department_id=department.id)
+
+        assert {u.id for u in users} == {target.id}

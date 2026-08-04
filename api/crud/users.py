@@ -45,8 +45,25 @@ class UserCRUD:
     async def department_exists(self, department_id: int) -> bool:
         return await self.session.get(Department, department_id) is not None
 
-    async def list_all(self) -> Sequence[User]:
-        result = await self.session.execute(select(User))
+    async def list_all(
+        self,
+        full_name: str | None = None,
+        email: str | None = None,
+        department_id: int | None = None,
+    ) -> Sequence[User]:
+        """Список пользователей с опциональными фильтрами (все — AND).
+
+        full_name/email — подстрока без учёта регистра (ilike), не
+        требует точного совпадения. department_id — точное совпадение.
+        """
+        stmt = select(User)
+        if full_name is not None:
+            stmt = stmt.where(User.full_name.ilike(f'%{full_name}%'))
+        if email is not None:
+            stmt = stmt.where(User.email.ilike(f'%{email}%'))
+        if department_id is not None:
+            stmt = stmt.where(User.department_id == department_id)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
 
     async def create(self, data: UserRegister) -> User:

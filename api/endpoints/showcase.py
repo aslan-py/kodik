@@ -6,6 +6,8 @@
 viewer/analyst/admin (не pending). Правка — только analyst/admin.
 """
 
+from datetime import date
+
 from fastapi import APIRouter
 
 from api.dependencies import EditorDep, SessionDep, ViewerDep
@@ -24,7 +26,13 @@ router = APIRouter()
     description=(
         'Доступ: `viewer`, `analyst`, `admin` (не `pending`).\n\n'
         'Пагинация — `limit`/`offset`, сортировка по `published_at` '
-        '(новые сверху).'
+        '(новые сверху).\n\n'
+        'Фильтры (можно комбинировать): `title`/`region`/`competitor` — '
+        'подстрока без учёта регистра; `category`/`priority`/`department` '
+        '— точное совпадение с готовой подписью витрины (например, '
+        '`priority=П1`); `published_from`/`published_to` — диапазон дат '
+        '(включительно). Нужны, чтобы найти конкретное событие и его '
+        '`id` для `POST /action-items`, не листая всю витрину.'
     ),
 )
 async def list_showcase(
@@ -32,9 +40,26 @@ async def list_showcase(
     _viewer: ViewerDep,
     limit: int = 100,
     offset: int = 0,
+    title: str | None = None,
+    category: str | None = None,
+    priority: str | None = None,
+    region: str | None = None,
+    competitor: str | None = None,
+    department: str | None = None,
+    published_from: date | None = None,
+    published_to: date | None = None,
 ) -> list[ShowcaseEventRead]:
     return await ShowcaseService(session).list_events(
-        limit=limit, offset=offset
+        limit=limit,
+        offset=offset,
+        title=title,
+        category=category,
+        priority=priority,
+        region=region,
+        competitor=competitor,
+        department=department,
+        published_from=published_from,
+        published_to=published_to,
     )
 
 

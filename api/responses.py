@@ -51,6 +51,11 @@ CURRENT_PASSWORD_RESPONSE = {
         'при смене email/пароля'
     ),
 }
+ACTION_ITEM_CONFLICT_RESPONSE = {
+    status.HTTP_409_CONFLICT: _response(
+        'assigned_user_id не состоит в указанном department_id'
+    ),
+}
 
 # ============================================================================
 #  Составы под конкретные эндпоинты (api/endpoints/*.py)
@@ -77,4 +82,22 @@ SHOWCASE_DETAIL_RESPONSES = {
     **UNAUTHORIZED_RESPONSE,
     **FORBIDDEN_RESPONSE,
     **NOT_FOUND_RESPONSE,
+}
+ACTION_ITEM_LIST_RESPONSES = {**UNAUTHORIZED_RESPONSE, **FORBIDDEN_RESPONSE}
+ACTION_ITEM_DETAIL_RESPONSES = {
+    **UNAUTHORIZED_RESPONSE,
+    **FORBIDDEN_RESPONSE,
+    **NOT_FOUND_RESPONSE,
+}
+ACTION_ITEM_CREATE_RESPONSES = {
+    **UNAUTHORIZED_RESPONSE,
+    **FORBIDDEN_RESPONSE,
+    **NOT_FOUND_RESPONSE,
+    **ACTION_ITEM_CONFLICT_RESPONSE,
+}
+ACTION_ITEM_UPDATE_RESPONSES = {
+    **UNAUTHORIZED_RESPONSE,
+    **FORBIDDEN_RESPONSE,
+    **NOT_FOUND_RESPONSE,
+    **ACTION_ITEM_CONFLICT_RESPONSE,
 }

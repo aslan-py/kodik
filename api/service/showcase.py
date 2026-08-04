@@ -3,6 +3,8 @@
 Роутер (api/endpoints/showcase.py) только вызывает методы ShowcaseService.
 """
 
+from datetime import date
+
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,9 +20,30 @@ class ShowcaseService:
         self.crud = ShowcaseCRUD(session)
 
     async def list_events(
-        self, limit: int = 100, offset: int = 0
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        title: str | None = None,
+        category: str | None = None,
+        priority: str | None = None,
+        region: str | None = None,
+        competitor: str | None = None,
+        department: str | None = None,
+        published_from: date | None = None,
+        published_to: date | None = None,
     ) -> list[ShowcaseEventRead]:
-        events = await self.crud.list_all(limit=limit, offset=offset)
+        events = await self.crud.list_all(
+            limit=limit,
+            offset=offset,
+            title=title,
+            category=category,
+            priority=priority,
+            region=region,
+            competitor=competitor,
+            department=department,
+            published_from=published_from,
+            published_to=published_to,
+        )
         return [ShowcaseEventRead.model_validate(e) for e in events]
 
     async def get_event(self, showcase_id: int) -> ShowcaseEventRead:

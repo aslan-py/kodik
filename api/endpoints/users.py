@@ -65,13 +65,21 @@ async def update_me(
     description=(
         'Доступ: только `analyst` и `admin`.\n\n'
         'По этому списку видно, у кого `role=pending` — их нужно '
-        'подтвердить через `PATCH /users/{id}/role`.'
+        'подтвердить через `PATCH /users/{id}/role`.\n\n'
+        'Фильтры (можно комбинировать): `full_name`/`email` — подстрока '
+        'без учёта регистра, `department_id` — точное совпадение.'
     ),
 )
 async def list_users(
-    session: SessionDep, _approver: ApproverDep
+    session: SessionDep,
+    _approver: ApproverDep,
+    full_name: str | None = None,
+    email: str | None = None,
+    department_id: int | None = None,
 ) -> list[UserRead]:
-    return await UserService(session).list_users()
+    return await UserService(session).list_users(
+        full_name, email, department_id
+    )
 
 
 @router.patch(

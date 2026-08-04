@@ -274,8 +274,8 @@ async def run_bp5() -> dict:
         return summary
 
 
-# if __name__ == '__main__':
-#     import asyncio
+if __name__ == '__main__':
+    import asyncio
 
-#     result = asyncio.run(run_bp5())
-#     print(result)
+    result = asyncio.run(run_bp5())
+    print(result)

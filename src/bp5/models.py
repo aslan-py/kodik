@@ -169,6 +169,44 @@ class User(Base, Mixin, ActiveMixin):
     )
 
 
+class PasswordResetCode(Base, Mixin):
+    """Код сброса пароля (6 цифр), отправляется на email пользователя.
+
+    Эфемерные данные (не audit-история, как Alert) — поэтому
+    ondelete='CASCADE': удаление вместе с пользователем ничего не теряет.
+    Один активный код на пользователя: при новом запросе сброса старые
+    неиспользованные коды этого user_id удаляются (api/crud/users.py).
+    code_hash — bcrypt через тот же hash_password/verify_password, что и
+    пароли (api/security.py), отдельный механизм хэширования не заводим.
+    """
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey('user.id', ondelete='CASCADE'),
+        comment='Кому принадлежит код',
+    )
+    code_hash: Mapped[str] = mapped_column(
+        StrippedString(256), comment='bcrypt-хэш 6-значного кода'
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), comment='Когда код перестаёт быть валиден'
+    )
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment='Когда код использован (успешно или исчерпаны попытки)',
+    )
+    attempts: Mapped[int] = mapped_column(
+        default=0,
+        server_default=text('0'),
+        comment='Число неверных попыток ввода — защита от перебора',
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        comment='Когда код сгенерирован',
+    )
+
+
 class RoutingRule(Base, Mixin, ActiveMixin):
     """Матрица маршрутизации: тип + приоритет → получатель + канал + режим.
 

@@ -98,5 +98,13 @@ class Settings(BaseSettings):
     jwt_secret_key: str
     jwt_expire_minutes: int = 60
 
+    # ===== Сброс пароля =====
+    password_reset_code_expire_minutes: int = 10
+
+    # ===== AI-ассистент (BP-6, генерация action_item) =====
+    deepseek_token: str
+    deepseek_base_url: str = 'https://api.deepseek.com'
+    deepseek_model: str = 'deepseek-chat'
+
 
 settings = Settings()

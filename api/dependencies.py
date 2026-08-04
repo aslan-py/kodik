@@ -5,6 +5,11 @@ core.database остаётся framework-agnostic, Depends живёт тольк
 get_current_user — декодирует JWT, читает User по sub. require_role(...) —
 фабрика зависимостей для проверки role на конкретном роутере: ролей всего
 4 (core.enums.UserRole), отдельная библиотека прав не нужна.
+
+ViewerDep/EditorDep/ApproverDep — готовые Annotated-алиасы под конкретные
+пороги доступа, переиспользуемые в api/endpoints/*.py. Собраны в одном
+месте (а не объявлены по одному в каждом файле эндпоинтов), чтобы вся
+матрица доступа была видна сразу, без открытия каждого роутера.
 """
 
 from collections.abc import Callable
@@ -63,3 +68,18 @@ def require_role(*allowed: UserRole) -> Callable[[User], User]:
         return user
 
     return checker
+
+
+# Чтение витрины и т.п. — viewer/analyst/admin (не pending).
+ViewerDep = Annotated[
+    User,
+    Depends(require_role(UserRole.viewer, UserRole.analyst, UserRole.admin)),
+]
+# Правка витрины и т.п. — только analyst/admin.
+EditorDep = Annotated[
+    User, Depends(require_role(UserRole.analyst, UserRole.admin))
+]
+# Подтверждение pending -> роль, смена роли — только analyst/admin.
+ApproverDep = Annotated[
+    User, Depends(require_role(UserRole.analyst, UserRole.admin))
+]

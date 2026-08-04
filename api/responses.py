@@ -40,6 +40,17 @@ CONFLICT_RESPONSE = {
 INVALID_CREDENTIALS_RESPONSE = {
     status.HTTP_401_UNAUTHORIZED: _response('Неверный email или пароль'),
 }
+INVALID_RESET_CODE_RESPONSE = {
+    status.HTTP_400_BAD_REQUEST: _response(
+        'Код сброса пароля неверен, истёк или исчерпаны попытки'
+    ),
+}
+CURRENT_PASSWORD_RESPONSE = {
+    status.HTTP_401_UNAUTHORIZED: _response(
+        'Токен не передан/невалиден, либо current_password не совпадает '
+        'при смене email/пароля'
+    ),
+}
 
 # ============================================================================
 #  Составы под конкретные эндпоинты (api/endpoints/*.py)
@@ -47,7 +58,14 @@ INVALID_CREDENTIALS_RESPONSE = {
 
 REGISTER_RESPONSES = {**CONFLICT_RESPONSE, **NOT_FOUND_RESPONSE}
 LOGIN_RESPONSES = {**INVALID_CREDENTIALS_RESPONSE}
+LOGOUT_RESPONSES = {**UNAUTHORIZED_RESPONSE}
+PASSWORD_RESET_CONFIRM_RESPONSES = {**INVALID_RESET_CODE_RESPONSE}
 ME_RESPONSES = {**UNAUTHORIZED_RESPONSE}
+ME_UPDATE_RESPONSES = {
+    **CURRENT_PASSWORD_RESPONSE,
+    **CONFLICT_RESPONSE,
+    **NOT_FOUND_RESPONSE,
+}
 USERS_LIST_RESPONSES = {**UNAUTHORIZED_RESPONSE, **FORBIDDEN_RESPONSE}
 USER_ROLE_UPDATE_RESPONSES = {
     **UNAUTHORIZED_RESPONSE,

@@ -98,5 +98,8 @@ class Settings(BaseSettings):
     jwt_secret_key: str
     jwt_expire_minutes: int = 60
 
+    # ===== Сброс пароля =====
+    password_reset_code_expire_minutes: int = 10
+
 
 settings = Settings()

@@ -1,30 +1,24 @@
-"""Пользователи API: GET /users/me, GET /users, PATCH /users/{id}/role.
+"""Пользователи API: GET/PATCH /users/me, GET /users, PATCH /users/{id}/role.
 
-GET /users/me доступен pending (единственный эндпоинт без require_role —
-FASTAPI_PLAN.md, п.4). Список и смена роли — только analyst/admin, это и
+Тонкий слой над UserService (api/service/users.py) — вся бизнес-логика
+там. GET /users/me доступен pending (единственный эндпоинт без require_role
+— FASTAPI_PLAN.md, п.4). Список и смена роли — только analyst/admin, это и
 есть механизм подтверждения pending → viewer/analyst.
 """
 
-from typing import Annotated
+from fastapi import APIRouter
 
-from fastapi import APIRouter, Depends, HTTPException, status
-
-from api.crud.users import UserCRUD
-from api.dependencies import CurrentUser, SessionDep, require_role
+from api.dependencies import ApproverDep, CurrentUser, SessionDep
 from api.responses import (
     ME_RESPONSES,
+    ME_UPDATE_RESPONSES,
     USER_ROLE_UPDATE_RESPONSES,
     USERS_LIST_RESPONSES,
 )
-from api.schemas.users import UserRead, UserRoleUpdate
-from core.enums import UserRole
-from src.bp5.models import User
+from api.schemas.users import UserRead, UserRoleUpdate, UserUpdateMe
+from api.service.users import UserService
 
 router = APIRouter()
-
-ApproverDep = Annotated[
-    User, Depends(require_role(UserRole.analyst, UserRole.admin))
-]
 
 
 @router.get(
@@ -37,8 +31,30 @@ ApproverDep = Annotated[
         'доступный сразу после регистрации, до подтверждения роли.'
     ),
 )
-async def read_me(user: CurrentUser) -> UserRead:
-    return UserRead.model_validate(user)
+async def read_me(user: CurrentUser, session: SessionDep) -> UserRead:
+    return await UserService(session).get_me(user)
+
+
+@router.patch(
+    '/me',
+    response_model=UserRead,
+    responses=ME_UPDATE_RESPONSES,
+    summary='Править свои данные',
+    description=(
+        'Доступ: любая роль, включая `pending`.\n\n'
+        'Правит `email`, `password`, `full_name`, `department_id`, '
+        '`telegram_id` — все поля опциональны (partial update). `role` '
+        'через этот эндпоинт изменить нельзя (её нет в схеме, лишнее поле '
+        'даёт 422).\n\n'
+        'Если меняется `email` или `password` — обязателен '
+        '`current_password`, иначе 401 (защита от смены логина/пароля '
+        'украденным токеном).'
+    ),
+)
+async def update_me(
+    data: UserUpdateMe, user: CurrentUser, session: SessionDep
+) -> UserRead:
+    return await UserService(session).update_me(user, data)
 
 
 @router.get(
@@ -55,8 +71,7 @@ async def read_me(user: CurrentUser) -> UserRead:
 async def list_users(
     session: SessionDep, _approver: ApproverDep
 ) -> list[UserRead]:
-    users = await UserCRUD(session).list_all()
-    return [UserRead.model_validate(u) for u in users]
+    return await UserService(session).list_users()
 
 
 @router.patch(
@@ -77,10 +92,4 @@ async def update_role(
     session: SessionDep,
     _approver: ApproverDep,
 ) -> UserRead:
-    crud = UserCRUD(session)
-    user = await crud.get_by_id(user_id)
-    if user is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, 'Пользователь не найден')
-    user = await crud.update_role(user, data.role)
-    await session.commit()
-    return UserRead.model_validate(user)
+    return await UserService(session).update_role(user_id, data)

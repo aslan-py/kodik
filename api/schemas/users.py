@@ -1,6 +1,6 @@
 """Pydantic-схемы регистрации/логина/чтения пользователя API."""
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from api.validators.users import CustomPassword
 from core.enums import UserRole
@@ -50,3 +50,42 @@ class UserRoleUpdate(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = 'bearer'
+
+
+class MessageResponse(BaseModel):
+    """Generic-подтверждение для эндпоинтов без содержательного тела."""
+
+    detail: str
+
+
+class PasswordResetRequest(BaseModel):
+    """Тело POST /auth/password-reset/request."""
+
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    """Тело POST /auth/password-reset/confirm."""
+
+    email: EmailStr
+    code: str = Field(pattern=r'^\d{6}$')
+    new_password: CustomPassword
+
+
+class UserUpdateMe(BaseModel):
+    """Тело PATCH /users/me — правка своих данных, без role/is_active.
+
+    extra='forbid': поле вроде `role` в теле запроса даёт 422, а не тихий
+    игнор — попыткаself-service повысить себе права видна сразу.
+    current_password обязателен, только если меняется email или password
+    (см. api/service/users.py::UserService.update_me).
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    email: EmailStr | None = None
+    password: CustomPassword | None = None
+    full_name: str | None = None
+    department_id: int | None = None
+    telegram_id: int | None = None
+    current_password: str | None = None

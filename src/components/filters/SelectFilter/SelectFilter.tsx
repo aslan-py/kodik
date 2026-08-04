@@ -1,6 +1,6 @@
 "use client";
 
-import { Select, SelectItem } from "@/components/ui/Select";
+import { Select } from "@/components/ui/Select";
 
 type Option = {
   label: string;
@@ -22,26 +22,16 @@ export function SelectFilter({
   onChange,
   className = "",
 }: TableSelectProps) {
-  const selectedLabel = options.find((o) => o.value === value)?.label ?? "Все";
+  const allOption = { label: `Все ${label}`, value: "" };
 
   return (
-    <Select label={label} className={className} buttonContent={<span className="text-(--color-strong)">{selectedLabel} {label}</span>}>
-      {(setOpen) => (
-        <>
-          <SelectItem active={!value} onClick={() => { onChange(""); setOpen(false); }}>
-            Все {label}
-          </SelectItem>
-          {options.map((option) => (
-            <SelectItem
-              key={option.value}
-              active={option.value === value}
-              onClick={() => { onChange(option.value); setOpen(false); }}
-            >
-              {option.label}
-            </SelectItem>
-          ))}
-        </>
-      )}
-    </Select>
+    <Select
+      label={label}
+      className={className}
+      value={value}
+      placeholder={`Все ${label}`}
+      options={[allOption, ...options]}
+      onChange={onChange}
+    />
   );
 }

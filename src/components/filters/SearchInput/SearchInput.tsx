@@ -18,6 +18,7 @@ export function SearchInput({
 }: SearchInputProps) {
   return (
     <Input
+      id="search"
       value={value}
       onChange={onChange}
       placeholder={placeholder}

@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  reactCompiler: true,
+  output: "standalone",
+  reactCompiler: process.env.NODE_ENV === "production",
 };
 
 

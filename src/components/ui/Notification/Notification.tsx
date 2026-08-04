@@ -1,12 +1,17 @@
 import styles from "./notification.module.css";
 
-export function Notification() {
+type NotificationProps = {
+  type: "success" | "error";
+  children?: React.ReactNode;
+};
+
+export function Notification({ type, children }: NotificationProps) {
+  const dotClass = type === "error" ? styles.dotError : styles.dot;
+
   return (
     <div className={styles.notification}>
-      <span className={styles.dot} />
-      <span>Задача успешно создана, событие передано в работу.</span>
+      <span className={dotClass} />
+      <span>{children}</span>
     </div>
   );
 }
-
-export default Notification;

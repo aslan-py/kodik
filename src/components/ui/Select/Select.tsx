@@ -1,7 +1,23 @@
 "use client";
 
-import { useRef, useState, useEffect, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+
 import { Icon } from "@/components/ui/Icon/Icon";
+import { SelectItem } from "./SelectItem";
+
+import styles from "./select.module.css";
+
+type Option = {
+  label: string;
+  value: string;
+};
 
 type SelectProps = {
   label?: string;
@@ -9,8 +25,12 @@ type SelectProps = {
   direction?: "down" | "up";
   buttonClassName?: string;
   buttonIconClassName?: string;
-  buttonContent: ReactNode;
-  children: ReactNode | ((setOpen: (open: boolean) => void) => ReactNode);
+  buttonContent?: ReactNode;
+  children?: ReactNode | ((setOpen: (open: boolean) => void) => ReactNode);
+  value?: string;
+  placeholder?: string;
+  options?: Option[];
+  onChange?: (value: string) => void;
 };
 
 export function Select({
@@ -21,48 +41,156 @@ export function Select({
   buttonIconClassName = "",
   buttonContent,
   children,
+  value,
+  placeholder = "",
+  options,
+  onChange,
+
 }: SelectProps) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const openRef = useRef(open);
-  openRef.current = open;
+
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const listboxId = useId();
+  const labelId = useId();
 
   useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (openRef.current && ref.current && !ref.current.contains(e.target as Node)) {
+    if (!open) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
-    }
+    };
+
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [open]);
+
+  const selectedIndex =
+    options?.findIndex((option) => option.value === value) ?? -1;
+
+  const selectedLabel =
+    selectedIndex >= 0 ? options?.[selectedIndex].label : undefined;
+
+  const resolvedContent = buttonContent ?? selectedLabel ?? placeholder;
+
+  const selectOption = (option: Option) => {
+    onChange?.(option.value);
+    setOpen(false);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    switch (event.key) {
+      case "Enter":
+      case " ":
+        event.preventDefault();
+        setOpen((prev) => !prev);
+        break;
+
+      case "Escape":
+        setOpen(false);
+        break;
+
+      case "ArrowDown":
+        event.preventDefault();
+
+        if (!options?.length) return;
+
+        if (!open) {
+          setOpen(true);
+          return;
+        }
+
+        {
+          const next = (selectedIndex + 1) % options.length;
+
+          onChange?.(options[next].value);
+        }
+
+        break;
+
+      case "ArrowUp":
+        event.preventDefault();
+
+        if (!options?.length) return;
+
+        if (!open) {
+          setOpen(true);
+          return;
+        }
+
+        {
+          const previous =
+            selectedIndex <= 0 ? options.length - 1 : selectedIndex - 1;
+
+          onChange?.(options[previous].value);
+        }
+
+        break;
+    }
+  };
 
   return (
-    <label
-      className={`flex flex-col gap-2 text-xs text-(--color-muted) cursor-pointer ${className}`}
-    >
-      {label ? <span>{label}</span> : null}
-      <div ref={ref} className="relative">
+    <div className={`${styles.root} ${className}`}>
+      {label && (
+        <label id={labelId} className={styles.label}>
+          {label}
+        </label>
+      )}
+
+      <div ref={rootRef} className={styles.relative}>
         <button
           type="button"
-          onClick={() => setOpen(!open)}
-          className={`cursor-pointer flex w-full items-center justify-between gap-2 rounded-xlpx-3 text-sm outline-none transition not-first:${buttonClassName}`}
+          className={`${styles.button} ${
+            !selectedLabel ? styles.buttonPlaceholder : ""
+          } ${buttonClassName}`}
+          onClick={() => setOpen((prev) => !prev)}
+          onKeyDown={handleKeyDown}
+          aria-labelledby={label ? labelId : undefined}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={listboxId}
         >
-          {buttonContent}
-          <Icon name="arrow-down"
-            className={`h-4 w-4 transition-transform ${buttonIconClassName} ${open ? "rotate-180" : ""}`}
+          {resolvedContent}
+
+          <Icon
+            name="arrow-down"
+            className={`${styles.icon} ${buttonIconClassName} ${
+              open ? styles.iconOpen : ""
+            }`}
           />
         </button>
+
         {open && (
           <div
-            className={`absolute left-0 right-0 z-10 overflow-hidden rounded-xl shadow-lg ${
-              direction === "up" ? "bottom-full mb-1" : "top-full mt-1"
+            id={listboxId}
+            role="listbox"
+            className={`${styles.dropdown} ${
+              direction === "up" ? styles.dropdownUp : styles.dropdownDown
             }`}
           >
-            {typeof children === "function" ? children(setOpen) : children}
+            {children
+              ? typeof children === "function"
+                ? children(setOpen)
+                : children
+              : options?.map((option) => (
+                  <SelectItem
+                    key={option.value}
+                    active={option.value === value}
+                    // role="option"
+                    aria-selected={option.value === value}
+                    onClick={() => selectOption(option)}
+                  >
+                    {option.label}
+                  </SelectItem>
+                ))}
           </div>
         )}
       </div>
-    </label>
+    </div>
   );
 }

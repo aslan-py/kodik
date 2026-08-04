@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
+import styles from "./taglist.module.css";
 
 type TagListProps = {
-  items: ReactNode[];
+  items: string[];
   /** Начальное состояние: свёрнут (true) или развёрнут (false) */
   defaultExpanded?: boolean;
 };
@@ -28,6 +29,7 @@ export function TagList({
 
   return (
     <ul
+      className={styles.list}
       role={collapsible ? "button" : undefined}
       tabIndex={collapsible ? 0 : undefined}
       onClick={handleClick}
@@ -40,16 +42,14 @@ export function TagList({
       style={{
         cursor: collapsible ? "pointer" : "default",
         listStyle: "none",
-        padding: 0,
-        margin: 0,
       }}
     >
       {shown.map((item, i) => (
-        <li key={i}>{item}</li>
+        <li className={styles.badge} key={i}><span>{item}</span></li>
       ))}
       {collapsible && !expanded && (
-        <li style={{ color: "var(--color-accent, #3b82f6)" }}>
-          <span>{pluralize(items.length - 1)}</span>
+        <li>
+          <span className={styles.badge}>{pluralize(items.length - 1)}</span>
         </li>
       )}
     </ul>

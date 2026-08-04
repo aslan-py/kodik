@@ -1,6 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Icon } from "@/components/ui/Icon/Icon";
+import styles from "./select.module.css";
 
 type SelectItemProps = {
   active?: boolean;
@@ -12,16 +14,17 @@ export function SelectItem({
   active = false,
   onClick,
   children,
+  ...props
 }: SelectItemProps) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`cursor-pointer w-full bg-(--color-background) px-3 py-2 text-left text-sm text-(--color-strong) not-even:transition-colors hover:bg-zinc-100 ${
-        active ? "" : ""
-      }`}
+      {...props}
+      className={`${styles.item} ${active ? styles.itemActive : ""}`}
     >
-      {children}
+      <span>{children}</span>
+      {active && <Icon name="check" className={styles.checkmark} />}
     </button>
   );
 }

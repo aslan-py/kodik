@@ -1,96 +1,146 @@
 "use client";
 
 import { ReactNode, InputHTMLAttributes, TextareaHTMLAttributes } from "react";
+import clsx from "clsx";
+import styles from "./input.module.css";
 
-type BaseInputProps = {
+type InputProps = {
+  id: string;
+
   value: string;
   onChange: (value: string) => void;
-  className?: string;
-  inputClassName?: string;
+
+  label?: string;
+  placeholder?: string;
+
+  type?: "text" | "email" | "password" | "number" | "search";
+
+  multiline?: boolean;
+
   width?: string;
   height?: string;
+
+  disabled?: boolean;
+  readOnly?: boolean;
+
+  onClick?: () => void;
+
+  error?: string;
+
   startIcon?: ReactNode;
-};
+  endIcon?: ReactNode;
 
-type SingleLineProps = BaseInputProps & {
-  multiline?: false;
-  placeholder?: string;
-  type?: string;
+  className?: string;
+  inputClassName?: string;
+
   inputProps?: InputHTMLAttributes<HTMLInputElement>;
-};
-
-type MultiLineProps = BaseInputProps & {
-  multiline: true;
-  placeholder?: string;
   textareaProps?: TextareaHTMLAttributes<HTMLTextAreaElement>;
 };
 
-type InputProps = SingleLineProps | MultiLineProps;
-
 export function Input({
+  id,
+
   value,
   onChange,
-  className = "",
-  inputClassName = "",
+
+  label,
+  placeholder,
+
+  type = "text",
+  readOnly,
+
+  multiline = false,
+
   width,
   height,
+
+  disabled,
+
+  error,
+
   startIcon,
-  multiline = false,
-  ...rest
+  endIcon,
+
+  className,
+  inputClassName,
+  onClick,
+  inputProps,
+  textareaProps,
 }: InputProps) {
-  const style: React.CSSProperties = {
-    ...(width ? { width } : {}),
-    ...(height ? { height } : {}),
+  const wrapperStyle: React.CSSProperties = {
+    ...(width && { width }),
   };
 
-  const containerClass = [
-    "rounded-[10px] bg-(--color-surface)",
-    multiline ? "flex items-start" : "flex items-center",
-    width ? "" : "w-full",
-    startIcon ? "relative" : "",
-    className,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const controlStyle: React.CSSProperties = {
+    ...(height && { height }),
+  };
 
-  const inputClass = [
-    "w-full text-sm text-(--color-ink) outline-none transition bg-transparent",
-    "placeholder:text-(--color-muted) focus:border-(--color-accent) rounded-[10px]",
-    multiline ? "h-full px-3 py-2 resize-none" : "h-10 px-3",
-    startIcon ? "pl-9" : "",
+  const containerClass = clsx(styles.field, className);
+
+  const controlClass = clsx(
+    styles.container,
+    multiline ? styles.containerMulti : styles.containerSingle,
+    startIcon && styles.containerWithIcon,
+    endIcon && styles.containerWithEndIcon,
+  );
+
+  const inputClass = clsx(
+    styles.input,
+    multiline ? styles.inputMulti : styles.inputSingle,
+    startIcon && styles.inputWithIcon,
+    endIcon && styles.inputWithEndIcon,
     inputClassName,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  const { placeholder, ...passThrough } = rest as Record<string, unknown>;
+  );
 
   return (
-    <label className={containerClass} style={style}>
-      {startIcon && (
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-(--color-muted)">
-          {startIcon}
-        </span>
+    <div className={containerClass} style={wrapperStyle}>
+      {label && (
+        <label htmlFor={id} className={styles.label}>
+          {label}
+        </label>
       )}
-      {multiline ? (
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder as string}
-          className={inputClass}
-          style={height ? { height: "100%" } : { minHeight: "80px" }}
-          {...((passThrough || {}) as TextareaHTMLAttributes<HTMLTextAreaElement>)}
-        />
-      ) : (
-        <input
-          type={(rest as SingleLineProps).type || "text"}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder as string}
-          className={inputClass}
-          {...((passThrough || {}) as InputHTMLAttributes<HTMLInputElement>)}
-        />
+
+      <div className={controlClass} style={controlStyle}>
+        {startIcon && <span className={styles.icon}>{startIcon}</span>}
+
+        {multiline ? (
+          <textarea
+            id={id}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            disabled={disabled}
+            readOnly={readOnly}
+            aria-invalid={!!error}
+            aria-describedby={error ? `${id}-error` : undefined}
+            className={inputClass}
+            {...textareaProps}
+          />
+        ) : (
+          <input
+            id={id}
+            type={type}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            disabled={disabled}
+            readOnly={readOnly}
+            onClick={onClick}
+            aria-invalid={!!error}
+            aria-describedby={error ? `${id}-error` : undefined}
+            className={inputClass}
+            {...inputProps}
+          />
+        )}
+
+        {endIcon && <span className={styles.endIcon}>{endIcon}</span>}
+      </div>
+
+      {error && (
+        <p id={`${id}-error`} className={styles.error}>
+          {error}
+        </p>
       )}
-    </label>
+    </div>
   );
 }

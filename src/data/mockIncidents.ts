@@ -2,6 +2,7 @@ import type { IncidentItem } from "@/types/types";
 
 export const mockIncidents: IncidentItem[] = [
     {
+        id: "inc-1",
         data: "27.07.2026",
         incident: "Wildberries запускает экспресс-доставку для региональных продавцов",
         type: "Маркетплейсы",
@@ -12,8 +13,10 @@ export const mockIncidents: IncidentItem[] = [
         priority: "П1",
         index: "15 300",
         tonality: "Позитивная",
+        taskId: "task-1",
     },
     {
+        id: "inc-2",
         data: "26.07.2026",
         incident: "Ozon расширяет сеть пунктов выдачи в регионах",
         type: "Маркетплейсы",
@@ -24,20 +27,10 @@ export const mockIncidents: IncidentItem[] = [
         priority: "П2",
         index: "12 100",
         tonality: "Нейтральная",
+        taskId: "task-2",
     },
-    {
-        data: "25.07.2026",
-        incident: "Wildberries снижает комиссию для новых продавцов",
-        type: "Маркетплейсы",
-        category: "Тарифы",
-        source: "Ведомости",
-        region: "Москва",
-        object: "Wildberries",
-        priority: "П1",
-        index: "18 400",
-        tonality: "Позитивная",
-    },
-    {
+     {
+        id: "inc-3",
         data: "24.07.2026",
         incident: "Яндекс Маркет тестирует доставку в день заказа",
         type: "Маркетплейсы",
@@ -50,6 +43,22 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Нейтральная",
     },
     {
+        id: "inc-4",
+        data: "25.07.2026",
+        incident: "Wildberries снижает комиссию для новых продавцов",
+        type: "Маркетплейсы",
+        category: "Тарифы",
+        source: "Ведомости",
+        region: "Москва",
+        object: "Wildberries",
+        priority: "П1",
+        index: "18 400",
+        tonality: "Позитивная",
+        taskId: "task-3",
+    },
+   
+    {
+        id: "inc-5",
         data: "23.07.2026",
         incident: "СберМаркет открывает dark store в Казани",
         type: "Ритейл",
@@ -62,6 +71,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Позитивная",
     },
     {
+        id: "inc-6",
         data: "22.07.2026",
         incident: "Ozon запускает программу лояльности для корпоративных клиентов",
         type: "Маркетплейсы",
@@ -74,6 +84,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Нейтральная",
     },
     {
+        id: "inc-7",
         data: "21.07.2026",
         incident: "Wildberries фиксирует рост числа региональных складов",
         type: "Маркетплейсы",
@@ -86,6 +97,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Позитивная",
     },
     {
+        id: "inc-8",
         data: "20.07.2026",
         incident: "Яндекс Маркет ужесточает правила для сторонних продавцов",
         type: "Маркетплейсы",
@@ -96,8 +108,10 @@ export const mockIncidents: IncidentItem[] = [
         priority: "П1",
         index: "14 750",
         tonality: "Негативная",
+        taskId: "task-8",
     },
     {
+        id: "inc-9",
         data: "19.07.2026",
         incident: "Магнит усиливает онлайн-продажи через собственное приложение",
         type: "Ритейл",
@@ -110,6 +124,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Позитивная",
     },
     {
+        id: "inc-10",
         data: "18.07.2026",
         incident: "Ozon сообщает о росте GMV в сегменте fashion",
         type: "Маркетплейсы",
@@ -122,6 +137,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Позитивная",
     },
     {
+        id: "inc-11",
         data: "17.07.2026",
         incident: "Wildberries тестирует доставку крупногабарита в регионы",
         type: "Маркетплейсы",
@@ -134,6 +150,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Нейтральная",
     },
     {
+        id: "inc-12",
         data: "16.07.2026",
         incident: "СберМаркет расширяет ассортимент fresh-категории",
         type: "Ритейл",
@@ -146,6 +163,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Позитивная",
     },
     {
+        id: "inc-13",
         data: "15.07.2026",
         incident: "Яндекс Маркет инвестирует в автоматизацию складов",
         type: "Маркетплейсы",
@@ -156,8 +174,10 @@ export const mockIncidents: IncidentItem[] = [
         priority: "П1",
         index: "13 560",
         tonality: "Позитивная",
+        taskId: "task-13",
     },
     {
+        id: "inc-14",
         data: "14.07.2026",
         incident: "Магнит сообщает о задержках поставок в ряде регионов",
         type: "Ритейл",
@@ -170,6 +190,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Негативная",
     },
     {
+        id: "inc-15",
         data: "13.07.2026",
         incident: "Ozon запускает сервис сравнения цен для продавцов",
         type: "Маркетплейсы",
@@ -182,6 +203,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Нейтральная",
     },
     {
+        id: "inc-16",
         data: "12.07.2026",
         incident: "Wildberries открывает центр обучения для селлеров",
         type: "Маркетплейсы",
@@ -194,6 +216,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Позитивная",
     },
     {
+        id: "inc-17",
         data: "11.07.2026",
         incident: "СберМаркет внедряет ИИ для прогнозирования спроса",
         type: "Ритейл",
@@ -206,6 +229,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Позитивная",
     },
     {
+        id: "inc-18",
         data: "10.07.2026",
         incident: "Яндекс Маркет расширяет партнёрскую сеть пунктов выдачи",
         type: "Маркетплейсы",
@@ -218,6 +242,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Нейтральная",
     },
     {
+        id: "inc-19",
         data: "09.07.2026",
         incident: "Магнит тестирует подписку на регулярные доставки",
         type: "Ритейл",
@@ -230,6 +255,7 @@ export const mockIncidents: IncidentItem[] = [
         tonality: "Позитивная",
     },
     {
+        id: "inc-20",
         data: "08.07.2026",
         incident: "Ozon фиксирует рост числа активных продавцов в Q2",
         type: "Маркетплейсы",

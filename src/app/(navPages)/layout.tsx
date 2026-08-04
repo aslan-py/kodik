@@ -1,15 +1,16 @@
-import DataUpdateStatus from "@/components/features/DataUpdateStatus";
-import React from "react";
+"use client";
 
-export default function layoutTitle({
+import SidebarLayout from "@/components/layout/SidebarLayout";
+import { ProtectedRoute } from "@/components/protected-route/protected-route";
+
+export default function NavPagesLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
-    <>
-      <DataUpdateStatus className={`pt-8 pl-8`} lastUpdated={"2026-07-28T16:22:00"} />
-      <div>{children}</div>
-    </>
+    <ProtectedRoute>
+      <SidebarLayout>{children}</SidebarLayout>
+    </ProtectedRoute>
   );
 }

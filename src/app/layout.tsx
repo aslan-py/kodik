@@ -1,8 +1,8 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import SidebarLayout from "@/components/layout/SidebarLayout";
-import { StoreProvider } from "@/store/StoreProvider";
+import { ReduxProvider } from "@/components/providers/ReduxProvider";
+
 
 const inter = Inter({
   subsets: ["latin"],
@@ -10,8 +10,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "My App",
-  description: "Next.js app with sidebar navigation",
+  title: "Kodik",
+  description: "Kodik",
 };
 
 export default function RootLayout({
@@ -21,10 +21,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
-      <body className="flex h-full">
-        <StoreProvider>
-          <SidebarLayout>{children}</SidebarLayout>
-        </StoreProvider>
+      <body className="flex h-full w-full">
+        <ReduxProvider>
+          {children}
+        </ReduxProvider>
       </body>
     </html>
   );

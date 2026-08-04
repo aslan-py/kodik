@@ -1,25 +1,24 @@
 "use client";
-import { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
+import { ButtonHTMLAttributes, ReactNode } from "react";
 import styles from "./button.module.css";
 import clsx from "clsx";
-type ButtonSize = "small" | "medium" | "large";
-type ButtonVariant =
-  | "primary"
-  | "secondary"
-  | "link"
-  | "badge"
 
-type BadgeColor = "accent" | "gray";
+type ButtonSize = "small" | "medium" | "large" | "none";
+type ButtonVariant = "primary" | "secondary" | "tertiary" | "badge";
+type BadgeColor = "primary" | "secondary";
+type ButtonJustify = "center" | "space-between" | "flex-start" | "flex-end";
 
 type ButtonType = {
   size?: ButtonSize;
   variant?: ButtonVariant;
   badgeColor?: BadgeColor;
+  justifyContent?: ButtonJustify;
   startIcon?: ReactNode;
   endIcon?: ReactNode;
   children?: React.ReactNode;
   fullWidth?: boolean;
   disabled?: boolean;
+  loading?: boolean;
   onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   className?: string;
 } & ButtonHTMLAttributes<HTMLButtonElement>;
@@ -27,7 +26,8 @@ type ButtonType = {
 export const Button = ({
   size = "small",
   variant = "primary",
-  badgeColor = "accent",
+  badgeColor = "primary",
+  justifyContent = "center",
   startIcon,
   endIcon,
   children,
@@ -35,52 +35,53 @@ export const Button = ({
   onClick,
   className = "",
   disabled = false,
+  loading = false,
   type = "button",
-  color,
   ...props
 }: ButtonType) => {
+  const isDisabled = disabled || loading;
+
   const buttonClasses = clsx(
     styles.button,
     variant !== "badge" && styles[size],
     styles[variant],
     variant === "badge" && styles[`badge-${badgeColor}`],
+    variant !== "badge" && styles[`justify-${justifyContent}`],
     fullWidth && styles.fullWidth,
-    disabled && styles.disabled,
-    color && styles.customColor,
+    isDisabled && styles.disabled,
+    loading && styles.loading,
     className,
   );
 
   const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
-    if (disabled) {
+    if (isDisabled) {
       event.preventDefault();
       return;
     }
-    // обработчик
     if (onClick) {
       onClick(event);
     }
   };
 
-  const customStyle: CSSProperties = {};
-
-  if (color) {
-    customStyle.backgroundColor = color;
-    customStyle.borderColor = "black";
-  }
   return (
     <button
       type={type}
       className={buttonClasses}
       onClick={handleClick}
-      disabled={disabled}
-      style={customStyle}
+      disabled={isDisabled}
       {...props}
     >
-      {startIcon && <span className={styles.startIcon}>{startIcon}</span>}
-      {children && <span className={styles.content}>{children}</span>}
-      {endIcon && <span className={styles.endIcon}>{endIcon}</span>}
+      {loading ? (
+        <span className={styles.spinner} />
+      ) : (
+        <>
+          {startIcon && <span className={styles.startIcon}>{startIcon}</span>}
+
+          {children && <span className={styles.content}>{children}</span>}
+
+          {endIcon && <span className={styles.endIcon}>{endIcon}</span>}
+        </>
+      )}
     </button>
   );
 };
-
-export default Button;

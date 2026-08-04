@@ -1,7 +1,6 @@
 .button {
   display: inline-flex;
   align-items: center;
-  font-size: 1em;
   border-radius: 8px;
   gap: 8px;
   line-height: 1.5;
@@ -9,116 +8,185 @@
   text-decoration: none;
   font-family: inherit;
   user-select: none;
-  transition: all 0.2s ease-in-out;
+  border: 2px solid transparent;
+  transition: color 0.3s, background 0.3s, box-shadow 0.3s, transform 0.15s;
 }
+
 /* Размеры */
+.none {
+  padding: 0px;
+}
 .small {
-  padding: 6px 14px;
-  font-size: 0.9em;
+  padding: 10px 14px;
 }
 
 .medium {
   padding: 10px 20px;
-  font-size: 1em;
 }
 
 .large {
-  padding: 14px 28px;
-  font-size: 1em;
+  padding: 10px 28px;
 }
 
-.button:focus-visible {
-  /* outline: 3px solid var(--focus-color, #2563eb); */
-  outline-offset: 3px;
+.fullWidth {
+  width: 100%;
 }
 
-.button:active:not(:disabled) {
-  transform: translateY(1px);
-}
-.button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(83, 91, 242, 0.3);
-
+/* ─── Justify ──────────────────────────────────────────────── */
+.justify-center {
+  justify-content: center;
 }
 
-.button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-  box-shadow: none;
-  transform: none;
+.justify-space-between {
+  justify-content: space-between;
 }
 
-.button:disabled:hover,
-.button:disabled:active {
-  filter: none;
-  transform: none;
+.justify-flex-start {
+  justify-content: flex-start;
 }
 
-
-/* Цвета */
-
-.link {
-  background: transparent;
-  padding: 0;
-  border-radius: 0;
-  gap: 4px;
+.justify-flex-end {
+  justify-content: flex-end;
 }
 
-.link:hover:not(:disabled) {
-  transform: none;
-  box-shadow: none;
+/* ─── Primary ─────────────────────────────────────────────── */
+.primary {
+  background: var(--color-accent);
+  color: #FFFFFF;
 }
 
-/* Состояния */
-.disabled,
-.button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none !important;
-  box-shadow: none !important;
+.primary:hover:not(:disabled) {
+  background: #527BCF;
 }
 
-.button:active:not(:disabled) {
-  transform: scale(0.98);
+.primary:active:not(:disabled) {
+  background: #486FC0;
 }
 
-/* ─── Badge variant ───────────────────────────────────────── */
+.primary:focus-visible {
+  outline: 2px solid #6094FE;
+  outline-offset: 2px;
+}
 
+/* ─── Secondary ───────────────────────────────────────────── */
+.secondary {
+  background: #F4F5F6;
+  color: var(--color-ink);
+}
+
+.secondary:hover:not(:disabled) {
+  background: var(--color-surface);
+}
+
+.secondary:active:not(:disabled) {
+  background: var(--color-surface);
+}
+
+.secondary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ─── Badge ────────────────────────────────────────────────── */
 .badge {
-  display: flex;
-  flex-direction: row;
+  display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
+  padding: 5px 10px;
   border-radius: 8px;
   font-size: 12px;
   gap: 4px;
   border: none;
   cursor: pointer;
-  transition: opacity 0.15s;
   line-height: 1.5;
+  transition: background 0.2s, opacity 0.15s;
+  font-family: inherit;
+  user-select: none;
+  text-decoration: none;
+}
+
+.badge-primary {
+  background: var(--color-accent-light);
+  color: var(--color-accent);
+}
+
+.badge-secondary {
+  background: var(--color-surface);
+  color: var(--color-secondary);
 }
 
 .badge:hover:not(:disabled) {
-  transform: none;
-  box-shadow: none;
   opacity: 0.8;
 }
 
 .badge:active:not(:disabled) {
-  transform: none;
+  opacity: 0.65;
 }
 
-.badge-accent {
-  background: #EEF4FF;
+/* ─── Tertiary ────────────────────────────────────────────── */
+.tertiary {
+  background: transparent;
   color: var(--color-accent);
 }
 
-.badge-gray {
-  background: #F2F3F7;
-  color: var(--color-strong);
+.tertiary:hover:not(:disabled) {
+  background: transparent;
+  color: #6094FE;
 }
 
-/* Иконки */
+.tertiary:active:not(:disabled) {
+  background: rgba(91, 132, 216, 0.15);
+}
+
+.tertiary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ─── Disabled (общий для всех) ───────────────────────────── */
+.disabled,
+.button:disabled {
+  background: #EEF0F5 !important;
+  color: var(--color-text-navbar) !important;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+  opacity: 1;
+}
+
+.button:disabled:hover,
+.button:disabled:active {
+  transform: none;
+}
+
+/* ─── Loading (состояние загрузки) ──────────────────────────── */
+.loading {
+  pointer-events: none;
+}
+
+/* ─── Spinner (лоадер) ────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #FFFFFF;
+  animation: spin 0.6s linear infinite;
+}
+
+.secondary .spinner,
+.tertiary .spinner {
+  border-color: var(--color-muted);
+  border-top-color: var(--color-accent);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ─── Иконки ──────────────────────────────────────────────── */
 .startIcon {
   display: inline-flex;
   align-items: center;

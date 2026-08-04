@@ -1,4 +1,5 @@
 export type IncidentItem = {
+    id: string
     data: string,
     incident: string,
     source: string,
@@ -9,4 +10,5 @@ export type IncidentItem = {
     priority: string,
     index: string,
     tonality: string,
+    taskId?: string,
 };

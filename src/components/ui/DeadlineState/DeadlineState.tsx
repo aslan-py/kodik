@@ -23,4 +23,3 @@ export function DeadlineState({ date, status }: DeadlineStateProps) {
   );
 }
 
-export default DeadlineState;

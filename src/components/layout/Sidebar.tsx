@@ -3,20 +3,33 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import UserSidebarProfile from "../user/UserSidebarProfile";
+import UserSidebarProfile from "./UserSidebarProfile";
 import { Icon } from "@/components/ui/Icon/Icon";
+import { usePermission } from "@/hooks/useAuth";
 
-const navItems = [
+const baseItems = [
   { href: "/incidents", label: "События" },
-  { href: "/alerts", label: "Уведомления" },
-  { href: "/dashboard", label: "Дашборд" },
+  { href: "/task", label: "Задачи" },
+];
+
+const adminItems = [
   { href: "/sources", label: "Источники" },
-  { href: "/competitors", label: "Конкуренты" },
+];
+
+const adminSubItems = [
+  { href: "/admin", label: "Администрирование" },
+  { href: "/admin/notifications", label: "Уведомления" },
 ];
 
 export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
   const pathname = usePathname();
+  const canAdmin = usePermission("admin");
+
+  const navItems = canAdmin ? [...baseItems, ...adminItems] : baseItems;
+
+  const isAdminActive = adminSubItems.some((item) => pathname === item.href);
 
   return (
     <aside
@@ -40,7 +53,7 @@ export default function Sidebar() {
 
       <nav className="flex-1 px-3">
         <ul className="space-y-1">
-          {navItems.map((item, index) => {
+          {navItems.map((item) => {
             const isActive = pathname === item.href;
 
             return (
@@ -50,18 +63,63 @@ export default function Sidebar() {
                   className={`block rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${isCollapsed ? "text-center" : ""} ${
                     isActive
                       ? "bg-[#222A39] font-semibold text-white"
-                      : " text-(--color-text-navbar) hover:bg-zinc-800"
+                      : "text-(--color-text-navbar) hover:bg-zinc-800"
                   }`}
                   title={isCollapsed ? item.label : undefined}
                 >
                   {isCollapsed ? item.label.charAt(0) : item.label}
                 </Link>
-                {/* {index === 2 && (
-                  <div className="my-2 h-px bg-(--color-border)" />
-                )} */}
               </li>
             );
           })}
+
+          {/* Администрирование — только с правами admin */}
+          {canAdmin && (
+            <li>
+              <button
+                onClick={() => setAdminOpen((v) => !v)}
+                className={`w-full flex items-center justify-between rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${
+                  isCollapsed ? "justify-center" : ""
+                } ${
+                  isAdminActive || adminOpen
+                    ? "bg-[#222A39] font-semibold text-white"
+                    : "text-(--color-text-navbar) hover:bg-zinc-800"
+                }`}
+                title={isCollapsed ? "Администрирование" : undefined}
+              >
+                {isCollapsed ? "А" : "Администрирование"}
+                {!isCollapsed && (
+                  <Icon
+                    name="arrow-down"
+                    className={`h-3 w-3 transition-transform duration-200 ${
+                      adminOpen ? "rotate-180" : ""
+                    }`}
+                  />
+                )}
+              </button>
+              {adminOpen && !isCollapsed && (
+                <ul className="ml-4 mt-1 space-y-1 border-l border-(--color-border) pl-2">
+                  {adminSubItems.map((item) => {
+                    const isActive = pathname === item.href;
+                    return (
+                      <li key={item.href}>
+                        <Link
+                          href={item.href}
+                          className={`block rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                            isActive
+                              ? "bg-[#222A39] font-semibold text-white"
+                              : "text-(--color-text-navbar) hover:bg-zinc-800"
+                          }`}
+                        >
+                          {item.label}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </li>
+          )}
         </ul>
       </nav>
       <div className={isCollapsed ? "hidden" : ""}>

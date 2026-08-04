@@ -3,7 +3,7 @@ interface Props {
   className?: string;
 }
 
-export default function DataUpdateStatus({ lastUpdated, className = '' }: Props) {
+export function DataUpdateStatus({ lastUpdated, className = '' }: Props) {
   const now = new Date();
 
   const updated = lastUpdated

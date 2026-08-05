@@ -17,6 +17,7 @@ bearer_scheme (HTTPBearer) — откуда FastAPI берёт токен из �
 FastAPI сам по себе с `403 Not authenticated`.
 """
 
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -55,3 +56,8 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
         )
     except JWTError:
         return None
+
+
+def generate_reset_code() -> str:
+    """6-значный числовой код для сброса пароля (ведущие нули сохраняются)."""
+    return f'{secrets.randbelow(1_000_000):06d}'

@@ -8,7 +8,12 @@ tags) — так вся карта API (какой префикс/тег у ка
 
 from fastapi import APIRouter
 
-from api.endpoints import auth_router, showcase_router, users_router
+from api.endpoints import (
+    action_items_router,
+    auth_router,
+    showcase_router,
+    users_router,
+)
 
 main_router = APIRouter()
 
@@ -16,4 +21,7 @@ main_router.include_router(auth_router, prefix='/auth', tags=['Аутентиф�
 main_router.include_router(users_router, prefix='/users', tags=['Пользователи'])
 main_router.include_router(
     showcase_router, prefix='/showcase', tags=['Витрина']
+)
+main_router.include_router(
+    action_items_router, prefix='/action-items', tags=['План действий']
 )

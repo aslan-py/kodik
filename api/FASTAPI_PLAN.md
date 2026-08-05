@@ -158,3 +158,83 @@ HTTP-сервер (`uvicorn api.main:app`), он не должен сам гон
   обновился (не только витрина) — ручным `SELECT` после вызова.
 - Прогнать `run_bp4()` после ручной правки — витрина не должна «откатиться» к старому значению,
   пока `categorized_event` не переразметят заново.
+
+---
+
+## 6. Справочники + просмотр данных пайплайна (BP-1…BP-5) — план на будущее (после FastAdmin)
+
+Обсуждено 2026-08-04. Решили: в `ABOUT_PROJECT/ABOUT.md` (BP-7) уже зафиксирован план на
+SQLAdmin для админки над справочниками (авто-CRUD, без кода). Пробуем сначала **FastAdmin**
+(похожая идея, авторизация суперпользователя как в Django) — отдельная задача, не эта. Ручные
+JSON-эндпоинты ниже — вариант Б, на случай если понадобится свой JSON API (не HTML-админка) для
+кастомного фронта параллельно с FastAdmin, либо вместо него. Реализация отложена, только план.
+
+### Группа «Администрирование» — generic CRUD над 12 справочниками
+
+Таблицы: `competitor`, `source`, `trigger`, `region`, `black_domain`, `stop_word`, `topic_limit`,
+`category`, `department`, `event_type`, `channel`, `routing_rule`. Доступ — `EditorDep`
+(analyst/admin).
+
+На каждую: `GET ''` (список + поиск/фильтры), `GET '/{id}'`, `POST ''`, `PATCH '/{id}'`,
+`DELETE '/{id}'` — **мягкое** удаление (`is_active=False`, физически строка не удаляется). `GET`
+по умолчанию отдаёт все строки, включая `is_active=False` (аналитику нужно видеть выключенные,
+чтобы включить обратно), с опциональным query-фильтром `is_active`. «Восстановление» —
+`PATCH {id}` с `is_active=true`, отдельный endpoint не нужен.
+
+**Проверить перед реализацией:** `region` (`src/bp2/models.py`) сейчас **без** `ActiveMixin` (нет
+`is_active`), как `raw_item`/`normalized_item`. Чтобы включить её в эту группу с мягким
+удалением — сначала модельная правка + Alembic-миграция (добавить `ActiveMixin`).
+
+**Архитектура — один generic CRUD-слой, не 12 отдельных реализаций:**
+- `api/crud/reference.py` — `ReferenceCRUD` (`__init__(session, model)`); методы `get(id)`,
+  `list_all(filters: dict, search: dict[str, str])` (`filters` — точное совпадение, `search` —
+  `ilike` по указанным строковым полям), `create(data: dict)`, `update(item, changes: dict)`,
+  `soft_delete(item)` (`is_active=False`, `flush`). Работает с любой моделью с `Mixin`+`ActiveMixin`.
+- `api/service/reference.py` — `ReferenceService`, добавляет проверку уникальности (409 при
+  конфликте на `unique=True` полях/составных `UniqueConstraint`, включая `routing_rule`) поверх
+  generic CRUD.
+- `api/endpoints/reference.py` — фабрика `build_reference_router(model, read_schema,
+  create_schema, update_schema, *, search_fields, tag)`, собирающая `APIRouter` с пятью
+  стандартными путями.
+- Под каждую из 12 таблиц — маленький файл (~10-15 строк): только Pydantic Read/Create/Update-
+  схемы (поля у всех разные — `competitor` это `name`+`inn`, `event_type` — `name`+
+  `keywords: list[str]`, `routing_rule` — 4 FK + 2 enum и т.д.) и один вызов фабрики с нужными
+  `search_fields`.
+
+### Группа «Данные после парсинга» (BP-1)
+
+- `search_task` — тот же generic CRUD + поиск (по `competitor_id`/`source_id`/`trigger_id`),
+  доступ `EditorDep`. Нужен для удобного добавления новых комбинаций конкурент+источник+триггер
+  без похода в БД руками.
+- `raw_item` — **только просмотр**: `GET ''` (фильтры: `status`, `search_task_id`, диапазон
+  `created_at`/`updated_at`) + `GET '/{id}'`. Без CRUD — «грязная» таблица сырья, смотреть, не
+  редактировать.
+
+### Группа «Данные после нормализации» (BP-2)
+
+- `normalized_item` — только просмотр: `GET ''` (фильтры: `status`, `reject_reason`,
+  `competitor_id`, `region_id`, диапазон `published_at`, поиск по `title`) + `GET '/{id}'`.
+  Причина не делать правку: у модели нет `updated_at` — даже при появлении настоящего
+  инкрементального BP-3 (по образцу BP-4/BP-5) правка постфактум никогда не будет замечена
+  повторным прогоном.
+
+### Группа «Данные после проработки LLM» (BP-3)
+
+- `categorized_event` — только просмотр: `GET ''` (фильтры: `priority`, `category_id`,
+  `department_id`, диапазон `categorized_at`) + `GET '/{id}'`. Единственный путь правки этих
+  данных — уже существующий `PATCH /showcase/{id}` (см. раздел 3 выше): он одновременно пишет в
+  `categorized_event` и зеркалит в `showcase_event`; отдельный прямой `PATCH` сломал бы это
+  зеркалирование.
+
+### Группа «Отправленные уведомления» (BP-5)
+
+- `alert` — только просмотр: `GET ''` (фильтры: `status`, `channel_id`, `user_id`, `priority`,
+  `mode`, диапазон `created_at`/`sent_at`) + `GET '/{id}'`. Неизменяемый журнал доставки (пишет
+  `sync_alerts`, `ActiveMixin` нет) — правка status/error_message задним числом испортила бы
+  историю.
+
+Везде доступ — `EditorDep` (analyst/admin): внутренняя механика пайплайна, не для роли
+`viewer`/отделов.
+
+Swagger-теги: «Администрирование», «Данные после парсинга (BP-1)», «Данные после нормализации
+(BP-2)», «Данные после проработки LLM (BP-3)», «Отправленные уведомления (BP-5)».

@@ -1,31 +1,21 @@
 """Витрина BP-4: GET /showcase, GET /showcase/{id}, PATCH /showcase/{id}.
 
-Чтение — viewer/analyst/admin (не pending). Правка — только analyst/admin.
-ShowcaseCRUD.update() сама решает write-through в categorized_event +
-зеркалирование в showcase_event (FASTAPI_PLAN.md, п.3) — роутер её просто
-вызывает.
+Тонкий слой над ShowcaseService (api/service/showcase.py) — вся
+бизнес-логика (write-through правка в categorized_event + зеркалирование
+в showcase_event, FASTAPI_PLAN.md, п.3) там, не в эндпоинте. Чтение —
+viewer/analyst/admin (не pending). Правка — только analyst/admin.
 """
 
-from typing import Annotated
+from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter
 
-from api.crud.showcase import ShowcaseCRUD
-from api.dependencies import SessionDep, require_role
+from api.dependencies import EditorDep, SessionDep, ViewerDep
 from api.responses import SHOWCASE_DETAIL_RESPONSES, SHOWCASE_LIST_RESPONSES
 from api.schemas.showcase import ShowcaseEventRead, ShowcaseEventUpdate
-from core.enums import UserRole
-from src.bp5.models import User
+from api.service.showcase import ShowcaseService
 
 router = APIRouter()
-
-ViewerDep = Annotated[
-    User,
-    Depends(require_role(UserRole.viewer, UserRole.analyst, UserRole.admin)),
-]
-EditorDep = Annotated[
-    User, Depends(require_role(UserRole.analyst, UserRole.admin))
-]
 
 
 @router.get(
@@ -36,7 +26,13 @@ EditorDep = Annotated[
     description=(
         'Доступ: `viewer`, `analyst`, `admin` (не `pending`).\n\n'
         'Пагинация — `limit`/`offset`, сортировка по `published_at` '
-        '(новые сверху).'
+        '(новые сверху).\n\n'
+        'Фильтры (можно комбинировать): `title`/`region`/`competitor` — '
+        'подстрока без учёта регистра; `category`/`priority`/`department` '
+        '— точное совпадение с готовой подписью витрины (например, '
+        '`priority=П1`); `published_from`/`published_to` — диапазон дат '
+        '(включительно). Нужны, чтобы найти конкретное событие и его '
+        '`id` для `POST /action-items`, не листая всю витрину.'
     ),
 )
 async def list_showcase(
@@ -44,9 +40,27 @@ async def list_showcase(
     _viewer: ViewerDep,
     limit: int = 100,
     offset: int = 0,
+    title: str | None = None,
+    category: str | None = None,
+    priority: str | None = None,
+    region: str | None = None,
+    competitor: str | None = None,
+    department: str | None = None,
+    published_from: date | None = None,
+    published_to: date | None = None,
 ) -> list[ShowcaseEventRead]:
-    events = await ShowcaseCRUD(session).list_all(limit=limit, offset=offset)
-    return [ShowcaseEventRead.model_validate(e) for e in events]
+    return await ShowcaseService(session).list_events(
+        limit=limit,
+        offset=offset,
+        title=title,
+        category=category,
+        priority=priority,
+        region=region,
+        competitor=competitor,
+        department=department,
+        published_from=published_from,
+        published_to=published_to,
+    )
 
 
 @router.get(
@@ -59,10 +73,7 @@ async def list_showcase(
 async def read_showcase(
     showcase_id: int, session: SessionDep, _viewer: ViewerDep
 ) -> ShowcaseEventRead:
-    event = await ShowcaseCRUD(session).get(showcase_id)
-    if event is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, 'Событие не найдено')
-    return ShowcaseEventRead.model_validate(event)
+    return await ShowcaseService(session).get_event(showcase_id)
 
 
 @router.patch(
@@ -88,8 +99,4 @@ async def update_showcase(
     session: SessionDep,
     _editor: EditorDep,
 ) -> ShowcaseEventRead:
-    event = await ShowcaseCRUD(session).update(showcase_id, data)
-    if event is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, 'Событие не найдено')
-    await session.commit()
-    return ShowcaseEventRead.model_validate(event)
+    return await ShowcaseService(session).update_event(showcase_id, data)

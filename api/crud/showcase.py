@@ -19,7 +19,7 @@ showcase_event.updated_at).
 """
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,11 +40,46 @@ class ShowcaseCRUD:
         return await self.session.get(ShowcaseEvent, showcase_id)
 
     async def list_all(
-        self, limit: int = 100, offset: int = 0
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        title: str | None = None,
+        category: str | None = None,
+        priority: str | None = None,
+        region: str | None = None,
+        competitor: str | None = None,
+        department: str | None = None,
+        published_from: date | None = None,
+        published_to: date | None = None,
     ) -> Sequence[ShowcaseEvent]:
+        """Список витрины с опциональными фильтрами (все — AND).
+
+        title/region/competitor — подстрока без учёта регистра (ilike),
+        нужно найти нужное событие среди тысяч строк, не зная точной
+        формулировки. category/priority/department — точное совпадение
+        (готовые подписи, как их хранит витрина — см. модуль-докстринг).
+        published_from/published_to — включительно, по published_at.
+        """
+        stmt = select(ShowcaseEvent)
+        if title is not None:
+            stmt = stmt.where(ShowcaseEvent.title.ilike(f'%{title}%'))
+        if category is not None:
+            stmt = stmt.where(ShowcaseEvent.category == category)
+        if priority is not None:
+            stmt = stmt.where(ShowcaseEvent.priority == priority)
+        if region is not None:
+            stmt = stmt.where(ShowcaseEvent.region.ilike(f'%{region}%'))
+        if competitor is not None:
+            stmt = stmt.where(ShowcaseEvent.competitor.ilike(f'%{competitor}%'))
+        if department is not None:
+            stmt = stmt.where(ShowcaseEvent.department == department)
+        if published_from is not None:
+            stmt = stmt.where(ShowcaseEvent.published_at >= published_from)
+        if published_to is not None:
+            stmt = stmt.where(ShowcaseEvent.published_at <= published_to)
+
         stmt = (
-            select(ShowcaseEvent)
-            .order_by(ShowcaseEvent.published_at.desc())
+            stmt.order_by(ShowcaseEvent.published_at.desc())
             .limit(limit)
             .offset(offset)
         )

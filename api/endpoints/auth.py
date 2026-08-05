@@ -1,12 +1,28 @@
-"""Регистрация и логин: POST /auth/register, POST /auth/login."""
+"""Аутентификация: регистрация, логин, logout, сброс пароля.
 
-from fastapi import APIRouter, HTTPException, status
+Тонкий слой над AuthService (api/service/auth.py) — вся бизнес-логика
+там, эндпоинты только парсят запрос и вызывают сервис.
+"""
 
-from api.crud.users import UserCRUD
-from api.dependencies import SessionDep
-from api.responses import LOGIN_RESPONSES, REGISTER_RESPONSES
-from api.schemas.users import Token, UserLogin, UserRead, UserRegister
-from api.security import create_access_token, verify_password
+from fastapi import APIRouter, status
+
+from api.dependencies import CurrentUser, SessionDep
+from api.responses import (
+    LOGIN_RESPONSES,
+    LOGOUT_RESPONSES,
+    PASSWORD_RESET_CONFIRM_RESPONSES,
+    REGISTER_RESPONSES,
+)
+from api.schemas.users import (
+    MessageResponse,
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    Token,
+    UserLogin,
+    UserRead,
+    UserRegister,
+)
+from api.service.auth import AuthService
 
 router = APIRouter()
 
@@ -28,32 +44,7 @@ router = APIRouter()
     ),
 )
 async def register(data: UserRegister, session: SessionDep) -> UserRead:
-    """Self-service регистрация. role всегда pending — без доступа до
-    подтверждения analyst/admin (детали — FASTAPI_PLAN.md, п.4)."""
-    crud = UserCRUD(session)
-    if await crud.get_by_email(data.email) is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            'Пользователь с таким email уже существует',
-        )
-    if (
-        data.telegram_id is not None
-        and await crud.get_by_telegram_id(data.telegram_id) is not None
-    ):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            'Этот telegram_id уже привязан к другому пользователю',
-        )
-    if data.department_id is not None and not await crud.department_exists(
-        data.department_id
-    ):
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f'Отдел с id={data.department_id} не найден',
-        )
-    user = await crud.create(data)
-    await session.commit()
-    return UserRead.model_validate(user)
+    return await AuthService(session).register(data)
 
 
 @router.post(
@@ -70,9 +61,60 @@ async def register(data: UserRegister, session: SessionDep) -> UserRead:
     ),
 )
 async def login(data: UserLogin, session: SessionDep) -> Token:
-    user = await UserCRUD(session).get_by_email(data.email)
-    if user is None or not verify_password(data.password, user.password_hash):
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, 'Неверный email или пароль'
-        )
-    return Token(access_token=create_access_token(subject=str(user.id)))
+    return await AuthService(session).login(data)
+
+
+@router.post(
+    '/logout',
+    response_model=MessageResponse,
+    responses=LOGOUT_RESPONSES,
+    summary='Выход из профиля',
+    description=(
+        'Доступ: любая роль, включая `pending` — нужен только валидный '
+        'токен.\n\n'
+        'JWT в проекте stateless: отзыва токена и refresh-токенов нет. '
+        'Эндпоинт ничего не хранит на сервере — реальный выход '
+        'обеспечивает клиент, удаляя токен у себя. До истечения '
+        '`jwt_expire_minutes` токен технически остаётся валиден, если '
+        'кто-то успел его скопировать до выхода.'
+    ),
+)
+async def logout(user: CurrentUser, session: SessionDep) -> MessageResponse:
+    return await AuthService(session).logout(user)
+
+
+@router.post(
+    '/password-reset/request',
+    response_model=MessageResponse,
+    summary='Запросить код сброса пароля',
+    description=(
+        'Доступ: публично, токен не нужен.\n\n'
+        'Всегда возвращает один и тот же ответ независимо от того, найден '
+        'ли такой email — так email пользователей нельзя перебрать через '
+        'этот эндпоинт. Если email существует, на него уходит письмо с '
+        '6-значным кодом (`password_reset_code_expire_minutes` минут '
+        'жизни, максимум 5 попыток ввода).'
+    ),
+)
+async def request_password_reset(
+    data: PasswordResetRequest, session: SessionDep
+) -> MessageResponse:
+    return await AuthService(session).request_password_reset(data)
+
+
+@router.post(
+    '/password-reset/confirm',
+    response_model=MessageResponse,
+    responses=PASSWORD_RESET_CONFIRM_RESPONSES,
+    summary='Подтвердить сброс пароля кодом из письма',
+    description=(
+        'Доступ: публично, токен не нужен.\n\n'
+        'Код одноразовый, действует ограниченное время и максимум 5 '
+        'попыток ввода — после этого нужно запросить новый через '
+        '`POST /auth/password-reset/request`.'
+    ),
+)
+async def confirm_password_reset(
+    data: PasswordResetConfirm, session: SessionDep
+) -> MessageResponse:
+    return await AuthService(session).confirm_password_reset(data)

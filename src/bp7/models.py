@@ -1,9 +1,10 @@
 """Модели BP-7 (агент расширения источников).
 
 Админка BP-7 — это CRUD над УЖЕ существующими справочниками (competitor,
-trigger, source, black_domain, stop_word, routing_rule, …) через SQLAdmin,
-своих таблиц не заводит. Единственная новая таблица процесса — очередь
-кандидатов в источники.
+trigger, source, black_domain, stop_word, routing_rule, …) через FastAdmin
+(код — api/admin/, инструкция — api/ADMIN_README.md), своих таблиц не
+заводит. Единственная новая таблица процесса — очередь кандидатов
+в источники.
 
 - SourceCandidate: агент пишет кандидата с оценкой score. Когда score выше
   настраиваемого порога (core.config.settings.source_candidate_score_threshold,
@@ -31,10 +32,11 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import SourceCandidateStatus, source_candidate_status
+from src.bp1.models import Competitor
 
 
 class SourceCandidate(Base, Mixin, ActiveMixin):
@@ -84,6 +86,12 @@ class SourceCandidate(Base, Mixin, ActiveMixin):
         server_default=func.now(),
         comment='Когда агент предложил кандидата',
     )
+
+    # Связь нужна админке (FastAdmin показывает FK только через relationship).
+    competitor: Mapped['Competitor | None'] = relationship('Competitor')
+
+    def __str__(self) -> str:
+        return self.domain
 
     __table_args__ = (
         CheckConstraint(

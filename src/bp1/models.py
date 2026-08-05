@@ -52,6 +52,9 @@ class Trigger(Base, Mixin, ActiveMixin):
         comment=('Само поисковое слово/навык (например, Юрист, Python, Суд)'),
     )
 
+    def __str__(self) -> str:
+        return self.keyword
+
     __table_args__ = (
         # StrippedString чистит пробелы только на пути через SQLAlchemy;
         # CHECK ловит и правку напрямую в БД (DBeaver, сырой SQL).
@@ -79,6 +82,9 @@ class Competitor(Base, Mixin, ActiveMixin):
         comment='ИНН конкурента (опционально, поиск по гос-реестрам)',
     )
 
+    def __str__(self) -> str:
+        return self.name
+
     __table_args__ = (
         CheckConstraint(
             'name = btrim(name)', name='ck_competitor_name_trimmed'
@@ -99,6 +105,9 @@ class Source(Base, Mixin, ActiveMixin):
         unique=True,
         comment='Имя сайта/ресурса (например, hh.ru, авито, суд_реестр)',
     )
+
+    def __str__(self) -> str:
+        return self.name
 
     __table_args__ = (
         CheckConstraint('name = btrim(name)', name='ck_source_name_trimmed'),
@@ -168,6 +177,14 @@ class SearchTask(Base, Mixin, ActiveMixin):
         backref='search_tasks',
         lazy='selectin',
     )
+
+    def __str__(self) -> str:
+        # Безопасно обращаться к связям: все три lazy='selectin', то есть
+        # уже загружены к моменту вызова (админка зовёт __str__ для подписи).
+        parts = [str(self.competitor), str(self.source)]
+        if self.trigger is not None:
+            parts.append(str(self.trigger))
+        return ' · '.join(parts)
 
 
 class RawItem(Base, Mixin):
@@ -243,6 +260,14 @@ class RawItem(Base, Mixin):
             'ТОЛЬКО это поле (статус не трогаем)'
         ),
     )
+
+    # Связь нужна админке (FastAdmin показывает FK только через relationship,
+    # см. api/admin/). Ленивая по умолчанию: сериализация читает колонку
+    # search_task_id, сам объект не трогает — лишних запросов не будет.
+    search_task: Mapped['SearchTask'] = relationship('SearchTask')
+
+    def __str__(self) -> str:
+        return f'#{self.id} · {self.status}'
 
     __table_args__ = (
         CheckConstraint(

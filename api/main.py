@@ -1,7 +1,12 @@
-"""Сборка FastAPI-приложения: только FastAPI() + include_router.
+"""Сборка FastAPI-приложения: FastAPI() + include_router + админка.
 
 Никакой пайплайн-логики здесь нет и не будет — оркестрация BP-2/BP-4/BP-5
 остаётся задачей Celery+Beat, отдельным процессом (FASTAPI_PLAN.md, п.5).
+
+Админка (FastAdmin) монтируется сюда же, отдельного сервера/контейнера не
+требует: один процесс отдаёт и JSON API, и веб-интерфейс на /admin.
+Инструкция — api/ADMIN_README.md.
+
 Запуск: uvicorn api.main:app --reload
 """
 
@@ -13,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # categorized_event -> normalized_item), и flush падает с
 # NoReferencedTableError. Тот же приём в alembic/env.py.
 import src.db_registry  # noqa: F401
+from api.admin import admin_app
 from api.routers import main_router
 from api.tags_metadata import tags_metadata
 from core.config import settings
@@ -32,3 +38,7 @@ app.add_middleware(
 )
 
 app.include_router(main_router)
+
+# Путь обязан совпадать с ADMIN_PREFIX (api/admin/__init__.py) — по нему
+# фронтенд админки запрашивает свою статику.
+app.mount('/admin', admin_app)

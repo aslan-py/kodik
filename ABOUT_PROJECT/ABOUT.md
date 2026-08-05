@@ -584,21 +584,31 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  T((Beat)) --> Q[сформировать запросы<br/>competitor × trigger] --> S[поиск в вебе<br/>живой интернет] --> F[отсеять известные<br/>source/black/candidates] --> A[оценка LLM] --> W[записать pending<br/>source_candidate]
-  W --> M[модерация·человек] -->|approve| SR[(source)]
+  T((Beat)) --> Q[сформировать запросы<br/>competitor × trigger] --> S[поиск в вебе<br/>живой интернет] --> F[отсеять известные<br/>source/black/candidates] --> A[оценка LLM → score] --> W[записать кандидата<br/>source_candidate]
+  W --> C{score > порог?} -->|да| SR[(source)]
 ```
 
 ### Ключевые решения
 
 - **web ≠ показ страницы** — это выход в **живой интернет** (поисковый API или LLM с браузингом). Обычный LLM новые сайты
   не знает (знания заморожены), внутри БД их тоже нет — искать надо снаружи.
-- Агент только **предлагает** (`source_candidate`, pending). В `source` попадает **только через ручную модерацию** (правило ТЗ). Автоподключения нет.
+- Агент пишет кандидата в `source_candidate` с числовой оценкой LLM (`score`, 0.00–1.00). В `source` кандидат попадает
+  **автоматически**, когда `score` строго больше настраиваемого порога — перенос делает
+  `SourceCandidatePromoter` (`src/bp7/pipeline.py`), см. `src/bp7/BP7_README.md`. Порог живёт в конфиге приложения
+  (`core.config.settings.source_candidate_score_threshold`, env `SOURCE_CANDIDATE_SCORE_THRESHOLD`, по умолчанию `0.5`) —
+  меняется правкой `.env`, без деплоя новой логики. Ручной due-diligence остаётся доступен через `is_active` кандидата
+  (`false` снимает его с рассмотрения, не удаляя строку). Отбор на перенос идёт по `status` (`new` → `promoted`,
+  индексировано) — не JOIN/`NOT EXISTS` с `source` на каждый прогон, иначе с ростом `source_candidate` сверка
+  дорожала бы; `status` меняется на `promoted` прямо в момент переноса.
 - **Парсинг новых источников ≠ строка в `source`.** Каждый сайт устроен по-своему → **паттерн «адаптер»**: у источника свой парсер,
   `source` указывает `parser_type`/`access_type`. Новый источник того же типа (ещё одно СМИ) → переиспользуем общий адаптер (RSS/экстрактор);
   принципиально новая структура → разработчик пишет адаптер (это и есть «одна интеграция» из ТЗ). Fallback для «длинного хвоста» —
   LLM-экстракция полей из HTML. Для демо (1 источник) — один парсер под hh.ru; многосорсность — Этап 2.
 
-**Таблица:** `source_candidate` (очередь модерации). `source` в проде расширяется полями `access_type`, `parser_type`, `base_url`, `is_active`.
+**Таблица:** `source_candidate` (очередь кандидатов: `domain`, `competitor_id`, `url`, `score`, `status`, `is_active`, `created_at`).
+Заполняющий агент и периодический запуск переноса (Celery Beat, раз в 2 дня) — следующие итерации; сейчас перенос
+запускается вручную (`python -m src.bp7.pipeline`), см. `src/bp7/BP7_README.md`. `source` в проде расширяется полями
+`access_type`, `parser_type`, `base_url`, `is_active`.
 
 ---
 

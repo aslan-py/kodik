@@ -3,39 +3,48 @@
 Админка BP-7 — это CRUD над УЖЕ существующими справочниками (competitor,
 trigger, source, black_domain, stop_word, routing_rule, …) через SQLAdmin,
 своих таблиц не заводит. Единственная новая таблица процесса — очередь
-модерации предложенных источников.
+кандидатов в источники.
 
-- SourceCandidate: агент пишет pending, человек в админке approve/reject.
-  При approve домен уходит в source. Автоподключения нет — только через
-  модерацию (правило ТЗ). Скрипт сидинга для неё не нужен — очередь
-  наполняется агентом в рантайме.
+- SourceCandidate: агент пишет кандидата с оценкой score. Когда score выше
+  настраиваемого порога (core.config.settings.source_candidate_score_threshold,
+  env SOURCE_CANDIDATE_SCORE_THRESHOLD), кандидат переносится в source —
+  см. src/bp7/pipeline.py::SourceCandidatePromoter и src/bp7/BP7_README.md.
+  status (new -> promoted) проставляется В МОМЕНТ переноса — так отбор на
+  перенос идёт по индексу на status, без JOIN/NOT EXISTS с source на каждый
+  прогон при росте таблицы. is_active (ActiveMixin) — можно снять с
+  рассмотрения кандидата, не удаляя строку. Скрипт сидинга для неё не нужен —
+  очередь наполняется агентом в рантайме (следующая итерация).
 
 Nullability — только через аннотацию Mapped: Mapped[str] -> NOT NULL,
 Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 """
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    Text,
+    Index,
+    Numeric,
     func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import Base, Mixin, StrippedString
-from core.enums import CandidateStatus, candidate_status
+from core.database import ActiveMixin, Base, Mixin, StrippedString
+from core.enums import SourceCandidateStatus, source_candidate_status
 
 
-class SourceCandidate(Base, Mixin):
-    """Очередь модерации источников BP-7.
+class SourceCandidate(Base, Mixin, ActiveMixin):
+    """Кандидаты в источники BP-7.
 
-    Агент пишет pending (шаг 6), человек в админке approve/reject (шаг 7).
-    При approve домен уходит в source (шаг 8), следующий цикл его парсит.
-    UNIQUE на domain — не предлагать один и тот же источник дважды.
+    Агент (следующая итерация) пишет строки с domain/url/competitor_id/score.
+    UNIQUE на domain — не предлагать один и тот же источник дважды. Когда
+    score строго больше порога — кандидат переносится в source (перенос см.
+    src/bp7/pipeline.py). is_active=false исключает кандидата из переноса,
+    не удаляя историю.
     """
 
     domain: Mapped[str] = mapped_column(
@@ -47,33 +56,33 @@ class SourceCandidate(Base, Mixin):
         ForeignKey('competitor.id', ondelete='RESTRICT'),
         comment='По какому конкуренту/запросу нашли',
     )
-    evidence_url: Mapped[str | None] = mapped_column(
+    url: Mapped[str | None] = mapped_column(
         StrippedString(512),
-        comment='Ссылка-доказательство: где упомянут конкурент',
+        comment='Url найденного кандидата к парсингу',
     )
-    llm_assessment: Mapped[str | None] = mapped_column(
-        Text,
-        comment='Краткая оценка LLM: что за ресурс, релевантность, публичность',
+    score: Mapped[Decimal | None] = mapped_column(
+        Numeric(3, 2),
+        comment=(
+            'Оценка релевантности от LLM (0.00–1.00). Кандидат переносится '
+            'в source, когда score строго больше настраиваемого порога '
+            '(core.config.settings.source_candidate_score_threshold)'
+        ),
     )
-    status: Mapped[CandidateStatus] = mapped_column(
-        candidate_status,
-        default=CandidateStatus.pending,
-        server_default=text("'pending'"),
-        comment='pending → approved / rejected',
-    )
-    moderated_by: Mapped[str | None] = mapped_column(
-        StrippedString(128),
-        comment='Кто промодерировал',
-    )
-    moderated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        comment='Когда промодерировали',
+    status: Mapped[SourceCandidateStatus] = mapped_column(
+        source_candidate_status,
+        default=SourceCandidateStatus.new,
+        server_default=text("'new'"),
+        comment=(
+            'new -> promoted. Проставляется В МОМЕНТ переноса в source '
+            '(SourceCandidatePromoter) — отбор кандидатов на перенос идёт '
+            'по индексу на status, без JOIN/NOT EXISTS с source'
+        ),
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         server_default=func.now(),
-        comment='Когда агент предложил',
+        comment='Когда агент предложил кандидата',
     )
 
     __table_args__ = (
@@ -81,11 +90,12 @@ class SourceCandidate(Base, Mixin):
             'domain = btrim(domain)', name='ck_source_candidate_domain_trimmed'
         ),
         CheckConstraint(
-            'evidence_url = btrim(evidence_url)',
-            name='ck_source_candidate_evidence_url_trimmed',
+            'url = btrim(url)',
+            name='ck_source_candidate_url_trimmed',
         ),
         CheckConstraint(
-            'moderated_by = btrim(moderated_by)',
-            name='ck_source_candidate_moderated_by_trimmed',
+            'score IS NULL OR (score BETWEEN 0 AND 1)',
+            name='ck_source_candidate_score_range',
         ),
+        Index('ix_source_candidate_status', 'status'),
     )

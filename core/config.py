@@ -120,5 +120,11 @@ class Settings(BaseSettings):
     deepseek_base_url: str = 'https://api.deepseek.com'
     deepseek_model: str = 'deepseek-chat'
 
+    # ===== BP-7 (агент расширения источников) =====
+    # Порог score, выше которого source_candidate переносится в source
+    # (src/bp7/pipeline.py::SourceCandidatePromoter). Настраивается через
+    # .env без правки кода.
+    source_candidate_score_threshold: float = 0.5
+
 
 settings = Settings()

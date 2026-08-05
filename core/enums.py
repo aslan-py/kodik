@@ -176,12 +176,17 @@ class ActionStatus(enum.StrEnum):
 # ============================================================================
 
 
-class CandidateStatus(enum.StrEnum):
-    """Статус кандидата в источники."""
+class SourceCandidateStatus(enum.StrEnum):
+    """Статус кандидата в источники: обработан ли переносом в source.
 
-    pending = 'pending'
-    approved = 'approved'
-    rejected = 'rejected'
+    new — ещё не проверялся переносом (или проверялся, но score/threshold
+    не прошёл); promoted — перенесён в source. Двух значений достаточно:
+    отбор кандидатов на перенос идёт напрямую по индексу на status, без
+    JOIN/NOT EXISTS с source на каждый прогон (см. src/bp7/pipeline.py).
+    """
+
+    new = 'new'
+    promoted = 'promoted'
 
 
 # ============================================================================
@@ -199,5 +204,7 @@ tonality_level = Enum(TonalityLevel, name='tonality_level')
 delivery_mode = Enum(DeliveryMode, name='delivery_mode')
 alert_status = Enum(AlertStatus, name='alert_status')
 action_status = Enum(ActionStatus, name='action_status')
-candidate_status = Enum(CandidateStatus, name='candidate_status')
+source_candidate_status = Enum(
+    SourceCandidateStatus, name='source_candidate_status'
+)
 user_role = Enum(UserRole, name='user_role')

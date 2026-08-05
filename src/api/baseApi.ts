@@ -26,7 +26,8 @@ const baseQueryWithAuth: typeof baseQuery = async (args, api, extraOptions) => {
     // 3. Разлогиниваем пользователя
     api.dispatch(clearUser());
     // 4. Редирект на страницу логина
-    window.location.href = "/login";
+    // ! расскоментить после теста
+    // window.location.href = "/login";  
   }
   // 5. Возвращаем результат (успех или другую ошибку)
   return result;

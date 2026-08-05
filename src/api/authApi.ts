@@ -70,6 +70,7 @@ export const {
   useRegisterMutation,
   useLogoutMutation,
   useGetMeQuery,
+  useLazyGetMeQuery,
   useGetAllUsersQuery,
   useUpdateRoleUserMutation,
 } = authApi;

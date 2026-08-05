@@ -60,13 +60,14 @@ const register = useCallback(
     try {
       await registerMutation(data).unwrap();
       showToast("success", "Регистрация прошла успешно");
-      router.push("/login");
+      // router.push("/login");
     } catch {
       showToast("error", "Ошибка регистрации. Попробуйте снова");
     }
   },
-  [registerMutation, router, showToast],
+  [registerMutation, showToast],
 );
+
 
   const logout = useCallback(async () => {
     dispatch(clearUser());

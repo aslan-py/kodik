@@ -1,5 +1,7 @@
 "use client";
 
+import { useLazyGetMeQuery } from "@/api/authApi";
+
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/hooks/useAuth";
@@ -9,12 +11,28 @@ export default function LoginPage() {
   const [email, setEmail] = useState("user@example.com");
   const [full_name, setFullName] = useState("string");
   const [password, setPassword] = useState("Spassword1");
-  const [department_id, setDepartment] = useState('0');
+  const [department_id, setDepartment] = useState("0");
   const [telegram, setTelegram] = useState("0");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [errorForm, setError] = useState("");
+  const [loadingForm, setLoading] = useState(false);
 
+  const [trigger, { data, error, isLoading }] = useLazyGetMeQuery();
   const { register } = useAuth();
+
+
+
+  const handleClickTest = async () => {
+    try {
+      const result = await trigger().unwrap();
+      console.log("✅ Успех:", result.user);
+      alert(`Привет, ${result.user.full_name}!`);
+    } catch (err) {
+      console.error("❌ Ошибка:", err);
+      alert("Ошибка запроса. Смотри консоль.");
+    }
+  };
+
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -25,7 +43,7 @@ export default function LoginPage() {
         full_name,
         password,
         department_id: Number(department_id),
-        telegram_id: 0, // или 0, смотря что ждёт бэкенд
+        telegram_id: 0,
       });
     } catch (err: unknown) {
       const message =
@@ -46,7 +64,7 @@ export default function LoginPage() {
             Конкурентная разведка
           </span>
         </div>
-        
+
         <div>
           <p className="text-3xl font-semibold mb-6">Регистрация</p>
 
@@ -81,7 +99,7 @@ export default function LoginPage() {
               error=""
               className="mb-6"
             />
-            
+
             <Input
               id="departmentRegistration"
               type={"number"}
@@ -112,6 +130,14 @@ export default function LoginPage() {
               Войти
             </Button>
           </form>
+            <Button
+              className="btn inline h-9 text-sm font-medium"
+              fullWidth
+              variant="primary"
+              onClick={handleClickTest}
+            >
+              тест getMe
+            </Button>
         </div>
         <p className="text-xs text-(--color-muted)">
           © 2026 Kodik. Все права защищены.

@@ -17,7 +17,8 @@
 from typing import Any
 from uuid import UUID
 
-from fastadmin import SqlAlchemyInlineModelAdmin, SqlAlchemyModelAdmin, display
+from fastadmin import SqlAlchemyInlineModelAdmin, SqlAlchemyModelAdmin
+from fastadmin.models.schemas import ModelFieldWidgetSchema
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -26,39 +27,63 @@ from core.database import AsyncSessionLocal
 EMPTY = '—'
 
 
-def related(field: str):
-    """Колонка списка с ИМЕНЕМ связанного объекта вместо его id.
+class RelatedLabelMixin:
+    """В списке показывает ИМЯ связанного объекта вместо его id.
 
-    По умолчанию FastAdmin отдаёт в список сырое значение FK-колонки
-    (`competitor_id` → `53`): читать и тем более искать по такому списку
-    невозможно. `@display`-метод получает сам объект и возвращает его
-    `__str__`, поэтому в колонке оказывается «АвтоМЛ».
+    По умолчанию FastAdmin кладёт в колонку связи сырое значение FK
+    (`competitor` → `53`): читать такой список невозможно. Подменяем
+    значение на `__str__` связанного объекта — в колонке оказывается
+    «АвтоМЛ».
 
-    Имя метода в классе должно совпадать с именем поля в `list_display` —
-    тогда фильтр по колонке продолжает работать как выпадающий список
-    (конфигурация фильтра берётся из поля модели, а не отсюда).
+    Почему не `@display`-метод (документированный путь библиотеки): при
+    совпадении имени метода с именем поля модели FastAdmin рисует ДВЕ
+    колонки — одну по полю (с фильтром и сортировкой), вторую по
+    display-методу (см. fastadmin/models/helpers.py::generate_models_schema,
+    два независимых цикла по одному и тому же `list_display`). Подмена на
+    уровне сериализации оставляет ровно одну колонку — ту, у которой есть
+    фильтр.
 
-    Связь нужно перечислить в `list_select_related`, иначе на списке она
-    не подгрузится. Но список — не единственный путь сюда: тот же объект
-    сериализуется при входе в админку и на карточке записи, а там
-    `list_select_related` не применяется и связь остаётся ленивой. У
-    отсоединённого объекта это исключение, поэтому мягко откатываемся к id
-    вместо падения всей страницы (в формах подпись всё равно подставляет
-    выпадающий список на фронтенде).
+    Только для списка (`list_view=True`). На карточке записи связь должна
+    остаться идентификатором: её принимает выпадающий список AsyncSelect,
+    и строка вместо id сломала бы сохранение формы.
+
+    Связь нужно перечислить в `list_select_related`, иначе на списке она не
+    подгрузится. Экспорт же выгружает все поля модели, в том числе связи
+    вне `list_select_related`, — у отсоединённого объекта чтение такой
+    связи это исключение, поэтому мягко откатываемся к id вместо падения
+    всей выгрузки.
     """
 
-    @display
-    async def _show_related(self, obj: Any) -> str:
+    async def serialize_obj_attributes(
+        self,
+        obj: Any,
+        attributes_to_serizalize: list[ModelFieldWidgetSchema],
+        list_view: bool = False,
+    ) -> dict[str, Any]:
+        serialized = await super().serialize_obj_attributes(
+            obj, attributes_to_serizalize, list_view=list_view
+        )
+        if not list_view:
+            return serialized
+        for field in attributes_to_serizalize:
+            # У связи имя поля и имя колонки расходятся: `competitor` против
+            # `competitor_id`. У обычной колонки они совпадают.
+            if field.column_name == field.name:
+                continue
+            serialized[field.name] = self._related_label(
+                obj, field.name, serialized.get(field.name)
+            )
+        return serialized
+
+    @staticmethod
+    def _related_label(obj: Any, field_name: str, fk_value: Any) -> str:
         try:
-            value = getattr(obj, field, None)
+            value = getattr(obj, field_name, None)
         except SQLAlchemyError:
             value = None
         if value is not None:
             return str(value)
-        fk_value = getattr(obj, f'{field}_id', None)
         return str(fk_value) if fk_value is not None else EMPTY
-
-    return _show_related
 
 
 # Разделы левого меню. FastAdmin поддерживает только один уровень
@@ -115,7 +140,9 @@ class IntPrimaryKeyMixin:
         return id
 
 
-class KodikModelAdmin(IntPrimaryKeyMixin, SqlAlchemyModelAdmin):
+class KodikModelAdmin(
+    IntPrimaryKeyMixin, RelatedLabelMixin, SqlAlchemyModelAdmin
+):
     """Общий базовый класс всех моделей админки."""
 
     db_session_maker = AsyncSessionLocal
@@ -143,7 +170,9 @@ class ReadOnlyModelAdmin(KodikModelAdmin):
         return False
 
 
-class KodikInlineModelAdmin(IntPrimaryKeyMixin, SqlAlchemyInlineModelAdmin):
+class KodikInlineModelAdmin(
+    IntPrimaryKeyMixin, RelatedLabelMixin, SqlAlchemyInlineModelAdmin
+):
     """Базовый класс инлайнов (дочерние строки на странице родителя)."""
 
     db_session_maker = AsyncSessionLocal

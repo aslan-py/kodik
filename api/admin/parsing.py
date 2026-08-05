@@ -16,7 +16,6 @@ from api.admin.base import (
     MENU_ADMIN_PARSING,
     KodikInlineModelAdmin,
     KodikModelAdmin,
-    related,
 )
 from core.database import AsyncSessionLocal
 from src.bp1.models import Competitor, SearchTask, Source, Trigger
@@ -45,10 +44,6 @@ class SearchTaskInline(KodikInlineModelAdmin):
     list_select_related = ('competitor', 'source', 'trigger')
     max_num = 50
 
-    competitor = related('competitor')
-    source = related('source')
-    trigger = related('trigger')
-
 
 @register(Competitor, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class CompetitorAdmin(KodikModelAdmin):
@@ -63,7 +58,7 @@ class CompetitorAdmin(KodikModelAdmin):
         'inn': 'ИНН',
         'is_active': 'Активен',
     }
-    list_filter = ('is_active',)
+    list_filter = ('name', 'inn', 'is_active')
     search_fields = ('name', 'inn')
     search_help_text = 'Поиск по названию или ИНН'
     ordering = ('name',)
@@ -98,7 +93,7 @@ class SourceAdmin(KodikModelAdmin):
         'name': 'Адрес источника',
         'is_active': 'Активен',
     }
-    list_filter = ('is_active',)
+    list_filter = ('name', 'is_active')
     search_fields = ('name',)
     search_help_text = 'Поиск по адресу источника'
     ordering = ('name',)
@@ -129,7 +124,7 @@ class TriggerAdmin(KodikModelAdmin):
         'keyword': 'Ключевое слово',
         'is_active': 'Активен',
     }
-    list_filter = ('is_active',)
+    list_filter = ('keyword', 'is_active')
     search_fields = ('keyword',)
     search_help_text = 'Поиск по ключевому слову'
     ordering = ('keyword',)
@@ -159,7 +154,3 @@ class SearchTaskAdmin(KodikModelAdmin):
     list_select_related = ('competitor', 'source', 'trigger')
     list_filter = ('competitor', 'source', 'trigger', 'is_active')
     ordering = ('id',)
-
-    competitor = related('competitor')
-    source = related('source')
-    trigger = related('trigger')

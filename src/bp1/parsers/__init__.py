@@ -3,6 +3,7 @@
 Каждый адаптер реализует интерфейс BaseParser.
 """
 
+from ..adaptive import AdaptiveBridgeParser
 from ..base_parser import ParserFactory
 from .fedresurs_adapter import FedresursAdapter
 from .fips_adapter import FipsAdapter
@@ -25,7 +26,11 @@ ParserFactory.register('https://www.nic.ru/', NicRuAdapter)
 ParserFactory.register('https://dev.vk.com/', VKAdapter)
 ParserFactory.register('https://zakupki.gov.ru/', ZakupkiAdapter)
 
+# Универсальный адаптивный парсер (для любых источников)
+ParserFactory.register('adaptive', AdaptiveBridgeParser)
+
 __all__ = [
+    'AdaptiveBridgeParser',
     'FedresursAdapter',
     'FipsAdapter',
     'GoogleNewsAdapter',

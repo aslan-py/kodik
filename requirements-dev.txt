@@ -1,0 +1,7 @@
+# ===== Code Quality & Git Hooks =====
+pre-commit>=3.8            # фреймворк для автоматических проверок при commit
+ruff>=0.12.3               # быстрый линтер и форматер кода (flake8+isort+black)
+
+# ===== Testing =====
+pytest>=8.0
+pytest-asyncio>=0.24

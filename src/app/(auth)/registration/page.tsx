@@ -2,29 +2,57 @@
 
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { useAuth } from "@/hooks/useAuth";
 import { useState } from "react";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("user@example.com");
+  const [full_name, setFullName] = useState("string");
+  const [password, setPassword] = useState("Spassword1");
+  const [department_id, setDepartment] = useState('0');
+  const [telegram, setTelegram] = useState("0");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
+  const { register } = useAuth();
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      await register({
+        email,
+        full_name,
+        password,
+        department_id: Number(department_id),
+        telegram_id: 0, // или 0, смотря что ждёт бэкенд
+      });
+    } catch (err: unknown) {
+      const message =
+        err instanceof Object && "data" in err
+          ? (err as { data: { message?: string } }).data?.message
+          : "Ошибка входа";
+      setError(message ?? "Ошибка входа");
+    } finally {
+      setLoading(false);
+    }
+  };
   return (
-    <div className="flex">
-      <div className="flex flex-col pt-16 pb-16 pl-24 pr-46 justify-between text-xl relative z-10 bg-(--color-light)">
+    <div className="flex min-h-full items-center justify-center p-6 bg-(--color-light)">
+      <div className="flex flex-col gap-8 w-full max-w-md text-xl relative z-10 ">
         <div>
           Kodik+
           <span className="block text-(--color-secondary) text-xs">
             Конкурентная разведка
           </span>
         </div>
-        <div className="max-w-md">
-          <p className="text-3xl font-semibold mb-6">
-            Регистрация
-          </p>
+        
+        <div>
+          <p className="text-3xl font-semibold mb-6">Регистрация</p>
 
-          <form className="w-110" action="" method="post">
+          <form onSubmit={handleSubmit}>
             <Input
-              id="emailLogin"
+              id="emailRegistration"
               type={"email"}
               label="Рабочий email"
               value={email}
@@ -34,7 +62,17 @@ export default function LoginPage() {
               className="mb-6"
             />
             <Input
-              id="passwordLogin"
+              id="fullnameRegistration"
+              type={"text"}
+              label="Ваше ФИО"
+              value={full_name}
+              placeholder="ФИО"
+              onChange={setFullName}
+              error=""
+              className="mb-6"
+            />
+            <Input
+              id="passwordRegistration"
               type={"password"}
               value={password}
               label="Пароль"
@@ -43,21 +81,34 @@ export default function LoginPage() {
               error=""
               className="mb-6"
             />
-            <div className="flex justify-between items-center mb-6">
-              {/* <Checkbox
-                id="agree"
-                checked={agree}
-                onChange={setAgree}
-                label="Запомнить меня"
-                error=""
-                className=""
-              /> */}
-
-              {/* <Button className="btn inline text-sm" size="none" variant="tertiary">
-                Забыли пароль?
-              </Button> */}
-            </div>
-            <Button  className="btn inline h-9 text-sm font-medium" fullWidth variant="primary" type="submit">
+            
+            <Input
+              id="departmentRegistration"
+              type={"number"}
+              value={department_id}
+              label="Отдел"
+              placeholder="Введите отдел"
+              onChange={setDepartment}
+              error=""
+              className="mb-6"
+            />
+            <Input
+              id="TelegramRegistration"
+              type={"text"}
+              value={telegram}
+              label="Telegram (необязательно)"
+              placeholder="Telegram id"
+              onChange={setTelegram}
+              error=""
+              className="mb-6"
+            />
+            <div className="flex justify-between items-center mb-6"></div>
+            <Button
+              className="btn inline h-9 text-sm font-medium"
+              fullWidth
+              variant="primary"
+              type="submit"
+            >
               Войти
             </Button>
           </form>
@@ -69,4 +120,3 @@ export default function LoginPage() {
     </div>
   );
 }
-

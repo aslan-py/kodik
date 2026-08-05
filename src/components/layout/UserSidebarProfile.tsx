@@ -1,22 +1,30 @@
 import { useAppDispatch, useAppSelector } from "@/hooks/storeHooks";
 import { SelectItem, Select } from "../ui/Select";
 import { setUser, selectUser } from "@/store/authSlice";
-import type { AuthUser } from "@/store/authSlice";
+import type { AuthUser, Permission } from "@/store/authSlice";
 
 const viewerUser: AuthUser = {
-  id: "1",
-  name: "Александр Матвеев",
+  id: 1,
+  full_name: "Александр Матвеев",
   email: "alex@example.com",
-  role: "Просмотрщик",
-  permissions: [],
+  role: 'viewer',
+  department_id: 2,
+  is_active: true,
 };
 
 const adminUser: AuthUser = {
-  id: "2",
-  name: "Александр Матвеев",
+  id: 2,
+  full_name: "Александр Матвеев",
   email: "alex@example.com",
-  role: "Администратор",
-  permissions: ["admin"],
+  role: 'admin',
+  department_id: 1,
+  is_active: true,
+};
+const ROLE_LABELS: Record<Permission, string> = {
+  pending: "На рассмотрении",
+  viewer: "Просмотрщик",
+  analyst: "Аналитик",
+  admin: "Администратор",
 };
 
 function UserInfo({ name, role }: { name: string; role: string }) {
@@ -39,7 +47,7 @@ export default function UserSidebarProfile() {
   const dispatch = useAppDispatch();
   const user = useAppSelector(selectUser);
 
-  const currentUser = user ?? viewerUser;
+  const currentUser = user ?? adminUser;
 
   return (
     <div>
@@ -49,26 +57,26 @@ export default function UserSidebarProfile() {
         buttonIconClassName=""
         direction="up"
         buttonContent={
-          <UserInfo name={currentUser.name} role={currentUser.role} />
+          <UserInfo name={currentUser.full_name} role={ROLE_LABELS[currentUser.role]} />
         }
       >
         {(setOpen) => (
           <>
             <SelectItem
               onClick={() => {
-                dispatch(setUser(viewerUser));
+                // dispatch(setUser(viewerUser));
                 setOpen(false);
               }}
             >
-              Просмотрщик
+              Настройки
             </SelectItem>
             <SelectItem
               onClick={() => {
-                dispatch(setUser(adminUser));
+                // dispatch(setUser(adminUser));
                 setOpen(false);
               }}
             >
-              Администратор
+              Выйти
             </SelectItem>
           </>
         )}

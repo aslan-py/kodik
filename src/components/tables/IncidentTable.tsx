@@ -226,7 +226,7 @@ export default function IncidentTable({ onOpen }: IncidentTableProps) {
       <Table
         data={filteredIncidents}
         columns={columns}
-        pageSize={3}
+        pageSize={10}
         resetPaginationKey={`${searchQuery}-${dateFrom}-${dateTo}-${sourceFilter}-${priorityFilter}-${objectFilter}`}
       />
     </>

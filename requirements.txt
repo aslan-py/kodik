@@ -1,0 +1,41 @@
+# ===== Database =====
+sqlalchemy>=2.0,<3.0      # ORM для работы с БД
+alembic>=1.13,<2.0        # управление миграциями БД
+asyncpg>=0.30,<1.0        # асинхронный драйвер для Postgres
+python-dotenv>=1.0,<2.0   # загрузка переменных из .env
+
+# ===== Web API =====
+fastapi>=0.104,<1.0       # фреймворк для REST API
+pydantic>=2.0,<3.0        # валидация и сериализация данных
+pydantic-settings>=2.0,<3.0  # типизированный конфиг из .env
+
+# ===== Auth (JWT + хэш пароля) =====
+python-jose[cryptography]>=3.3,<4.0  # create_access_token/decode_access_token
+passlib[bcrypt]>=1.7,<2.0            # хэш пароля пользователя API
+bcrypt>=4.0,<4.1                     # passlib 1.7.4 несовместим с bcrypt>=4.1 (ValueError на verify)
+python-multipart>=0.0.9,<1.0         # OAuth2PasswordRequestForm (form-data в /auth/login)
+
+# ===== Mail =====
+fastapi-mail>=1.4,<2.0    # отправка email-алертов (BP-5)
+
+# ===== Telegram =====
+aiogram>=3.0,<4.0         # отправка telegram-алертов (BP-5)
+
+# ===== Server =====
+uvicorn>=0.24,<1.0        # ASGI-сервер для FastAPI
+
+# ===== Cache & Message Broker =====
+redis>=5.0,<6.0           # клиент Redis (синхронный, для Celery)
+
+# ===== Task Queue =====
+celery>=5.3,<6.0          # распределённая очередь задач
+
+# ===== Browser Automation =====
+# ВНИМАНИЕ: pip ставит только библиотеку. Сами браузеры (бинарники ~150 МБ)
+# качаются отдельной командой, положить их в requirements нельзя:
+#     python -m playwright install chromium
+# Без неё RPA-сборщики и src/run_pipeline.py падают при старте браузера.
+playwright>=1.40,<2.0     # браузерная автоматизация (RPA-сборщики)
+
+# ===== File I/O =====
+aiofiles>=23.0,<26.0      # асинхронная работа с файлами

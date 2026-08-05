@@ -1,19 +1,31 @@
 // src/api/authApi.ts
-import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
-import type { AuthUser } from "@/store/authSlice";
+import type { AuthUser, Permission } from "@/store/authSlice";
+import { baseApi } from "./baseApi";
 
-type LoginRequest = { email: string; password: string };
-type RegisterRequest = { name: string; email: string; password: string };
+type LoginRequest = {
+  email: string;
+  password: string;
+};
 
-export const authApi = createApi({
-  reducerPath: "authApi",
-  baseQuery: fetchBaseQuery({
-    baseUrl: "/api",
-    credentials: "include", // httpOnly cookies
-  }),
+type LoginResponse = {
+  access_token: string;
+  token_type: "bearer";
+};
+type RegisterResponse = {
+  user: AuthUser;
+};
+export type RegisterRequest = {
+  email: string;
+  password: string;
+  full_name: string;
+  department_id: number;
+  telegram_id?: number;
+};
+
+export const authApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     // auth — регистрация и логин
-    login: builder.mutation<{ user: AuthUser }, LoginRequest>({
+    login: builder.mutation<LoginResponse, LoginRequest>({
       query: (body) => ({
         url: "/auth/login",
         method: "POST",
@@ -21,7 +33,7 @@ export const authApi = createApi({
       }),
     }),
 
-    register: builder.mutation<{ user: AuthUser }, RegisterRequest>({
+    register: builder.mutation<RegisterResponse, RegisterRequest>({
       query: (body) => ({
         url: "/auth/register",
         method: "POST",
@@ -29,16 +41,26 @@ export const authApi = createApi({
       }),
     }),
 
-    // logout: builder.mutation<void, void>({
-    //   query: () => ({
-    //     url: "/auth/logout",
-    //     method: "POST",
-    //   }),
-    // }),
+    logout: builder.mutation<void, void>({
+      query: () => ({
+        url: "/auth/logout",
+        method: "POST",
+      }),
+    }),
 
     // users
     getMe: builder.query<{ user: AuthUser }, void>({
       query: () => "/users/me",
+    }),
+    getAllUsers: builder.query<{ user: AuthUser[] }, void>({
+      query: () => "/users",
+    }),
+    updateRoleUser: builder.mutation<AuthUser, { id: string; role: Permission }>({
+      query: ({ id, role }) => ({
+        url: `/users/${id}/role`,
+        method: "PATCH",
+        body: { role },
+      }),
     }),
   }),
 });
@@ -46,6 +68,8 @@ export const authApi = createApi({
 export const {
   useLoginMutation,
   useRegisterMutation,
-//   useLogoutMutation,
+  useLogoutMutation,
   useGetMeQuery,
+  useGetAllUsersQuery,
+  useUpdateRoleUserMutation,
 } = authApi;

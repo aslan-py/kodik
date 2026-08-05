@@ -1,51 +1,72 @@
-// src/api/authApi.ts
-import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
-import type { AuthUser } from "@/store/authSlice";
+import { baseApi } from "./baseApi";
+export interface ShowcaseResponse {
+  id: number;
+  categorized_event_id: number;
+  raw_item_id: number;
+  published_at: string;
+  title: string;
+  media: string;
+  region: string;
+  macro_region: string;
+  latitude: number;
+  longitude: number;
+  competitor: string;
+  source_url: string;
+  priority: string;
+  category: string;
+  tonality: string;
+  media_index: string;
+  action: string;
+  deadline: string;
+  department: string;
+  comment: string;
+  updated_at: string;
+  alerted_at: string;
+}
 
-type LoginRequest = { email: string; password: string };
-type RegisterRequest = { name: string; email: string; password: string };
+export interface PaginatedResponse<T> {
+  data: T[];
+  limit: number;
+  offset: number;
+  // total: number;
+  // page: number;
+  // totalPages: number;
+}
 
-export const authApi = createApi({
-  reducerPath: "authApi",
-  baseQuery: fetchBaseQuery({
-    baseUrl: "/api",
-    credentials: "include", // httpOnly cookies
-  }),
+export const showcaseApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
-    // auth — регистрация и логин
-    login: builder.mutation<{ user: AuthUser }, LoginRequest>({
-      query: (body) => ({
-        url: "/auth/login",
-        method: "POST",
-        body,
+    getShowcase: builder.query<
+      PaginatedResponse<ShowcaseResponse>,
+      { offset: number; limit: number }
+    >({
+      query: ({ offset, limit }) => ({
+        url: "/showcase",
+        params: {
+          offset,
+          limit,
+        },
       }),
     }),
-
-    register: builder.mutation<{ user: AuthUser }, RegisterRequest>({
-      query: (body) => ({
-        url: "/auth/register",
-        method: "POST",
-        body,
+    getShowcaseId: builder.query<ShowcaseResponse, { showcase_id: number }>({
+      query: ({ showcase_id }) => ({
+        url: `/showcase/${showcase_id}`,
+        params: {
+          showcase_id,
+        },
       }),
     }),
-
-    // logout: builder.mutation<void, void>({
-    //   query: () => ({
-    //     url: "/auth/logout",
-    //     method: "POST",
-    //   }),
-    // }),
-
-    // users
-    getMe: builder.query<{ user: AuthUser }, void>({
-      query: () => "/users/me",
+    editShowcaseId: builder.mutation<ShowcaseResponse,{ data: ShowcaseResponse }>({
+      query: ({ data }) => ({
+        url: `/showcase/${data.id}`,
+        method: "PATCH",
+        body: data,
+      }),
+      invalidatesTags: (_result, _err, { data }) => [
+        "Showcases",
+        { type: "Showcases", id: data.id },
+      ],
     }),
   }),
 });
 
-export const {
-  useLoginMutation,
-  useRegisterMutation,
-//   useLogoutMutation,
-  useGetMeQuery,
-} = authApi;
+export const { useGetShowcaseQuery, useGetShowcaseIdQuery, useEditShowcaseIdMutation } = showcaseApi;

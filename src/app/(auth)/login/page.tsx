@@ -3,16 +3,40 @@
 import { Button } from "@/components/ui/Button";
 import { Checkbox } from "@/components/ui/Checkbox/Checkbox";
 import { Input } from "@/components/ui/Input";
+import { useAuth } from "@/hooks/useAuth";
 import { useState } from "react";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [agree, setAgree] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
+  const { login } = useAuth();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      await login(email, password);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Object && "data" in err
+          ? (err as { data: { message?: string } }).data?.message
+          : "Ошибка входа";
+      setError(message ?? "Ошибка входа");
+    } finally {
+      setLoading(false);
+    console.log('запрос');
+
+    }
+  };
   return (
     <div className="flex">
-      <div className="flex flex-col pt-16 pb-16 pl-24 pr-46 justify-between text-xl relative z-10 bg-(--color-light)">
+      <div className="flex h-full flex-col p-10 justify-between text-xl relative z-10 bg-(--color-light)">
         <div>
           Kodik+
           <span className="block text-(--color-secondary) text-xs">
@@ -23,8 +47,8 @@ export default function LoginPage() {
           <p className="text-3xl font-semibold mb-6">
             Вход в рабочее пространство
           </p>
-
-          <form className="w-110" action="" method="post">
+          <span>{error}</span>
+          <form className="" onSubmit={handleSubmit}>
             <Input
               id="emailLogin"
               type={"email"}
@@ -55,11 +79,22 @@ export default function LoginPage() {
                 className=""
               />
 
-              <Button className="btn inline text-sm" size="none" variant="tertiary">
+              <Button
+                className="btn inline text-sm"
+                size="none"
+                variant="tertiary"
+              >
                 Забыли пароль?
               </Button>
             </div>
-            <Button  className="btn inline h-9 text-sm font-medium" fullWidth variant="primary" type="submit">
+            <Button
+              loading={loading}
+              className="btn inline h-9 text-sm font-medium"
+              fullWidth
+              variant="primary"
+              type="submit"
+              
+            >
               Войти
             </Button>
           </form>
@@ -71,4 +106,3 @@ export default function LoginPage() {
     </div>
   );
 }
-

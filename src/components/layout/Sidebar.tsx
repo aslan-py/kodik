@@ -10,6 +10,7 @@ import { usePermission } from "@/hooks/useAuth";
 const baseItems = [
   { href: "/incidents", label: "События" },
   { href: "/task", label: "Задачи" },
+  { href: "/mytask", label: "Мои задачи" },
 ];
 
 const adminItems = [
@@ -18,7 +19,10 @@ const adminItems = [
 
 const adminSubItems = [
   { href: "/admin", label: "Администрирование" },
-  { href: "/admin/notifications", label: "Уведомления" },
+  { href: "/admin/monitoring", label: "Мониторинг" },
+  { href: "/admin/filtring", label: "Фильтрация" },
+  { href: "/admin/classification", label: "Классификация" },
+  { href: "/admin/users", label: "Пользователи" },
 ];
 
 export default function Sidebar() {

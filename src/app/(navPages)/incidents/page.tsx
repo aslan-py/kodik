@@ -8,12 +8,20 @@ import type { IncidentItem } from "@/types/types";
 import { CardTask } from "@/components/cards/CardTask/CardTask";
 import { CardIncident } from "@/components/cards/CardIncident/CardIncident";
 import { mockIncidents } from "@/data/mockIncidents";
+// import { useGetShowcaseQuery } from "@/api/showcaseApi";
 
 export default function IncidentsPage() {
   const [selectedIncident, setSelectedIncident] = useState<IncidentItem | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [linkedIncidentTitle, setLinkedIncidentTitle] = useState<string | null>(null);
+//   const { data, isLoading, error } = useGetShowcaseQuery({
+//     offset: 1,
+//     limit: 10,
+//   });
 
+// console.log(data?.data);       // пользователи
+// console.log(data?.offset);      // всего записей
+// console.log(data?.limit); // всего страниц
   const metricsEvent = [
     { label: "событий", value: 248 },
     { label: "приоритет П1", value: 28 },

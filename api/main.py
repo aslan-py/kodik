@@ -6,6 +6,7 @@
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 # Регистрирует ВСЕ модели в Base.metadata: без этого SQLAlchemy не резолвит
 # FK на таблицы модулей, которые роутеры не импортируют напрямую (напр.
@@ -20,6 +21,14 @@ app = FastAPI(
     title=settings.app_title,
     description=settings.description,
     openapi_tags=tags_metadata,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
 
 app.include_router(main_router)

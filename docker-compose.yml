@@ -34,21 +34,6 @@ services:
       timeout: 5s
       retries: 5
 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: kodik_pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@kodik.local}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-change_me}
-    ports:
-      - '${PGADMIN_PORT:-5050}:80'
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    depends_on:
-      postgres:
-        condition: service_healthy
-
   redis-commander:
     image: rediscommander/redis-commander:latest
     container_name: kodik_redis_commander
@@ -64,4 +49,3 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  pgadmin_data:

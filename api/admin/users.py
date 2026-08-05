@@ -20,7 +20,7 @@ from uuid import UUID
 from fastadmin import WidgetType, register
 from sqlalchemy import select
 
-from api.admin.base import MENU_USERS, KodikModelAdmin, related
+from api.admin.base import MENU_USERS, KodikModelAdmin
 from api.security import hash_password, verify_password
 from core.database import AsyncSessionLocal
 from core.enums import UserRole
@@ -63,13 +63,11 @@ class UserAdmin(KodikModelAdmin):
         'is_active': 'Активен',
     }
     list_select_related = ('department',)
-    list_filter = ('role', 'is_active', 'department')
+    list_filter = ('full_name', 'email', 'role', 'is_active', 'department')
     search_fields = ('full_name', 'email')
     search_help_text = 'Поиск по ФИО или email'
     ordering = ('id',)
     exclude = ('password_hash',)
-
-    department = related('department')
 
     formfield_overrides = {  # noqa: RUF012
         'full_name': (

@@ -157,6 +157,8 @@ __pycache__/
 my_folder
 .ipynb_checkpoints
 bp_parsing/
+.next/
+next-env.d.ts
 
 # ── Сырые данные (HTML, JSONB) — не коммитятся ──────────────────────────────
 /data/

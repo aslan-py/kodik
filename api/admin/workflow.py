@@ -10,30 +10,15 @@ CRUD.
 Правка разметки идёт через `PATCH /showcase/{id}`, где write-through в
 `categorized_event` + зеркалирование реализованы один раз
 (api/crud/showcase.py::ShowcaseCRUD.update).
-
-Здесь же живут виджеты «Панели управления» — стартовой страницы админки:
-без них она пустая. Виджеты объявляются как методы модели через
-`@widget_action` и перечисляются в `widget_actions`.
 """
 
-from typing import Any
-
-from fastadmin import (
-    WidgetActionChartProps,
-    WidgetActionResponseSchema,
-    WidgetActionType,
-    WidgetType,
-    register,
-    widget_action,
-)
-from sqlalchemy import func, select
+from fastadmin import WidgetType, register
 
 from api.admin.base import (
     MENU_ACTIONS,
     MENU_SHOWCASE,
     KodikModelAdmin,
     ReadOnlyModelAdmin,
-    related,
 )
 from core.database import AsyncSessionLocal
 from src.bp4.models import ShowcaseEvent
@@ -81,31 +66,6 @@ class ShowcaseEventAdmin(ReadOnlyModelAdmin):
     search_help_text = 'Поиск по заголовку, конкуренту, региону или СМИ'
     ordering = ('-published_at',)
 
-    widget_actions = ('events_by_priority',)
-
-    @widget_action(
-        title='События витрины по приоритетам',
-        description='Сколько событий каждого приоритета лежит в витрине',
-        widget_action_type=WidgetActionType.ChartColumn,
-        widget_action_props=WidgetActionChartProps(
-            x_field='priority',
-            y_field='count',
-        ),
-        width=12,
-    )
-    async def events_by_priority(self, payload: Any = None) -> Any:
-        async with AsyncSessionLocal() as session:
-            rows = await session.execute(
-                select(ShowcaseEvent.priority, func.count())
-                .group_by(ShowcaseEvent.priority)
-                .order_by(ShowcaseEvent.priority)
-            )
-            data = [
-                {'priority': priority, 'count': count}
-                for priority, count in rows.all()
-            ]
-        return WidgetActionResponseSchema(data=data)
-
 
 @register(ActionItem, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class ActionItemAdmin(KodikModelAdmin):
@@ -141,9 +101,6 @@ class ActionItemAdmin(KodikModelAdmin):
     ordering = ('-id',)
     # Проставляется базой при вставке — показываем, но не даём править.
     readonly_fields = ('created_at',)
-
-    department = related('department')
-    assigned_user = related('assigned_user')
 
     formfield_overrides = {  # noqa: RUF012
         'task': (

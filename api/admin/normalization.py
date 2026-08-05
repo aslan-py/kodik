@@ -37,6 +37,7 @@ class RegionAdmin(KodikModelAdmin):
         'latitude': 'Широта',
         'longitude': 'Долгота',
     }
+    list_filter = ('name_display', 'macro_region')
     search_fields = ('name_display', 'macro_region')
     search_help_text = 'Поиск по названию или федеральному округу'
     ordering = ('name_display',)
@@ -92,7 +93,7 @@ class BlackDomainAdmin(KodikModelAdmin):
     }
     # Дата проставляется базой при вставке — показываем, но не даём править.
     readonly_fields = ('created_at',)
-    list_filter = ('is_active',)
+    list_filter = ('domain', 'is_active')
     search_fields = ('domain', 'reason')
     search_help_text = 'Поиск по домену или причине'
     ordering = ('domain',)
@@ -214,7 +215,7 @@ class CategoryAdmin(KodikModelAdmin):
         'note': 'Определение',
         'is_active': 'Активна',
     }
-    list_filter = ('is_active',)
+    list_filter = ('name', 'is_active')
     search_fields = ('name', 'note')
     search_help_text = 'Поиск по названию или определению'
     ordering = ('name',)

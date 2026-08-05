@@ -15,7 +15,6 @@ from api.admin.base import (
     MENU_ADMIN_ALERTING,
     KodikInlineModelAdmin,
     KodikModelAdmin,
-    related,
 )
 from core.database import AsyncSessionLocal
 from src.bp5.models import Channel, EventType, RoutingRule
@@ -41,9 +40,6 @@ class RoutingRuleInline(KodikInlineModelAdmin):
     list_display_labels = _RULE_LABELS
     list_select_related = ('user', 'channel')
     max_num = 50
-
-    user = related('user')
-    channel = related('channel')
 
 
 @register(EventType, sqlalchemy_sessionmaker=AsyncSessionLocal)
@@ -133,7 +129,3 @@ class RoutingRuleAdmin(KodikModelAdmin):
     list_select_related = ('event_type', 'user', 'channel')
     list_filter = ('event_type', 'priority', 'channel', 'mode', 'is_active')
     ordering = ('id',)
-
-    event_type = related('event_type')
-    user = related('user')
-    channel = related('channel')

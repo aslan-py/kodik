@@ -18,7 +18,7 @@
 
 from fastadmin import register
 
-from api.admin.base import MENU_PIPELINE, ReadOnlyModelAdmin, related
+from api.admin.base import MENU_PIPELINE, ReadOnlyModelAdmin
 from core.database import AsyncSessionLocal
 from src.bp1.models import RawItem
 from src.bp2.models import NormalizedItem
@@ -59,8 +59,6 @@ class RawItemAdmin(ReadOnlyModelAdmin):
     search_help_text = 'Поиск по ссылке запроса или тексту ошибки'
     ordering = ('-id',)
 
-    search_task = related('search_task')
-
 
 @register(NormalizedItem, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class NormalizedItemAdmin(ReadOnlyModelAdmin):
@@ -97,14 +95,17 @@ class NormalizedItemAdmin(ReadOnlyModelAdmin):
         'created_at': 'Нормализовано',
     }
     list_select_related = ('competitor', 'region', 'source')
-    list_filter = ('status', 'reject_reason', 'competitor', 'region', 'source')
+    list_filter = (
+        'title',
+        'status',
+        'reject_reason',
+        'competitor',
+        'region',
+        'source',
+    )
     search_fields = ('title', 'media_name', 'media_domain', 'url')
     search_help_text = 'Поиск по заголовку, СМИ, домену или ссылке'
     ordering = ('-id',)
-
-    competitor = related('competitor')
-    region = related('region')
-    source = related('source')
 
 
 @register(CategorizedEvent, sqlalchemy_sessionmaker=AsyncSessionLocal)
@@ -139,14 +140,16 @@ class CategorizedEventAdmin(ReadOnlyModelAdmin):
         'categorized_at': 'Размечено',
     }
     list_select_related = ('normalized_item', 'category', 'department')
-    list_filter = ('priority', 'category', 'tonality', 'department')
+    list_filter = (
+        'normalized_item',
+        'priority',
+        'category',
+        'tonality',
+        'department',
+    )
     search_fields = ('action', 'comment')
     search_help_text = 'Поиск по требуемому действию или комментарию'
     ordering = ('-id',)
-
-    normalized_item = related('normalized_item')
-    category = related('category')
-    department = related('department')
 
 
 @register(Alert, sqlalchemy_sessionmaker=AsyncSessionLocal)
@@ -185,15 +188,18 @@ class AlertAdmin(ReadOnlyModelAdmin):
         'user',
         'channel',
     )
-    list_filter = ('status', 'priority', 'mode', 'channel', 'user')
+    list_filter = (
+        'showcase_event',
+        'event_type',
+        'status',
+        'priority',
+        'mode',
+        'channel',
+        'user',
+    )
     search_fields = ('error_message',)
     search_help_text = 'Поиск по тексту ошибки доставки'
     ordering = ('-id',)
-
-    showcase_event = related('showcase_event')
-    event_type = related('event_type')
-    user = related('user')
-    channel = related('channel')
 
 
 @register(SourceCandidate, sqlalchemy_sessionmaker=AsyncSessionLocal)
@@ -226,5 +232,3 @@ class SourceCandidateAdmin(ReadOnlyModelAdmin):
     search_fields = ('domain', 'url')
     search_help_text = 'Поиск по домену или ссылке'
     ordering = ('-id',)
-
-    competitor = related('competitor')

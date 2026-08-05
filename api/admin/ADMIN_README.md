@@ -17,7 +17,7 @@
 - **фронтенд** — React+antd уже собран внутри пакета `fastadmin`, Node и
   `npm build` не нужны;
 - **контейнер** — не нужен. В `docker-compose.yml` лежит только
-  инфраструктура (postgres, redis, pgadmin, redis-commander), само приложение
+  инфраструктура (postgres, redis, redis-commander), само приложение
   запускается локально — админка ничего в этом не меняет.
 
 ## Запуск
@@ -56,7 +56,7 @@ curl -X POST http://localhost:8000/auth/register \
 ```
 
 ```sql
--- выдать ему права (psql / pgAdmin на localhost:5050)
+-- выдать ему права (psql или DBeaver, подключение см. PREDPROD_README.md)
 UPDATE "user" SET role = 'admin' WHERE email = 'me@example.com';
 ```
 

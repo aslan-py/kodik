@@ -41,7 +41,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import (
@@ -54,6 +54,8 @@ from core.enums import (
     priority_level,
     user_role,
 )
+from src.bp3.models import Department
+from src.bp4.models import ShowcaseEvent
 
 # ============================================================================
 #  Справочники BP-5
@@ -83,6 +85,9 @@ class EventType(Base, Mixin, ActiveMixin):
         ),
     )
 
+    def __str__(self) -> str:
+        return self.name
+
     __table_args__ = (
         Index(
             'ix_event_type_keywords',
@@ -103,6 +108,9 @@ class Channel(Base, Mixin, ActiveMixin):
         unique=True,
         comment='Канал доставки: telegram, email, dashboard',
     )
+
+    def __str__(self) -> str:
+        return self.name
 
     __table_args__ = (
         CheckConstraint('name = btrim(name)', name='ck_channel_name_trimmed'),
@@ -160,6 +168,12 @@ class User(Base, Mixin, ActiveMixin):
             'Уровень доступа к API (не отдел): pending/viewer/analyst/admin'
         ),
     )
+
+    # Связь нужна админке (FastAdmin показывает FK только через relationship).
+    department: Mapped['Department | None'] = relationship('Department')
+
+    def __str__(self) -> str:
+        return self.full_name or self.email
 
     __table_args__ = (
         CheckConstraint(
@@ -239,6 +253,14 @@ class RoutingRule(Base, Mixin, ActiveMixin):
         comment='instant (П1) | digest (П2)',
     )
 
+    # Связи нужны админке (FastAdmin показывает FK только через relationship).
+    event_type: Mapped['EventType'] = relationship('EventType')
+    user: Mapped['User'] = relationship('User')
+    channel: Mapped['Channel'] = relationship('Channel')
+
+    def __str__(self) -> str:
+        return f'#{self.id} · {self.priority} · {self.mode}'
+
     __table_args__ = (
         UniqueConstraint(
             'event_type_id',
@@ -312,6 +334,15 @@ class Alert(Base, Mixin):
         DateTime(timezone=True),
         comment='Когда фактически доставлено',
     )
+
+    # Связи нужны админке (FastAdmin показывает FK только через relationship).
+    showcase_event: Mapped['ShowcaseEvent'] = relationship('ShowcaseEvent')
+    event_type: Mapped['EventType'] = relationship('EventType')
+    user: Mapped['User'] = relationship('User')
+    channel: Mapped['Channel'] = relationship('Channel')
+
+    def __str__(self) -> str:
+        return f'#{self.id} · {self.priority} · {self.status}'
 
     __table_args__ = (
         UniqueConstraint(

@@ -120,5 +120,25 @@ class Settings(BaseSettings):
     deepseek_base_url: str = 'https://api.deepseek.com'
     deepseek_model: str = 'deepseek-chat'
 
+    # ===== BP-7 (агент расширения источников) =====
+    # Порог score, выше которого source_candidate переносится в source
+    # (src/bp7/pipeline.py::SourceCandidatePromoter). Настраивается через
+    # .env без правки кода.
+    source_candidate_score_threshold: float = 0.5
+
+    # ===== Админка (FastAdmin, монтируется в api/main.py на /admin) =====
+    # FastAdmin читает свои настройки напрямую из os.environ на импорте, а не
+    # из этого класса — раскладывает их туда api/admin/__init__.py, чтобы
+    # единственным источником правды остался .env.
+    admin_site_name: str = 'Кодик — админка'
+    admin_language: str = 'ru'
+    # Секрет подписи сессии админки. Пустой -> берётся jwt_secret_key
+    # (см. api/admin/__init__.py), отдельный ключ заводить не обязательно.
+    admin_secret_key: str | None = None
+    # False — обязательное значение для локального http://localhost: иначе
+    # кука сессии ставится только по HTTPS и вход молча не работает.
+    # На проде (за TLS) выставить True.
+    admin_session_cookie_secure: bool = False
+
 
 settings = Settings()

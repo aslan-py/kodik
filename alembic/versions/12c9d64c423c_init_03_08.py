@@ -1,8 +1,8 @@
-"""init_01_08
+"""init_03_08
 
-Revision ID: 2c68ffa6ee8b
+Revision ID: 12c9d64c423c
 Revises:
-Create Date: 2026-08-01 19:07:25.522709
+Create Date: 2026-08-03 21:53:24.512956
 
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 import core.database  # noqa: F401 — для типа StrippedString
 
 # revision identifiers, used by Alembic.
-revision: str = '2c68ffa6ee8b'
+revision: str = '12c9d64c423c'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -167,8 +167,10 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('full_name', core.database.StrippedString(length=256), nullable=True, comment='ФИО — для читаемости в админке, не критично'),
     sa.Column('department_id', sa.Integer(), nullable=True, comment='В каком отделе числится (справочно, не для маршрутизации)'),
-    sa.Column('email', core.database.StrippedString(length=256), nullable=False, comment='Адрес для канала email'),
-    sa.Column('telegram_id', sa.BigInteger(), nullable=False, comment='Числовой chat_id для канала telegram (sendMessage требует id, не @username)'),
+    sa.Column('email', core.database.StrippedString(length=256), nullable=False, comment='Адрес для канала email, он же логин API'),
+    sa.Column('telegram_id', sa.BigInteger(), nullable=True, comment='Числовой chat_id для канала telegram (sendMessage требует id, не @username). NULL, пока пользователь не привязал telegram'),
+    sa.Column('password_hash', core.database.StrippedString(length=256), nullable=False, comment='bcrypt-хэш пароля для логина в API'),
+    sa.Column('role', sa.Enum('pending', 'viewer', 'analyst', 'admin', name='user_role'), server_default=sa.text("'pending'"), nullable=False, comment='Уровень доступа к API (не отдел): pending/viewer/analyst/admin'),
     sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
     sa.CheckConstraint('email = btrim(email)', name='ck_user_email_trimmed'),
     sa.CheckConstraint('full_name = btrim(full_name)', name='ck_user_full_name_trimmed'),

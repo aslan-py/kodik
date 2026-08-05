@@ -47,6 +47,14 @@ class ActionItem(Base, Mixin):
         ForeignKey('department.id', ondelete='RESTRICT'),
         comment='Ответственный отдел',
     )
+    assigned_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey('user.id', ondelete='RESTRICT'),
+        comment=(
+            'Кому конкретно назначена задача (адресат алерта BP-5, если '
+            'задачу завёл AI-ассистент). NULL — задача отдела в целом, '
+            'без привязки к конкретному человеку'
+        ),
+    )
     deadline: Mapped[date | None] = mapped_column(
         Date,
         comment='Срок',

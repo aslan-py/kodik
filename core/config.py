@@ -85,5 +85,40 @@ class Settings(BaseSettings):
     true_alerting: bool = False
     test_email: str
 
+    # ===== Parsing (универсальный загрузчик, src/bp_parsing) =====
+    # parsed_pages_dir: str = 'data/parsed_pages'
+    # parsing_headless: bool = True
+    # parsing_timeout_ms: int = 30000
+
+    # ===== FASTAPI SETTINGS =====
+    app_title: str = 'Конкурентная разведка'
+    description: str = 'API управлния проектом конкурентная разведка'
+
+    # ===== CORS =====
+    # Список разрешённых origin через запятую, например:
+    # CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+    cors_origins: str = 'http://localhost:3000,http://127.0.0.1:3000'
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Разбирает CORS_ORIGINS в список origin для CORSMiddleware."""
+        return [
+            origin.strip()
+            for origin in self.cors_origins.split(',')
+            if origin.strip()
+        ]
+
+    # ===== JWT =====
+    jwt_secret_key: str
+    jwt_expire_minutes: int = 60
+
+    # ===== Сброс пароля =====
+    password_reset_code_expire_minutes: int = 10
+
+    # ===== AI-ассистент (BP-6, генерация action_item) =====
+    deepseek_token: str
+    deepseek_base_url: str = 'https://api.deepseek.com'
+    deepseek_model: str = 'deepseek-chat'
+
 
 settings = Settings()

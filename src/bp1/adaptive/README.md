@@ -228,7 +228,7 @@ python -m src.bp1.adaptive.cli classify --source lenta.ru
 python -m src.bp1.adaptive.cli run
 
 # Запуск конкретной задачи
-python -m src.bp1.adaptive.cli run --task-id 26
+python -m src.bp1.adaptive.cli run --task-id 40
 
 # Запуск с указанием режима и fallback
 python -m src.bp1.adaptive.cli run --source lenta.ru \
@@ -242,7 +242,7 @@ python -m src.bp1.adaptive.cli cache --clear --source lenta.ru
 python -m src.bp1.adaptive.cli profile --show --source lenta.ru
 
 # Отчёт качества
-python -m src.bp1.adaptive.cli quality --report --task-id 26
+python -m src.bp1.adaptive.cli quality --report --task-id 40
 ```
 
 ### Через код
@@ -350,12 +350,6 @@ pytest -v
 ruff check src/bp1/adaptive tests/bp1/adaptive
 ruff format --check src/bp1/adaptive tests/bp1/adaptive
 ```
-
-> **Примечание:** тесты используют фейковые оркестраторы и Redis-клиенты,
-> поэтому не требуют запущенной инфраструктуры (Postgres/Redis). Тесты
-> `test_engines.py` проверяют корректную обработку ошибок при недоступности
-> `crawl4ai`/Playwright через `monkeypatch`.
-
 ---
 
 ## Зависимости

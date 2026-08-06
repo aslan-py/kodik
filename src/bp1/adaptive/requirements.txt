@@ -1,0 +1,36 @@
+# ===== BP-1 Adaptive — зависимости пакета =====
+# Пакет использует стандартную библиотеку Python и существующие
+# зависимости проекта. Ниже перечислены внешние пакеты, от которых
+# напрямую зависит код src/bp1/adaptive.
+
+# ===== Data Validation =====
+pydantic>=2.0,<3.0        # Pydantic-схемы (schemas.py)
+
+# ===== AI-краулинг (CRAWL4AI-стратегия) =====
+crawl4ai>=0.4.0           # AI-краулинг (engines.py: Crawl4AIStrategy)
+
+# ===== LLM (LLMClient, AIAgent) =====
+litellm>=1.40.0           # универсальный LLM-клиент (llm.py)
+openai>=1.0.0             # OpenAI-совместимый API (llm.py)
+
+# ===== Browser Automation =====
+# ВНИМАНИЕ: pip ставит только библиотеку. Сами браузеры (бинарники ~150 МБ)
+# качаются отдельной командой, положить их в requirements нельзя:
+#     python -m playwright install chromium
+# Без неё BROWSER-стратегия (orchestrator.py) падает при старте браузера.
+playwright>=1.40,<2.0     # браузерная автоматизация (BROWSER/STEALTH-стратегии)
+
+# ===== ORM / Database =====
+sqlalchemy>=2.0,<3.0      # AsyncSession (runner.py, cli.py)
+
+# ===== Внутренние зависимости проекта =====
+# Пакет опирается на следующие модули репозитория (не являются внешними
+# зависимостями, но требуются для работы):
+#   - src.bp1.base_parser   (bridge.py)
+#   - src.bp1.tasks         (runner.py)
+#   - src.bp1.models        (cli.py)
+#   - src.bp1.constants     (cli.py)
+#   - core.config           (runner.py)
+#   - core.database         (cli.py)
+#   - core.redis_client     (cli.py)
+# Redis-клиент (aioredis/redis) используется через core.redis_client.

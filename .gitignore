@@ -154,8 +154,14 @@ test_file.txt
 gg.py
 __pycache__/
 .ruff_cache
+HEAD
 my_folder
 .ipynb_checkpoints
+env/
+llm.ipynb
+dataset.ipynb
+dataset/
+*.ipynb
 bp_parsing/
 .next/
 next-env.d.ts

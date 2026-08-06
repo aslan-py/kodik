@@ -16,13 +16,19 @@ category / priority / tonality / department / action / comment того же CSV
 Что здесь имитирует LLM, а что делает код (как и в бою):
   - LLM: приоритет, категория, тональность, действие, комментарий, отдел;
   - код: deadline (П1 = дата + 2 дня, П2 = +7 дней) — арифметику дат модели
-    не доверяют; llm_model и prompt_version — метаданные прогона.
+    не доверяют; llm_model и prompt_version — метаданные прогона;
+  - media_index в бою приходит из лицензионного агрегатора (не от LLM и не
+    от кода пайплайна) — здесь его тоже нет, поэтому fake_media_index()
+    подставляет детерминированное значение 1.0–5.0 по normalized_item_id
+    вместо NULL, чтобы витрина не выглядела пустой в демо.
 
 Размечаются ТОЛЬКО события со status=ok: отсеянное разметку не получает.
 Требует залитых фактов (stages/bp2 либо настоящий прогон run_bp2).
 """
 
+import random
 from datetime import date, timedelta
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +41,22 @@ from src.bp3.models import CategorizedEvent, Category, Department
 
 LLM_MODEL = 'gpt-4o-mini'
 PROMPT_VERSION = 'v1.0'
+
+MEDIA_INDEX_MIN = 1.0
+MEDIA_INDEX_MAX = 5.0
+
+
+def fake_media_index(seed: int) -> Decimal:
+    """Правдоподобный медиаиндекс (охват/заметность) вместо NULL.
+
+    В бою приходит из лицензионного агрегатора (см. models.py) — здесь его
+    нет, поэтому детерминированно генерируем по normalized_item_id: тот же
+    сид на каждом пересиде даёт то же значение, демо остаётся
+    воспроизводимым (никакой real-time случайности).
+    """
+    value = random.Random(seed).uniform(MEDIA_INDEX_MIN, MEDIA_INDEX_MAX)
+    return Decimal(str(round(value, 2)))
+
 
 # ============================================================================
 #  Разметка: url события → смыслы (из CSV, только у чистых событий)
@@ -104,7 +126,7 @@ async def seed(session: AsyncSession) -> int:
                 priority=markup['priority'],
                 category_id=categories[markup['category']],
                 tonality=markup['tonality'],
-                media_index=None,  # приходит из агрегатора, не от LLM
+                media_index=fake_media_index(item.id),
                 action=markup['action'],
                 deadline=compute_deadline(
                     markup['priority'], item.published_at

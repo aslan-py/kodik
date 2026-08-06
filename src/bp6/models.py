@@ -13,18 +13,21 @@ Mapped[str | None] -> NULL. Явный nullable= не дублируем.
 from datetime import UTC, date, datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
-    String,
     Text,
     func,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from core.database import Base, Mixin
+from core.database import Base, Mixin, StrippedString
 from core.enums import ActionStatus, action_status
+from src.bp3.models import Department
+from src.bp4.models import ShowcaseEvent
+from src.bp5.models import User
 
 
 class ActionItem(Base, Mixin):
@@ -40,12 +43,20 @@ class ActionItem(Base, Mixin):
         comment='По какому событию витрины заведена задача',
     )
     task: Mapped[str] = mapped_column(
-        String(512),
+        StrippedString(512),
         comment='Задача: что конкретно сделать (решение человека)',
     )
     department_id: Mapped[int] = mapped_column(
         ForeignKey('department.id', ondelete='RESTRICT'),
         comment='Ответственный отдел',
+    )
+    assigned_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey('user.id', ondelete='RESTRICT'),
+        comment=(
+            'Кому конкретно назначена задача (адресат алерта BP-5, если '
+            'задачу завёл AI-ассистент). NULL — задача отдела в целом, '
+            'без привязки к конкретному человеку'
+        ),
     )
     deadline: Mapped[date | None] = mapped_column(
         Date,
@@ -73,4 +84,19 @@ class ActionItem(Base, Mixin):
         onupdate=lambda: datetime.now(UTC),
         server_default=func.now(),
         comment='Обновляется при смене статуса',
+    )
+
+    # Связи нужны админке (FastAdmin показывает FK только через relationship).
+    # Ленивые по умолчанию: сериализация читает *_id, объект не трогает.
+    showcase_event: Mapped['ShowcaseEvent'] = relationship('ShowcaseEvent')
+    department: Mapped['Department'] = relationship('Department')
+    assigned_user: Mapped['User | None'] = relationship('User')
+
+    def __str__(self) -> str:
+        return self.task
+
+    __table_args__ = (
+        CheckConstraint(
+            'task = btrim(task)', name='ck_action_item_task_trimmed'
+        ),
     )

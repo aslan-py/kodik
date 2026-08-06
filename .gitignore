@@ -162,3 +162,14 @@ llm.ipynb
 dataset.ipynb
 dataset/
 *.ipynb
+bp_parsing/
+.next/
+next-env.d.ts
+
+# ── Сырые данные (HTML, JSONB) — не коммитятся ──────────────────────────────
+/data/
+src/bp1/data/html_pages/*
+src/bp1/data/raw/*
+SPECIFICATION.md
+ai_prompt_adaptive.md
+Правила.md

@@ -52,7 +52,8 @@ Table search_task {
   is_active boolean [not null, default: true, note: "Активна ли задача. Celery Beat берёт в перебор только активные строки. Выключаем флагом, не удаляя (иначе теряем FK-историю в raw_item)"]
 
   indexes {
-    (competitor_id, source_id, trigger_id) [unique, note: "Не плодить дубли конфигов. ВНИМАНИЕ: в Postgres NULL != NULL, поэтому строки с trigger_id=NULL этот индекс НЕ защитит от дублей. Для полной защиты — partial unique index с COALESCE(trigger_id, 0) в миграции"]
+    (competitor_id, source_id, trigger_id) [unique, note: "Не плодить дубли конфигов. ВНИМАНИЕ: в Postgres NULL != NULL, поэтому строки с trigger_id=NULL этот индекс НЕ защитит от дублей — см. отдельный partial unique index ниже"]
+    (competitor_id, source_id) [unique, name: "uq_search_task_no_trigger", note: "Partial unique index (WHERE trigger_id IS NULL) — реализован в src/bp1/models.py: закрывает дыру индекса выше именно для строк без триггера"]
   }
 
   Note: "Служебная таблица конфигурации: связывает кто, где и что ищет. На неё опирается Celery Beat при старте. id строки = ключ в Redis."
@@ -87,7 +88,7 @@ Table raw_item {
 Table region {
   id           int     [pk, increment, note: "Уникальный ID региона"]
   name_display varchar [not null, unique, note: "Каноническое имя для витрины и карты: 'Волгоград'. По нему группируем в дашборде"]
-  name_aliases text[]  [null, note: "Варианты написания в нижнем регистре: ['волгоград', 'г. волгоград', 'г волгоград']. Lookup: lower(:raw) = ANY(name_aliases). GIN-индекс ix_region_name_aliases"]
+  name_aliases varchar[] [null, note: "Варианты написания в нижнем регистре: ['волгоград', 'г. волгоград', 'г волгоград']. Lookup: lower(:raw) = ANY(name_aliases). GIN-индекс ix_region_name_aliases. Тип как у event_type.keywords — оба через ARRAY(String) в коде"]
   macro_region varchar [null, note: "Федеральный округ: Сибирский, Южный и т.д."]
   latitude     float   [null, note: "Широта центра региона (WGS-84), для карты рынка"]
   longitude    float   [null, note: "Долгота центра региона (WGS-84), для карты рынка"]
@@ -217,6 +218,8 @@ enum tonality_level {
   positive
   neutral
   negative
+  alarming
+  irrelevant
 }
 
 // 13. Результат LLM-категоризации — СМЫСЛЫ (1:1 к normalized_item)
@@ -313,16 +316,40 @@ Table channel {
   is_active boolean [not null, default: true]
 }
 
-// 17. Получатели алертов — конкретные люди, НЕ отделы. Зона аналитика/админа
+enum user_role {
+  pending  // только что зарегистрировался, доступа нет (кроме GET /users/me)
+  viewer   // читает витрину/свои задачи, править не может
+  analyst  // правит витрину, подтверждает pending -> viewer/analyst
+  admin    // + управление пользователями/справочниками
+}
+
+// 17. Получатели алертов — конкретные люди, НЕ отделы. Также пользователь API
+// (логин по email+паролю). Зона аналитика/админа
 Table user {
   id int [pk, increment, note: "Уникальный ID получателя"]
   full_name varchar [null, note: "ФИО — для читаемости в админке, не критично"]
-  department_id int [null, ref: > department.id, note: "В каком отделе числится. СПРАВОЧНО — не источник для маршрутизации (см. routing_rule.user_id)"]
-  email varchar [not null, unique, note: "Адрес для канала email"]
-  telegram_id bigint [not null, unique, note: "Числовой chat_id для канала telegram (sendMessage требует id, не @username)"]
+  department_id int [null, ref: > department.id, note: "В каком отделе числится. СПРАВОЧНО для маршрутизации BP-5 (см. routing_rule.user_id), но ЗНАЧИМО для видимости в BP-6: viewer видит только action_item своего отдела"]
+  email varchar [not null, unique, note: "Адрес для канала email, он же логин API"]
+  telegram_id bigint [null, unique, note: "Числовой chat_id для канала telegram (sendMessage требует id, не @username). NULL, пока пользователь не привязал telegram — на момент self-service регистрации по email он неизвестен"]
+  password_hash varchar [not null, note: "bcrypt-хэш пароля для логина в API"]
+  role user_role [not null, default: "pending", note: "Уровень доступа к API (не отдел): pending/viewer/analyst/admin"]
   is_active boolean [not null, default: true, note: "Уволен/в отпуске — гасим флагом, не удаляем (иначе потеряется история alert через FK RESTRICT)"]
 
   Note: "Список получателей курируется вручную и может не совпадать со штатом отдела (сегодня трое, завтра один) — поэтому department НЕ годится источником рассылки, только user."
+}
+
+// 17.1 Код сброса пароля (6 цифр), отправляется на email. Эфемерные данные —
+// не audit-история, ondelete=CASCADE: удаление вместе с пользователем ничего
+// не теряет. Один активный код на пользователя (старые удаляются при новом
+// запросе, см. api/crud/users.py)
+Table password_reset_code {
+  id int [pk, increment, note: "Уникальный ID кода"]
+  user_id int [not null, ref: > user.id, note: "Кому принадлежит код. ON DELETE CASCADE"]
+  code_hash varchar [not null, note: "bcrypt-хэш 6-значного кода (тот же hash_password/verify_password, что и у пароля)"]
+  expires_at timestamp [not null, note: "Когда код перестаёт быть валиден (password_reset_code_expire_minutes от создания)"]
+  used_at timestamp [null, note: "Когда код использован (успешно или исчерпаны попытки)"]
+  attempts int [not null, default: 0, note: "Число неверных попыток ввода — защита от перебора, максимум 5"]
+  created_at timestamp [not null, default: `now()`, note: "Когда код сгенерирован"]
 }
 
 enum delivery_mode {
@@ -387,7 +414,8 @@ Table action_item {
   id int [pk, increment, note: "Уникальный ID задачи"]
   showcase_event_id int [not null, ref: > showcase_event.id, note: "По какому событию витрины заведена задача"]
   task varchar [not null, note: "Задача: что конкретно сделать (решение человека)"]
-  department_id int [not null, ref: > department.id, note: "Ответственный отдел"]
+  department_id int [not null, ref: > department.id, note: "Ответственный отдел — ведущее поле для видимости (viewer видит только свой отдел)"]
+  assigned_user_id int [null, ref: > user.id, note: "Кому конкретно назначена (адресат алерта BP-5, если задачу завёл AI-ассистент). NULL — задача отдела в целом, без привязки к человеку"]
   deadline date [null, note: "Срок"]
   expected_result varchar [null, note: "Ожидаемый результат"]
   status action_status [not null, default: "open", note: "Статус: open -> in_progress -> done. Меняют отделы через веб-форму"]
@@ -401,26 +429,28 @@ Table action_item {
 //  BP-7 — АГЕНТ РАСШИРЕНИЯ ИСТОЧНИКОВ (админка = CRUD над существующими справочниками)
 // ============================================================================
 
-enum candidate_status {
-  pending    // предложен агентом, ждёт модерации
-  approved   // одобрен -> уходит в source
-  rejected   // отклонён человеком
+enum source_candidate_status {
+  new        // ещё не переносился (или переносился, но не прошёл по score/порогу)
+  promoted   // перенесён в source
 }
 
-// 21. Очередь предложений новых источников на модерацию.
-//     Агент ПИШЕТ pending; человек approve/reject; при approve -> INSERT в source.
+// 21. Очередь кандидатов в новые источники.
+//     Агент (следующая итерация) пишет domain/url/competitor_id/score.
+//     Когда score строго больше настраиваемого порога (core.config.settings.
+//     source_candidate_score_threshold, env SOURCE_CANDIDATE_SCORE_THRESHOLD,
+//     по умолчанию 0.5) — SourceCandidatePromoter (src/bp7/pipeline.py)
+//     переносит domain в source (is_active=true) и ставит status=promoted.
 Table source_candidate {
   id int [pk, increment, note: "Уникальный ID кандидата"]
   domain varchar [not null, unique, note: "Найденный домен-кандидат. UNIQUE — не предлагать дважды"]
   competitor_id int [null, ref: > competitor.id, note: "По какому конкуренту/запросу нашли"]
-  evidence_url varchar [null, note: "Ссылка-доказательство: где упомянут конкурент"]
-  llm_assessment varchar [null, note: "Краткая оценка LLM: что за ресурс, релевантность, публичность"]
-  status candidate_status [not null, default: "pending", note: "pending -> approved / rejected"]
-  moderated_by varchar [null, note: "Кто промодерировал"]
-  moderated_at timestamp [null, note: "Когда промодерировали"]
-  created_at timestamp [not null, default: `now()`, note: "Когда агент предложил"]
+  url varchar [null, note: "Url найденного кандидата к парсингу"]
+  score decimal [null, note: "Оценка релевантности от LLM, 0.00–1.00"]
+  status source_candidate_status [not null, default: "new", note: "new -> promoted. Индекс — отбор на перенос без JOIN/NOT EXISTS с source"]
+  is_active boolean [not null, default: true, note: "false — снять кандидата с рассмотрения, не удаляя строку"]
+  created_at timestamp [not null, default: `now()`, note: "Когда кандидат добавлен"]
 
-  Note: "BP-7: очередь модерации источников. Агент пишет pending (шаг 6), человек в админке approve/reject (шаг 7). При approve домен уходит в source (шаг 8), и следующий цикл его парсит. Автоподключения нет — только через модерацию (правило ТЗ)."
+  Note: "BP-7: очередь кандидатов в источники. Перенос в source — автоматический, по порогу score (не ручная модерация): см. src/bp7/pipeline.py::SourceCandidatePromoter и src/bp7/BP7_README.md. Порог настраивается через .env, без правки кода. status=promoted проставляется в момент переноса, чтобы при росте таблицы не пересматривать уже обработанные строки."
 }
 
 // ============================================================================
@@ -459,6 +489,7 @@ TableGroup "BP-5 — Алертинг и маршрутизация" {
   event_type
   channel
   user
+  password_reset_code
   routing_rule
   alert
 }

@@ -10,13 +10,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
 
-class ProcessingStatus(str, Enum):  # noqa: UP042
+class ProcessingStatus(StrEnum):
     """Статус обработки сырых данных.
 
     Жизненный цикл: PENDING -> PROCESSING -> DONE | ERROR
@@ -63,23 +63,18 @@ class RawDataItem(BaseModel):
     text: str = Field(description='Полный текст или HTML-код элемента')
     published_at: str | None = Field(
         default=None,
-        description=(
-            'Сырая дата строкой (имя = колонке); '
-            'BP-2 парсит в date'
-        ),
+        description=('Сырая дата строкой (имя = колонке); BP-2 парсит в date'),
     )
     region: str | None = Field(
         default=None,
         description=(
-            'Сырое имя региона (не id) -> '
-            'lookup в region -> region_id'
+            'Сырое имя региона (не id) -> lookup в region -> region_id'
         ),
     )
     media_name: str | None = Field(
         default=None,
         description=(
-            'Имя публикатора (имя = колонке): '
-            'у hh пусто, у новостей = СМИ'
+            'Имя публикатора (имя = колонке): у hh пусто, у новостей = СМИ'
         ),
     )
     extra: dict = Field(

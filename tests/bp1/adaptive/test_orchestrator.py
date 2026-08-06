@@ -2,12 +2,21 @@
 
 import pytest
 
-from src.bp1.adaptive.orchestrator import (
+from src.bp1.adaptive.schemas import StrategyResult, StrategyType
+from src.bp1.adaptive.strategies.orchestrator import (
     AgenticOrchestrator,
     BaseStrategy,
     WaybackStrategy,
 )
-from src.bp1.adaptive.schemas import StrategyResult, StrategyType
+
+from .constants import (
+    EXAMPLE_URL,
+    ORCH_CONTENT,
+    ORCH_CONTENT_LENGTH,
+    ORCH_ERROR,
+    SNAPSHOT_API_JSON,
+    SNAPSHOT_URL,
+)
 
 
 class _FailingStrategy(BaseStrategy):
@@ -19,7 +28,7 @@ class _FailingStrategy(BaseStrategy):
         return StrategyResult(
             strategy=self.strategy_type,
             success=False,
-            error='boom',
+            error=ORCH_ERROR,
         )
 
 
@@ -32,8 +41,8 @@ class _SuccessStrategy(BaseStrategy):
         return StrategyResult(
             strategy=self.strategy_type,
             success=True,
-            data='<html>content</html>',
-            content_length=500,
+            data=ORCH_CONTENT,
+            content_length=ORCH_CONTENT_LENGTH,
         )
 
 
@@ -42,7 +51,7 @@ async def test_success_strategy_returns_result():
     """Успешная стратегия возвращает результат."""
     orch = AgenticOrchestrator()
     orch.register_strategy(StrategyType.FAST, _SuccessStrategy())
-    result = await orch.fetch_with_degradation('https://example.com')
+    result = await orch.fetch_with_degradation(EXAMPLE_URL)
     assert result.success is True
     assert result.strategy == StrategyType.BROWSER
 
@@ -60,19 +69,15 @@ async def test_all_fail_returns_hitl():
         StrategyType.HITL,
     ):
         orch.register_strategy(strategy_type, _FailingStrategy())
-    result = await orch.fetch_with_degradation('https://example.com')
+    result = await orch.fetch_with_degradation(EXAMPLE_URL)
     assert result.success is False
     assert result.strategy == StrategyType.HITL
 
 
 def test_extract_snapshot_url():
     """_extract_snapshot_url извлекает URL снапшота из ответа API."""
-    api_json = (
-        '{"archived_snapshots": {"closest": '
-        '{"url": "http://web.archive.org/web/2026/snapshot"}}}'
-    )
-    url = WaybackStrategy._extract_snapshot_url(api_json)
-    assert url == 'http://web.archive.org/web/2026/snapshot'
+    url = WaybackStrategy._extract_snapshot_url(SNAPSHOT_API_JSON)
+    assert url == SNAPSHOT_URL
 
 
 def test_extract_snapshot_url_missing():

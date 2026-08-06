@@ -31,11 +31,11 @@ import asyncio
 import sys
 from pathlib import Path
 
-from src.bp1.adaptive.classifier import SourceClassifier
-from src.bp1.adaptive.html_cleaner import HtmlCleaner
-from src.bp1.adaptive.llm import AIAgent, LLMClient
-from src.bp1.adaptive.merger import ResultMerger
+from src.bp1.adaptive.processing.html_cleaner import HtmlCleaner
+from src.bp1.adaptive.processing.llm import AIAgent, LLMClient
+from src.bp1.adaptive.processing.merger import ResultMerger
 from src.bp1.adaptive.schemas import AdapterConfig, SourceClassification
+from src.bp1.adaptive.strategies.classifier import SourceClassifier
 
 # Корень проекта kodik/ — четыре уровня вверх от этого файла.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -52,8 +52,8 @@ EXPECTED_FIELDS: list[str] = []  # expected_fields = ''
 
 # --- Константы LLM (пока прописаны вручную для тестов) ---
 # TODO: заменить на реальный ключ
-LLM_API_KEY = 'sk-f94d'
-LLM_MODEL = 'deepseek-v4-pro'
+LLM_API_KEY = 'sk-f94d32860e504e6caf47625080ca0c78'
+LLM_MODEL = 'deepseek-v4-flash'
 LLM_BASE_URL = 'https://api.deepseek.com'
 LLM_TEMPERATURE = 0.0
 LLM_MAX_TOKENS = 4096

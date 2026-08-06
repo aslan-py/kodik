@@ -13,7 +13,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 
-from .schemas import StrategyResult, StrategyType
+from ..schemas import StrategyResult, StrategyType
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,26 @@ _DEGRADATION_ORDER = (
     StrategyType.STEALTH,
     StrategyType.HITL,
 )
+
+# User-Agent по умолчанию для HTTP-стратегий.
+_DEFAULT_USER_AGENT = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/120.0 Safari/537.36'
+)
+
+
+def _fetch_sync(url: str, timeout_ms: int, user_agent: str) -> str:
+    """Выполняет синхронный HTTP-запрос и возвращает тело ответа."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        headers={'User-Agent': user_agent},
+    )
+    timeout = timeout_ms / 1000
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode('utf-8', errors='replace')
 
 
 class BaseStrategy(ABC):
@@ -53,7 +73,9 @@ class FastStrategy(BaseStrategy):
     async def fetch(self, url: str, **kwargs) -> StrategyResult:
         start = time.monotonic()
         try:
-            html = await asyncio.to_thread(self._fetch_sync, url)
+            html = await asyncio.to_thread(
+                _fetch_sync, url, self._timeout_ms, _DEFAULT_USER_AGENT
+            )
             elapsed = int((time.monotonic() - start) * 1000)
             return StrategyResult(
                 strategy=self.strategy_type,
@@ -71,23 +93,6 @@ class FastStrategy(BaseStrategy):
                 elapsed_ms=elapsed,
             )
 
-    def _fetch_sync(self, url: str) -> str:
-        import urllib.request
-
-        req = urllib.request.Request(
-            url,
-            headers={
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/120.0 Safari/537.36'
-                ),
-            },
-        )
-        timeout = self._timeout_ms / 1000
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode('utf-8', errors='replace')
-
 
 class WaybackStrategy(BaseStrategy):
     """Стратегия через Internet Archive Wayback Machine."""
@@ -102,7 +107,9 @@ class WaybackStrategy(BaseStrategy):
         try:
             # 1. Получаем ближайший снапшот из API Wayback Machine.
             api_url = f'https://archive.org/wayback/available?url={url}'
-            api_json = await asyncio.to_thread(self._fetch_sync, api_url)
+            api_json = await asyncio.to_thread(
+                _fetch_sync, api_url, self._timeout_ms, _DEFAULT_USER_AGENT
+            )
             snapshot_url = self._extract_snapshot_url(api_json)
             if not snapshot_url:
                 return StrategyResult(
@@ -113,7 +120,12 @@ class WaybackStrategy(BaseStrategy):
                 )
 
             # 2. Скачиваем сам HTML снапшота.
-            html = await asyncio.to_thread(self._fetch_sync, snapshot_url)
+            html = await asyncio.to_thread(
+                _fetch_sync,
+                snapshot_url,
+                self._timeout_ms,
+                _DEFAULT_USER_AGENT,
+            )
             elapsed = int((time.monotonic() - start) * 1000)
             return StrategyResult(
                 strategy=self.strategy_type,
@@ -143,17 +155,6 @@ class WaybackStrategy(BaseStrategy):
             )
         except (json.JSONDecodeError, AttributeError):
             return None
-
-    def _fetch_sync(self, url: str) -> str:
-        import urllib.request
-
-        req = urllib.request.Request(
-            url,
-            headers={'User-Agent': 'Mozilla/5.0'},
-        )
-        timeout = self._timeout_ms / 1000
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode('utf-8', errors='replace')
 
 
 class BrowserStrategy(BaseStrategy):

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .schemas import SourceClassification, SourceType, StrategyType
+from ..schemas import SourceClassification, SourceType, StrategyType
 
 logger = logging.getLogger(__name__)
 

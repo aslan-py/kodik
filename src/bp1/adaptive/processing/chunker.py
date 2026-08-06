@@ -110,7 +110,9 @@ class StructuredChunker:
                 # Перекрытие: последние блоки предыдущего чанка.
                 current = self._overlap_blocks(current)
                 current_size = sum(len(b.get('html', '')) for b in current)
-                start_block = i - len(current)
+                # start_block указывает на первый блок в current (с учётом
+                # перекрытия). Не может быть отрицательным.
+                start_block = max(0, i - len(current))
 
             current.append(block)
             current_size += block_size

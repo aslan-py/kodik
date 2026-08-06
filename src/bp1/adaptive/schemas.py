@@ -121,6 +121,21 @@ class AdaptiveParseResult(BaseModel):
     trace_id: str | None = None
 
 
+class SourceRegistrationResult(BaseModel):
+    """Результат регистрации нового источника.
+
+    host — hostname (для Redis-ключа классификации), source_name — полный
+    URL (как хранится в Source.name), classification — результат
+    SourceClassifier.
+    """
+
+    host: str
+    source_name: str
+    created: bool
+    source_id: int | None = None
+    classification: SourceClassification
+
+
 # ============================================================================
 # КОНТРОЛЬ КАЧЕСТВА
 # ============================================================================
@@ -182,6 +197,7 @@ class HITLResponse(BaseModel):
     success: bool = False
     profile_id: str | None = None
     cookies: dict[str, Any] = Field(default_factory=dict)
+    html: str | None = None
     error: str | None = None
 
 

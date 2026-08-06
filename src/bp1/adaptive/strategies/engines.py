@@ -18,9 +18,9 @@ from __future__ import annotations
 import logging
 import time
 
+from ..schemas import StrategyResult, StrategyType
 from .hitl import HITLManager
 from .orchestrator import MIN_CONTENT_LENGTH, BaseStrategy
-from .schemas import StrategyResult, StrategyType
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class Crawl4AIStrategy(BaseStrategy):
 
             browser_config = BrowserConfig(headless=True)
             run_config = CrawlerRunConfig(
-                page_timeout_ms=self._timeout_ms,
+                page_timeout=self._timeout_ms,
                 wait_until='domcontentloaded',
             )
             async with AsyncWebCrawler(config=browser_config) as crawler:
@@ -187,11 +187,14 @@ class HITLStrategy(BaseStrategy):
             )
             elapsed = int((time.monotonic() - start) * 1000)
             if response.success:
+                # После решения CAPTCHA передаём HTML страницы дальше
+                # в пайплайн (раньше возвращался пустой data).
+                html = response.html or ''
                 return StrategyResult(
                     strategy=self.strategy_type,
-                    success=True,
-                    data='',
-                    content_length=0,
+                    success=len(html) >= MIN_CONTENT_LENGTH,
+                    data=html,
+                    content_length=len(html),
                     elapsed_ms=elapsed,
                 )
             return StrategyResult(

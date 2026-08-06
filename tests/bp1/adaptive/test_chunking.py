@@ -1,8 +1,32 @@
 """Тесты для HtmlCleaner, StructuredChunker и ResultMerger."""
 
-from src.bp1.adaptive.chunker import Chunk, StructuredChunker
-from src.bp1.adaptive.html_cleaner import HtmlCleaner
-from src.bp1.adaptive.merger import ResultMerger
+from src.bp1.adaptive.processing.chunker import Chunk, StructuredChunker
+from src.bp1.adaptive.processing.html_cleaner import HtmlCleaner
+from src.bp1.adaptive.processing.merger import ResultMerger
+
+from .constants import (
+    CHUNK_BLOCKS_COUNT,
+    CHUNK_CONTENT_REPEAT,
+    CHUNK_MAX_SIZE_CHARS,
+    CHUNK_MAX_SIZE_MULTI,
+    CHUNK_MAX_SIZE_SINGLE,
+    CHUNK_OVERLAP_CHARS,
+    CHUNK_OVERLAP_MULTI,
+    CHUNK_OVERLAP_SINGLE,
+    CHUNK_TEST_CONTENT,
+    CHUNK_TEST_CONTENT_SIZE,
+    DEDUP_KEY_URL,
+    HTML_CLEANER_MIN_TEXT_LENGTH,
+    HTML_CLEANER_SHORT_MIN_TEXT_LENGTH,
+    MERGER_CONFIDENCE_AVG,
+    MERGER_CONFIDENCE_HIGH,
+    MERGER_CONFIDENCE_LOW,
+    MERGER_DUPLICATE_COUNT,
+    MERGER_FALLBACK_CONFIDENCE_A,
+    MERGER_FALLBACK_CONFIDENCE_B,
+    MERGER_TOTAL_ITEMS,
+    MERGER_UNIQUE_ITEMS,
+)
 
 # ============================================================================
 # HtmlCleaner
@@ -22,7 +46,7 @@ def test_html_cleaner_removes_noise():
       </article>
     </body></html>
     """
-    cleaner = HtmlCleaner(min_text_length=10)
+    cleaner = HtmlCleaner(min_text_length=HTML_CLEANER_MIN_TEXT_LENGTH)
     result = cleaner.clean(html)
 
     assert 'script' not in result['content']
@@ -41,7 +65,7 @@ def test_html_cleaner_extracts_blocks():
       <article><p>Второй блок с достаточно длинным текстом.</p></article>
     </body></html>
     """
-    cleaner = HtmlCleaner(min_text_length=5)
+    cleaner = HtmlCleaner(min_text_length=HTML_CLEANER_SHORT_MIN_TEXT_LENGTH)
     result = cleaner.clean(html)
 
     assert len(result['blocks']) >= 2
@@ -55,7 +79,9 @@ def test_html_cleaner_extracts_blocks():
 
 def test_chunker_single_chunk():
     """Маленький контент помещается в один чанк."""
-    chunker = StructuredChunker(max_chunk_size=8000, overlap_size=500)
+    chunker = StructuredChunker(
+        max_chunk_size=CHUNK_MAX_SIZE_SINGLE, overlap_size=CHUNK_OVERLAP_SINGLE
+    )
     cleaned = {
         'content': '<p>Маленький контент</p>',
         'blocks': [
@@ -64,45 +90,53 @@ def test_chunker_single_chunk():
     }
     chunks = chunker.chunk(cleaned)
     assert len(chunks) == 1
-    assert chunks[0].size <= 8000
+    assert chunks[0].size <= CHUNK_MAX_SIZE_SINGLE
 
 
 def test_chunker_multiple_chunks_with_overlap():
     """Большой контент разбивается на чанки с перекрытием."""
-    chunker = StructuredChunker(max_chunk_size=100, overlap_size=20)
+    chunker = StructuredChunker(
+        max_chunk_size=CHUNK_MAX_SIZE_MULTI, overlap_size=CHUNK_OVERLAP_MULTI
+    )
     blocks = [
         {
             'html': f'<p>Блок {i} с текстом для чанкирования.</p>',
             'tag': 'p',
             'classes': [],
         }
-        for i in range(20)
+        for i in range(CHUNK_BLOCKS_COUNT)
     ]
     cleaned = {'content': '', 'blocks': blocks}
     chunks = chunker.chunk(cleaned)
 
     assert len(chunks) > 1
     for chunk in chunks:
-        assert chunk.size <= 100
+        assert chunk.size <= CHUNK_MAX_SIZE_MULTI
 
 
 def test_chunker_chunk_by_chars():
     """Чанкирование по символам без структурированных блоков."""
-    chunker = StructuredChunker(max_chunk_size=50, overlap_size=10)
-    content = 'x' * 200
+    chunker = StructuredChunker(
+        max_chunk_size=CHUNK_MAX_SIZE_CHARS, overlap_size=CHUNK_OVERLAP_CHARS
+    )
+    content = 'x' * CHUNK_CONTENT_REPEAT
     cleaned = {'content': content, 'blocks': []}
     chunks = chunker.chunk(cleaned)
 
     assert len(chunks) > 1
-    assert all(c.size <= 50 for c in chunks)
+    assert all(c.size <= CHUNK_MAX_SIZE_CHARS for c in chunks)
 
 
 def test_chunk_dataclass():
     """Chunk вычисляет size автоматически."""
     chunk = Chunk(
-        index=0, content='abc', start_block=0, end_block=0, metadata={}
+        index=0,
+        content=CHUNK_TEST_CONTENT,
+        start_block=0,
+        end_block=0,
+        metadata={},
     )
-    assert chunk.size == 3
+    assert chunk.size == CHUNK_TEST_CONTENT_SIZE
 
 
 # ============================================================================
@@ -112,52 +146,52 @@ def test_chunk_dataclass():
 
 def test_merger_deduplicates_by_url():
     """ResultMerger удаляет дубликаты по url."""
-    merger = ResultMerger(dedup_key='url')
+    merger = ResultMerger(dedup_key=DEDUP_KEY_URL)
     results = [
         {
             'items': [
                 {'url': 'https://example.com/1', 'title': 'Новость 1'},
                 {'url': 'https://example.com/2', 'title': 'Новость 2'},
             ],
-            'confidence': 0.9,
+            'confidence': MERGER_CONFIDENCE_HIGH,
         },
         {
             'items': [
                 {'url': 'https://example.com/1', 'title': 'Дубль 1'},
                 {'url': 'https://example.com/3', 'title': 'Новость 3'},
             ],
-            'confidence': 0.8,
+            'confidence': MERGER_CONFIDENCE_LOW,
         },
     ]
     merged = merger.merge(results)
 
-    assert merged['total_items_found'] == 4
-    assert merged['duplicate_count'] == 1
-    assert len(merged['items']) == 3
-    assert merged['confidence'] == 0.85
+    assert merged['total_items_found'] == MERGER_TOTAL_ITEMS
+    assert merged['duplicate_count'] == MERGER_DUPLICATE_COUNT
+    assert len(merged['items']) == MERGER_UNIQUE_ITEMS
+    assert merged['confidence'] == MERGER_CONFIDENCE_AVG
 
 
 def test_merger_deduplicates_by_title():
     """ResultMerger использует title+published_at как fallback-ключ."""
-    merger = ResultMerger(dedup_key='url')
+    merger = ResultMerger(dedup_key=DEDUP_KEY_URL)
     results = [
         {
             'items': [
                 {'title': 'Новость', 'published_at': '2026-01-01'},
             ],
-            'confidence': 0.7,
+            'confidence': MERGER_FALLBACK_CONFIDENCE_A,
         },
         {
             'items': [
                 {'title': 'Новость', 'published_at': '2026-01-01'},
             ],
-            'confidence': 0.6,
+            'confidence': MERGER_FALLBACK_CONFIDENCE_B,
         },
     ]
     merged = merger.merge(results)
 
     assert len(merged['items']) == 1
-    assert merged['duplicate_count'] == 1
+    assert merged['duplicate_count'] == MERGER_DUPLICATE_COUNT
 
 
 def test_merger_handles_empty():

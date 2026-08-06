@@ -30,15 +30,15 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ..schemas import AdapterConfig, SourceClassification, StrategyType
 from .chunker import Chunk, StructuredChunker
 from .html_cleaner import HtmlCleaner
 from .merger import ResultMerger
-from .schemas import AdapterConfig, SourceClassification, StrategyType
 
 logger = logging.getLogger(__name__)
 
-# Корень проекта kodik/ — четыре уровня вверх от этого файла.
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Корень проекта kodik/ — пять уровней вверх от этого файла.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 _ENV_PATH = _PROJECT_ROOT / '.env'
 
 # Поля по умолчанию для анализа структуры.
@@ -95,7 +95,42 @@ def _load_env() -> None:
 _load_env()
 
 
-class LLMClient:
+class _BaseLLMClient:
+    """Общая основа для LLM-клиентов.
+
+    Инкапсулирует конфигурацию модели (``model``, ``base_url``, ``api_key``)
+    и ленивое создание ``AsyncOpenAI``-клиента. Устраняет дублирование между
+    ``LLMClient`` и ``AIAgent``.
+    """
+
+    def __init__(
+        self,
+        model: str | None = None,
+        logger: logging.Logger | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        self._model = model or _default_model()
+        self._base_url = base_url or _default_base_url()
+        self._logger = logger or logging.getLogger(__name__)
+        self._api_key = (
+            api_key or os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY')
+        )
+        self._client = None
+
+    def _get_client(self):
+        """Лениво создаёт и возвращает AsyncOpenAI-клиент."""
+        if self._client is None:
+            from openai import AsyncOpenAI
+
+            self._client = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+            )
+        return self._client
+
+
+class LLMClient(_BaseLLMClient):
     """
     Клиент для анализа структуры HTML через LLM.
 
@@ -116,9 +151,12 @@ class LLMClient:
         base_url: str | None = None,
         api_key: str | None = None,
     ):
-        self._model = model or _default_model()
-        self._base_url = base_url or _default_base_url()
-        self._logger = logger or logging.getLogger(__name__)
+        super().__init__(
+            model=model,
+            logger=logger,
+            base_url=base_url,
+            api_key=api_key,
+        )
         self._max_chunk_size = max_chunk_size
         self._overlap_size = overlap_size
         self._max_chunks = max_chunks
@@ -130,25 +168,6 @@ class LLMClient:
             overlap_size=overlap_size,
         )
         self._merger = ResultMerger()
-
-        # OpenAI-клиент (AsyncOpenAI) создаётся лениво — только при первом
-        # реальном обращении к LLM (когда задан ключ API). Это позволяет
-        # создавать LLMClient без ключа (эвристический fallback).
-        self._api_key = (
-            api_key or os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY')
-        )
-        self._client = None
-
-    def _get_client(self):
-        """Лениво создаёт и возвращает AsyncOpenAI-клиент."""
-        if self._client is None:
-            from openai import AsyncOpenAI
-
-            self._client = AsyncOpenAI(
-                api_key=self._api_key,
-                base_url=self._base_url,
-            )
-        return self._client
 
     async def analyze_structure(
         self,
@@ -171,14 +190,19 @@ class LLMClient:
             return self._heuristic_analyze(html, expected_fields)
 
         try:
-            # Очистка HTML для оценки размера.
+            # Очистка HTML: сжимаем объём и извлекаем основной контент.
+            # Очищенный контент передаётся в LLM (а не сырой HTML), чтобы
+            # не превысить контекстное окно модели и не тратить токены на шум.
             cleaned = self._cleaner.clean(html)
             content = cleaned.get('content', '')
+            if not content:
+                return self._heuristic_analyze(html, expected_fields)
+
             if len(content) > self._max_chunk_size:
                 return await self.analyze_structure_chunked(
                     html, competitor, expected_fields
                 )
-            return await self._llm_analyze(html, competitor, expected_fields)
+            return await self._llm_analyze(content, competitor, expected_fields)
         except Exception as e:
             self._logger.warning('Ошибка LLM-анализа структуры: %s', e)
             return self._heuristic_analyze(html, expected_fields)
@@ -273,6 +297,7 @@ class LLMClient:
             model=self._model,
             messages=[{'role': 'user', 'content': prompt}],
             temperature=0.0,
+            max_tokens=4096,
         )
         content = response.choices[0].message.content
         data = self._parse_json(content)
@@ -293,6 +318,7 @@ class LLMClient:
             model=self._model,
             messages=[{'role': 'user', 'content': prompt}],
             temperature=0.0,
+            max_tokens=4096,
         )
         content = response.choices[0].message.content
         data = self._parse_json(content)
@@ -482,20 +508,24 @@ class LLMClient:
             content = content.strip('`')
             if content.startswith('json'):
                 content = content[4:]
+
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            start = content.find('{')
-            end = content.rfind('}')
-            if start != -1 and end != -1 and end > start:
-                try:
-                    return json.loads(content[start : end + 1])
-                except json.JSONDecodeError:
-                    pass
-            return {}
+            pass
+
+        # Fallback: извлекаем первый JSON-объект из текста.
+        start = content.find('{')
+        end = content.rfind('}')
+        if start != -1 and end > start:
+            try:
+                return json.loads(content[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+        return {}
 
 
-class AIAgent:
+class AIAgent(_BaseLLMClient):
     """
     ИИ-агент принятия решений для адаптивного сбора.
 
@@ -511,27 +541,12 @@ class AIAgent:
         base_url: str | None = None,
         api_key: str | None = None,
     ):
-        self._model = model or _default_model()
-        self._base_url = base_url or _default_base_url()
-        self._logger = logger or logging.getLogger(__name__)
-
-        # OpenAI-клиент (AsyncOpenAI) создаётся лениво — только при первом
-        # реальном обращении к LLM (когда задан ключ API).
-        self._api_key = (
-            api_key or os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY')
+        super().__init__(
+            model=model,
+            logger=logger,
+            base_url=base_url,
+            api_key=api_key,
         )
-        self._client = None
-
-    def _get_client(self):
-        """Лениво создаёт и возвращает AsyncOpenAI-клиент."""
-        if self._client is None:
-            from openai import AsyncOpenAI
-
-            self._client = AsyncOpenAI(
-                api_key=self._api_key,
-                base_url=self._base_url,
-            )
-        return self._client
 
     async def choose_strategy(
         self,
@@ -586,8 +601,6 @@ class AIAgent:
             return StrategyType.STEALTH
         if classification.is_spa:
             return StrategyType.BROWSER
-        if classification.source_type.value == 'api':
-            return StrategyType.FAST
         return StrategyType.FAST
 
     async def analyze_result(

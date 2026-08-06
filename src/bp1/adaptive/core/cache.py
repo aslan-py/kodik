@@ -9,11 +9,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from .schemas import AdapterState, SourceClassification
+from ..schemas import AdapterState, SourceClassification
 
 # TTL адаптера по умолчанию — 7 дней (в секундах).
 ADAPTER_TTL_SECONDS = 86400 * 7
@@ -22,12 +24,46 @@ ADAPTER_TTL_SECONDS = 86400 * 7
 CLASSIFICATION_TTL_SECONDS = 86400 * 7
 
 
+def _canonical_source_name(source_name: str) -> str:
+    """Приводит имя источника к каноническому hostname в нижнем регистре.
+
+    Источники в базе могут храниться как полный URL (``https://lenta.ru/``),
+    голый домен (``lenta.ru``) или с ``www``. Чтобы адаптер, классификация и
+    профиль находились независимо от формы ввода, ключ приводится к единому
+    hostname. Если значение не похоже на корректный источник/URL — возвращается
+    исходная строка без изменений (fallback).
+
+    Логика продублирована из ``integration.sources.extract_host`` намеренно,
+    чтобы избежать циклического импорта (``sources`` импортирует ``cache``).
+    """
+    value = (source_name or '').strip()
+    if not value or any(ch.isspace() for ch in value):
+        return source_name
+    try:
+        host = urlsplit(
+            value if '://' in value else f'https://{value}'
+        ).hostname
+        if not host:
+            return source_name
+    except Exception:
+        return source_name
+    host = host.lower()
+    if host.startswith('www.'):
+        host = host[4:]
+    return host
+
+
 class UnifiedCache:
     """
     Единое кэширование для всех компонентов.
 
     Адаптеры хранятся в Redis (если клиент передан) с TTL 7 дней.
     Профили браузеров и HTML-снапшоты — на диске в cache_dir.
+
+    Все ключи (адаптер, классификация) и имена файлов профилей приводятся
+    к каноническому hostname источника, поэтому ``lenta.ru``,
+    ``https://lenta.ru/`` и ``https://www.lenta.ru/news`` дают один и тот же
+    ключ. За счёт этого данные находятся независимо от формы ``--source``.
     """
 
     def __init__(
@@ -47,7 +83,7 @@ class UnifiedCache:
     # ========================================================================
 
     def _adapter_key(self, source_name: str) -> str:
-        return f'bp1:adapter:{source_name}'
+        return f'bp1:adapter:{_canonical_source_name(source_name)}'
 
     async def get_adapter(self, source_name: str) -> AdapterState | None:
         """Получить адаптер из Redis."""
@@ -87,7 +123,7 @@ class UnifiedCache:
     # ========================================================================
 
     def _classification_key(self, source_name: str) -> str:
-        return f'bp1:classification:{source_name}'
+        return f'bp1:classification:{_canonical_source_name(source_name)}'
 
     async def get_classification(
         self, source_name: str
@@ -129,7 +165,7 @@ class UnifiedCache:
     # ========================================================================
 
     def _profile_path(self, source_name: str) -> Path:
-        safe_name = source_name.replace('/', '_').replace(':', '_')
+        safe_name = _canonical_source_name(source_name)
         return self._profiles_dir / f'{safe_name}.json'
 
     async def get_profile(self, source_name: str) -> dict | None:
@@ -155,8 +191,6 @@ class UnifiedCache:
     # ========================================================================
 
     def _snapshot_path(self, url: str) -> Path:
-        import hashlib
-
         digest = hashlib.md5(url.encode('utf-8')).hexdigest()
         return self._snapshots_dir / f'{digest}.html'
 

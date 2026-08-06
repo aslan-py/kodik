@@ -70,12 +70,18 @@ class ResultMerger:
                 if isinstance(meta, dict):
                     merged_metadata.update(meta)
             # Слияние селекторов и схемы из чанков.
+            # Непустые значения имеют приоритет: если один чанк вернул
+            # пустой селектор для поля, а другой — непустой, берём непустой.
             selectors = result.get('selectors')
             if isinstance(selectors, dict):
-                merged_selectors.update(selectors)
+                for key, value in selectors.items():
+                    if value and not merged_selectors.get(key):
+                        merged_selectors[key] = value
             schema = result.get('schema')
             if isinstance(schema, dict):
-                merged_schema.update(schema)
+                for key, value in schema.items():
+                    if value and not merged_schema.get(key):
+                        merged_schema[key] = value
 
         # Дедупликация.
         unique_items, duplicate_count = self._deduplicate(all_items)

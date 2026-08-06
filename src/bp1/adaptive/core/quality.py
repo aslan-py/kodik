@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
-from .schemas import (
+from ..schemas import (
     QualityGateLevel,
     QualityGateReport,
     QuarantineRecord,
@@ -41,10 +42,20 @@ class DataQualityGate:
         self,
         source_name: str = 'unknown',
         logger: logging.Logger | None = None,
+        quarantine_dir: str | None = None,
     ):
         self._source_name = source_name
         self._logger = logger or logging.getLogger(__name__)
         self._quarantine_store: list[QuarantineRecord] = []
+
+        # Персистентное хранилище карантина на диске (JSON-файлы).
+        # Если quarantine_dir задан — записи сохраняются на диск и
+        # восстанавливаются при создании экземпляра.
+        self._quarantine_dir: Path | None = None
+        if quarantine_dir:
+            self._quarantine_dir = Path(quarantine_dir)
+            self._quarantine_dir.mkdir(parents=True, exist_ok=True)
+            self._load_quarantine()
 
     # ========================================================================
     # Уровень 1: SCHEMA
@@ -280,7 +291,11 @@ class DataQualityGate:
         data: dict[str, Any],
         errors: list[str],
     ) -> QuarantineRecord:
-        """Сохраняет проблемную запись в карантин."""
+        """Сохраняет проблемную запись в карантин.
+
+        Если задан ``quarantine_dir`` — запись дополнительно сохраняется
+        на диск (JSON-файл) для персистентности между запусками.
+        """
         record = QuarantineRecord(
             id=uuid.uuid4().hex,
             original_data=data,
@@ -288,6 +303,7 @@ class DataQualityGate:
             source=self._source_name,
         )
         self._quarantine_store.append(record)
+        self._persist_quarantine(record)
         self._logger.warning(
             'Запись помещена в карантин (источник=%s, id=%s, ошибки=%s)',
             self._source_name,
@@ -295,6 +311,47 @@ class DataQualityGate:
             errors,
         )
         return record
+
+    # ========================================================================
+    # Персистентность карантина (диск)
+    # ========================================================================
+
+    def _quarantine_path(self, record_id: str) -> Path:
+        """Путь к JSON-файлу записи карантина."""
+        return self._quarantine_dir / f'{record_id}.json'
+
+    def _persist_quarantine(self, record: QuarantineRecord) -> None:
+        """Сохраняет запись карантина на диск (если каталог задан)."""
+        if self._quarantine_dir is None:
+            return
+        try:
+            self._quarantine_path(record.id).write_text(
+                record.model_dump_json(),
+                encoding='utf-8',
+            )
+        except Exception as e:
+            self._logger.warning(
+                'Не удалось сохранить запись карантина %s на диск: %s',
+                record.id,
+                e,
+            )
+
+    def _load_quarantine(self) -> None:
+        """Загружает записи карантина с диска при инициализации."""
+        if self._quarantine_dir is None:
+            return
+        for path in sorted(self._quarantine_dir.glob('*.json')):
+            try:
+                record = QuarantineRecord.model_validate_json(
+                    path.read_text(encoding='utf-8')
+                )
+                self._quarantine_store.append(record)
+            except Exception as e:
+                self._logger.warning(
+                    'Не удалось загрузить запись карантина %s: %s',
+                    path.name,
+                    e,
+                )
 
     @property
     def quarantine_store(self) -> list[QuarantineRecord]:

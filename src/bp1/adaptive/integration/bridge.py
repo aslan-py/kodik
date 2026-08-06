@@ -11,7 +11,7 @@ from typing import Any
 
 from src.bp1.base_parser import BaseParser, ParsedItem, ParsedResponse
 
-from .parser import AdaptiveParser
+from ..processing.parser import AdaptiveParser
 
 
 class AdaptiveBridgeParser(BaseParser):
@@ -43,13 +43,19 @@ class AdaptiveBridgeParser(BaseParser):
         Конвертация:
         - AdaptiveParseResult.items → ParsedResponse.items
         - meta формируется из kwargs (search_task_id, competitor, trigger)
+
+        ``source_name`` для адаптера/классификации/профиля берётся из
+        ``kwargs`` (реальный источник задачи), иначе из ``self._source_name``.
+        Это гарантирует, что кэш привязывается к конкретному источнику, а не
+        к общему имени ``'adaptive'``.
         """
         competitor = kwargs.get('competitor', '')
         trigger = kwargs.get('trigger', '')
+        source_name = kwargs.get('source_name') or self._source_name
 
         result = await self._adaptive_parser.parse(
             url=url,
-            source_name=self._source_name,
+            source_name=source_name,
             competitor=competitor,
             trigger=trigger,
             expected_schema=kwargs.get('expected_schema'),

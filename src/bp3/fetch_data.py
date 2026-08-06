@@ -4,9 +4,10 @@ from dotenv import load_dotenv
 from sqlalchemy import and_, create_engine, exists, func, not_, select
 from sqlalchemy.orm import sessionmaker
 
-from src.bp1.models import Source
+from src.bp1.models import Competitor, Source
 from src.bp2.models import NormalizedItem
 from src.bp3.models import CategorizedEvent, Category, Department
+from src.bp7.models import SourceCandidate
 
 load_dotenv()
 DATABASE_URL = (
@@ -92,3 +93,20 @@ def fetch_news_stats():
         count_sources = session.execute(stmt_sources).scalar()
 
     return news_stats, count_sources
+
+
+def fetch_seed_urls():
+    with Session() as session:
+        stmt_sources = select(func.distinct(Source.name)).where(
+            Source.is_active == 'True'
+        )
+        list_urls = session.execute(stmt_sources).scalars().all()
+
+        stmt_sources = select(func.distinct(SourceCandidate.domain))
+        unique_domains = session.execute(stmt_sources).scalars().all()
+
+        stmt_competitor = select(Competitor.id, Competitor.name)
+        rows_compt = session.execute(stmt_competitor).mappings().all()
+        compt_list = [{row['id']: row['name']} for row in rows_compt]
+
+    return list_urls, unique_domains, compt_list

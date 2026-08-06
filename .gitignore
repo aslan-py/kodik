@@ -161,3 +161,4 @@ env/
 llm.ipynb
 dataset.ipynb
 dataset/
+*.ipynb

@@ -35,4 +35,5 @@ aiofiles>=23.0,<26.0      # асинхронная работа с файлам�
 
 langchain-openai>=1.0.0,<1.2.0
 langchain>=1.2.10,<1.3.0
-
+langchain-tavily          # Поисковик для ллм агента
+tavily-python

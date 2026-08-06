@@ -277,7 +277,7 @@ FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL
 
 **`LLMClient`:**
 - `async analyze_structure(html, competitor, expected_fields=None) -> AdapterConfig`.
-- `_llm_analyze(...)` — через `litellm.acompletion`.
+- `_llm_analyze(...)` — через `openai.AsyncOpenAI.chat.completions.create`.
 - `_heuristic_analyze(...)` — fallback без LLM (возвращает `AdapterConfig` с пустой схемой).
 - `_parse_json(content)` — извлечение JSON из ответа (устойчив к markdown).
 
@@ -552,8 +552,7 @@ MCP поверх JSON-RPC 2.0 через stdio (без внешнего паке
 |-------|--------|---------------|
 | `pydantic` | `>=2.0,<3.0` | Схемы |
 | `crawl4ai` | `>=0.4.0` | CRAWL4AI-стратегия |
-| `litellm` | `>=1.40.0` | LLM-клиент |
-| `openai` | `>=1.0.0` | OpenAI-совместимый API |
+| `openai` | `>=1.0.0` | LLM-клиент (AsyncOpenAI) |
 | `playwright` | `>=1.40,<2.0` | BROWSER/STEALTH/HITL |
 | `sqlalchemy` | `>=2.0,<3.0` | AsyncSession |
 

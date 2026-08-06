@@ -19,7 +19,9 @@ from .zakupki_adapter import ZakupkiAdapter
 ParserFactory.register('https://fedresurs.ru/', FedresursAdapter)
 ParserFactory.register('https://www.fips.ru/', FipsAdapter)
 ParserFactory.register('https://news.google.com/', GoogleNewsAdapter)
-ParserFactory.register('https://api.hh.ru/', HHAdapter)
+# HHAdapter (api.hh.ru) не регистрируется в фабрике: это заглушка.
+# Для api.hh.ru используется универсальный адаптивный парсер
+# (AdaptiveBridgeParser), который выполняет реальный парсинг.
 ParserFactory.register('https://kad.arbitr.ru/', KadArbitrAdapter)
 ParserFactory.register('https://kodik.ru/forum', KodikForumAdapter)
 ParserFactory.register('https://www.nic.ru/', NicRuAdapter)

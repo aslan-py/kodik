@@ -254,9 +254,10 @@ class AdaptiveParser:
             )
             adapter = AdapterState(
                 source_name=source_name,
-                selectors=dict.fromkeys(config.expected_schema, ''),
+                # Реальные CSS-селекторы из LLM-анализа (не пустые строки).
+                selectors=config.selectors,
                 schema_config=config.expected_schema,
-                confidence=0.7,
+                confidence=config.confidence,
             )
             await self._cache.set_adapter(source_name, adapter)
 

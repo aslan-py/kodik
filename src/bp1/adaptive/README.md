@@ -13,12 +13,15 @@
 ## Возможности
 
 ### Классификация источников
-- [`SourceClassifier`](classifier.py) автоматически определяет тип сайта:
-  новостной, реестр, API, SPA или неизвестный.
+[`SourceClassifier`](classifier.py) автоматически определяет тип сайта:
+новостной, реестр, API, SPA или неизвестный.
+
 - Детектирует антибот-защиту (Cloudflare, DataDome, QRATOR, Akamai,
   Incapsula), CAPTCHA-виджеты (reCAPTCHA, hCaptcha) и SPA-фреймворки
   (React, Vue, Nuxt, Next.js).
 - Вычисляет оценку сложности (0.0–1.0) и рекомендует оптимальную стратегию.
+- Имеет базу известных источников (`fedresurs.ru`, `kad.arbitr.ru`,
+  `zakupki.gov.ru`, `nalog.ru`, `egrul.nalog.ru`, `fips.ru`).
 
 ### Иерархия стратегий с деградацией
 [`AgenticOrchestrator`](orchestrator.py) пробует стратегии по порядку и при
@@ -43,12 +46,43 @@ FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL
 `AgenticOrchestrator.register_strategy()`.
 
 ### Интеллектуальный парсинг
-- [`AdaptiveParser`](parser.py) анализирует структуру HTML, извлекает
-  селекторы и схему данных без ручной настройки.
+[`AdaptiveParser`](parser.py) анализирует структуру HTML, извлекает
+**реальные CSS-селекторы** и схему данных без ручной настройки.
+
+- [`LLMClient`](llm.py) возвращает `AdapterConfig` с заполненными
+  `selectors` (CSS-селекторы для каждого поля) и `expected_schema`
+  (типы данных), а также `confidence` (уверенность в извлечении).
 - Адаптеры кэшируются (Redis, TTL 7 дней) и переиспользуются при
   повторных обращениях к источнику.
 - [`AdaptiveBridgeParser`](bridge.py) конвертирует результат в
   `ParsedResponse` для полной совместимости с BP-1.
+
+### Обработка больших HTML через чанкирование
+Для страниц, не помещающихся в контекстное окно LLM, реализован
+многоступенчатый алгоритм:
+
+```
+HtmlCleaner → StructuredChunker → параллельное извлечение → ResultMerger
+```
+
+| Модуль | Класс | Назначение |
+|--------|-------|------------|
+| [`html_cleaner.py`](html_cleaner.py) | `HtmlCleaner` | Очистка HTML от шума (`script`, `style`, `nav`, `footer`, JS-атрибуты), извлечение основного контента и метаданных, сжатие в 2–3 раза |
+| [`chunker.py`](chunker.py) | `StructuredChunker`, `Chunk` | Разбиение на логические блоки с перекрытием (`overlap`) для сохранения контекста на границах |
+| [`merger.py`](merger.py) | `ResultMerger` | Объединение результатов чанков, дедупликация по `url` (fallback `title+published_at`), слияние селекторов/схемы, усреднение `confidence` |
+
+Параметры чанкирования по умолчанию:
+
+| Параметр | Значение | Описание |
+|----------|----------|----------|
+| `max_chunk_size` | 8000 | Максимальный размер чанка (символов) |
+| `overlap_size` | 500 | Перекрытие между чанками (символов) |
+| `max_chunks` | 10 | Максимальное количество чанков |
+| `parallel_workers` | 5 | Количество параллельных запросов к LLM |
+
+Если контент помещается в один чанк — выполняется прямой анализ одним
+запросом. Иначе чанки обрабатываются параллельно через `asyncio.gather`
+с ограничением параллелизма (семафор), а результаты объединяются.
 
 ### 5 уровней контроля качества
 [`DataQualityGate`](quality.py) — пятиуровневая валидация с
@@ -71,6 +105,7 @@ Quarantine-паттерном:
 ### Кэширование
 [`UnifiedCache`](cache.py) хранит:
 - **Адаптеры** — Redis, TTL 7 дней.
+- **Классификации источников** — Redis, TTL 7 дней.
 - **Профили браузеров** — диск (`cache_dir/profiles`).
 - **HTML-снапшоты** — диск (`cache_dir/snapshots`).
 
@@ -112,6 +147,9 @@ src/bp1/adaptive/
 ├── engines.py               # Crawl4AIStrategy, StealthStrategy, HITLStrategy
 ├── parser.py                # AdaptiveParser
 ├── llm.py                   # LLMClient, AIAgent
+├── html_cleaner.py          # HtmlCleaner — очистка HTML
+├── chunker.py               # StructuredChunker, Chunk — чанкирование
+├── merger.py                # ResultMerger — объединение результатов
 ├── quality.py               # DataQualityGate
 ├── hitl.py                  # HITLManager, ProfileManager
 ├── cache.py                 # UnifiedCache
@@ -120,6 +158,7 @@ src/bp1/adaptive/
 ├── runner.py                # AdaptiveRunner
 ├── mcp_server.py            # MCPServer
 ├── cli.py                   # CLI интерфейс
+├── llm_test.py              # Smoke-тест LLM-модуля
 ├── requirements.txt         # Зависимости пакета
 └── README.md                # Этот файл
 ```
@@ -138,8 +177,8 @@ pip install -r requirements-dev.txt   # для тестов и линтера
 ```
 
 Зависимости самого пакета перечислены в
-[`requirements.txt`](requirements.txt) (pydantic, crawl4ai, litellm,
-openai, playwright, sqlalchemy).
+[`requirements.txt`](requirements.txt) (pydantic, crawl4ai, openai,
+playwright, sqlalchemy).
 
 ### 2. Установка браузера Playwright
 
@@ -185,6 +224,10 @@ LLM-провайдер настраивается через переменны�
 | `LLM_BASE_URL` | — | Базовый URL (для OpenAI-совместимых API) |
 | `OPENAI_API_KEY` | — | Альтернативный ключ (OpenAI) |
 
+> **Примечание:** `LLM_*` переменные автоматически загружаются из `.env`
+> в окружение при импорте `llm.py` (через `setdefault`, не перезаписывая
+> уже заданные значения).
+
 Пример для OpenAI:
 
 ```dotenv
@@ -192,13 +235,12 @@ LLM_MODEL=gpt-4o-mini
 LLM_API_KEY=sk-...
 ```
 
-Пример для OpenAI-совместимого API (например, локальный Ollama или
-прокси):
+Пример для OpenAI-совместимого API (например, DeepSeek):
 
 ```dotenv
-LLM_MODEL=ollama/llama3
-LLM_BASE_URL=http://localhost:11434
-LLM_API_KEY=ollama
+LLM_MODEL=deepseek-v4-flash
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_API_KEY=sk-...
 ```
 
 > **Важно:** если `LLM_API_KEY` и `OPENAI_API_KEY` не заданы, пакет
@@ -274,6 +316,29 @@ async def main():
 asyncio.run(main())
 ```
 
+### LLM-анализ структуры с чанкированием
+
+```python
+import asyncio
+from src.bp1.adaptive.llm import LLMClient
+
+async def main():
+    client = LLMClient()  # читает LLM_MODEL/LLM_BASE_URL/LLM_API_KEY из .env
+    config = await client.analyze_structure(
+        html='<html>...</html>',
+        competitor='ООО АРХИТЕХ ИИ',
+    )
+    # config.selectors — реальные CSS-селекторы
+    # config.expected_schema — типы полей
+    # config.confidence — уверенность (0.0-1.0)
+
+asyncio.run(main())
+```
+
+Для больших страниц (> 8000 символов) `analyze_structure()` автоматически
+вызывает `analyze_structure_chunked()`, которая очищает HTML, разбивает на
+чанки, обрабатывает их параллельно и объединяет результаты.
+
 ### Интеграция с ParserFactory
 
 ```python
@@ -299,6 +364,15 @@ from src.bp1.adaptive import run_mcp_server
 
 run_mcp_server()
 ```
+
+### Smoke-тест LLM
+
+```bash
+python -m src.bp1.adaptive.llm_test
+```
+
+Берёт первый HTML-файл из `data/html_pages` и передаёт его в
+`LLMClient._llm_analyze` для анализа структуры через LLM.
 
 ---
 
@@ -330,10 +404,11 @@ pytest tests/bp1/adaptive -v
 ```bash
 pytest tests/bp1/adaptive/test_classifier.py -v
 pytest tests/bp1/adaptive/test_llm.py -v
-pytest tests/bp1/adaptive/test_orchestrator.py -v  #
+pytest tests/bp1/adaptive/test_chunking.py -v   # HtmlCleaner, Chunker, Merger
+pytest tests/bp1/adaptive/test_orchestrator.py -v
 pytest tests/bp1/adaptive/test_engines.py -v
 pytest tests/bp1/adaptive/test_quality.py -v
-pytest tests/bp1/adaptive/test_parser.py -v  #
+pytest tests/bp1/adaptive/test_parser.py -v
 pytest tests/bp1/adaptive/test_mcp.py -v
 pytest tests/bp1/adaptive/test_integration.py -v
 ```
@@ -350,6 +425,7 @@ pytest -v
 ruff check src/bp1/adaptive tests/bp1/adaptive
 ruff format --check src/bp1/adaptive tests/bp1/adaptive
 ```
+
 ---
 
 ## Зависимости
@@ -359,7 +435,7 @@ ruff format --check src/bp1/adaptive tests/bp1/adaptive
 
 - `pydantic>=2.0` — Pydantic-схемы.
 - `crawl4ai>=0.4.0` — AI-краулинг (CRAWL4AI-стратегия).
-- `litellm>=1.40.0`, `openai>=1.0.0` — LLM-клиент.
+- `openai>=1.0.0` — LLM-клиент (AsyncOpenAI).
 - `playwright>=1.40` — браузерная автоматизация (BROWSER/STEALTH/HITL).
 - `sqlalchemy>=2.0` — AsyncSession (runner, cli).
 
@@ -367,3 +443,10 @@ ruff format --check src/bp1/adaptive tests/bp1/adaptive
 `src.bp1.base_parser`, `src.bp1.tasks`, `src.bp1.models`,
 `src.bp1.constants`, `src.bp1.collectors.stealth`, `core.config`,
 `core.database`, `core.redis_client`.
+
+---
+
+## Спецификация
+
+Актуальная спецификация пакета с описанием схем, компонентов, точек входа
+и приоритетов доработки — в [`SPEC.md`](SPEC.md).

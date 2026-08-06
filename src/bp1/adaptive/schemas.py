@@ -89,6 +89,8 @@ class AdapterConfig(BaseModel):
     min_text_length: int = 300
     timeout_ms: int = 60000
     expected_schema: dict[str, Any] = Field(default_factory=dict)
+    selectors: dict[str, str] = Field(default_factory=dict)
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
 
 
 class AdapterState(BaseModel):

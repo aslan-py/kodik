@@ -45,3 +45,10 @@ playwright>=1.40,<2.0     # браузерная автоматизация (RPA
 
 # ===== File I/O =====
 aiofiles>=23.0,<26.0      # асинхронная работа с файлами
+
+# ===== AI-краулинг (CRAWL4AI-стратегия) =====
+crawl4ai>=0.4.0           # AI-краулинг (engines.py: Crawl4AIStrategy)
+
+# ===== LLM (LLMClient, AIAgent) =====
+litellm>=1.40.0           # универсальный LLM-клиент (llm.py)
+openai>=1.0.0             # OpenAI-совместимый API (llm.py)

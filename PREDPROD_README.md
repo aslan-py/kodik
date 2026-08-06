@@ -93,7 +93,7 @@ pip install -r requirements.txt
 падают при старте браузера.
 
 ```bash
-python -m playwright install chromium
+python -m playwright install
 ```
 
 Ставится один раз на машину (в `%LOCALAPPDATA%\ms-playwright`), не в venv —

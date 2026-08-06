@@ -32,10 +32,19 @@ import logging
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from src.bp1.constants import DEFAULT_TIMEOUT_MS
 
 # Добавляем корень проекта в PYTHONPATH
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+
+# core.config (pydantic-settings) читает .env только в СВОИ поля, а не в
+# os.environ — а llm.py читает LLM_*/OPENAI_API_KEY/DEEPSEEK_API_KEY именно
+# через os.getenv(). Без явной загрузки .env сюда эти ключи не долетают,
+# и адаптивный парсер молча уходит в эвристический fallback.
+load_dotenv(_PROJECT_ROOT / '.env')
 
 logging.basicConfig(
     level=logging.INFO,

@@ -251,9 +251,19 @@ class AdaptiveRunner:
                 html_file_path = os.path.join(
                     settings.bp1_html_dir, html_filename
                 )
-                import shutil
+                # Специализированные RPA-парсеры (например, fedresurs)
+                # уже сохраняют HTML в settings.bp1_html_dir, поэтому
+                # parser_file_path и html_file_path часто указывают на
+                # один и тот же файл. Копирование файла в самого себя
+                # на Windows падает с PermissionError (WinError 32), так
+                # как shutil.copy2 пытается открыть его на запись, пока
+                # он ещё занят на чтение.
+                if os.path.abspath(parser_file_path) != os.path.abspath(
+                    html_file_path
+                ):
+                    import shutil
 
-                shutil.copy2(parser_file_path, html_file_path)
+                    shutil.copy2(parser_file_path, html_file_path)
 
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         raw_filename = f'raw_{task_id}_{ts}.json'
@@ -308,5 +318,22 @@ class AdaptiveRunner:
 
         results: list[dict[str, Any]] = []
         for task in tasks:
-            results.append(await self.run_task(task.id, session, redis_client))
+            try:
+                results.append(
+                    await self.run_task(task.id, session, redis_client)
+                )
+            except Exception as e:
+                self._logger.error(
+                    'Задача %s прервана необработанной ошибкой: %s',
+                    task.id,
+                    e,
+                    exc_info=True,
+                )
+                results.append(
+                    {
+                        'status': 'error',
+                        'search_task_id': task.id,
+                        'error': str(e),
+                    }
+                )
         return results

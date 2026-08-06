@@ -38,6 +38,7 @@ class RawItemAdmin(ReadOnlyModelAdmin):
         'search_task',
         'status',
         'source_request_url',
+        'raw_data',
         'created_at',
         'updated_at',
     )

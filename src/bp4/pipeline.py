@@ -130,6 +130,8 @@ async def run_bp4() -> dict:
 
 
 # import asyncio
+
 # if __name__ == '__main__':
+#     # python -m src.bp4.pipeline
 #     result = asyncio.run(run_bp4())
 #     print(result)

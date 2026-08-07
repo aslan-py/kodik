@@ -162,7 +162,6 @@ llm.ipynb
 dataset.ipynb
 dataset/
 *.ipynb
-bp_parsing/
 .next/
 next-env.d.ts
 
@@ -173,3 +172,4 @@ src/bp1/data/raw/*
 SPECIFICATION.md
 ai_prompt_adaptive.md
 Правила.md
+src/bp1/data/

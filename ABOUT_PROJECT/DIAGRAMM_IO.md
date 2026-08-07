@@ -233,9 +233,11 @@ Table categorized_event {
   tonality tonality_level [not null, note: "Тональность"]
   media_index numeric [null, note: "Медиаиндекс (охват/заметность), если применимо"]
   action varchar [null, note: "Требуемое действие"]
+  task varchar[] [null, note: "Список задач от LLM (GenerationTaskModule), 1-3 практических шага. Массив — по образцу event_type.keywords/region.name_aliases"]
   deadline date [null, note: "Срок реакции"]
   department_id int [null, ref: > department.id, note: "Ответственный отдел (маршрутизация)"]
   comment varchar [null, note: "Комментарий от LLM"]
+  expected_result varchar [null, note: "Ожидаемый результат по событию. Источника в BP-3 пока нет — NULL, задел под будущий LLM-модуль"]
 
   // ---- метаданные прогона LLM (для перекатегоризации и аудита) ----
   llm_model varchar [null, note: "Какая модель разметила"]

@@ -26,8 +26,11 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Numeric,
+    String,
+    Text,
     func,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import ActiveMixin, Base, Mixin, StrippedString
@@ -153,6 +156,13 @@ class CategorizedEvent(Base, Mixin):
         StrippedString(512),
         comment='Требуемое действие (черновик от LLM)',
     )
+    task: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String),
+        comment=(
+            'Список конкретных задач от LLM (GenerationTaskModule): '
+            '1-3 практических шага по реализации action'
+        ),
+    )
     deadline: Mapped[date | None] = mapped_column(
         Date,
         comment='Срок реакции. Считает код: П1 = дата+48ч, П2 = +7 дней',
@@ -164,6 +174,13 @@ class CategorizedEvent(Base, Mixin):
     comment: Mapped[str | None] = mapped_column(
         StrippedString(512),
         comment='Комментарий от LLM',
+    )
+    expected_result: Mapped[str | None] = mapped_column(
+        Text,
+        comment=(
+            'Ожидаемый результат по событию. Источника в BP-3 пока нет — '
+            'заполняется NULL, задел под будущий LLM-модуль'
+        ),
     )
 
     llm_model: Mapped[str | None] = mapped_column(

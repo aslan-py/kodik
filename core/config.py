@@ -85,11 +85,6 @@ class Settings(BaseSettings):
     true_alerting: bool = False
     test_email: str
 
-    # ===== Parsing (универсальный загрузчик, src/bp_parsing) =====
-    # parsed_pages_dir: str = 'data/parsed_pages'
-    # parsing_headless: bool = True
-    # parsing_timeout_ms: int = 30000
-
     # ===== FASTAPI SETTINGS =====
     app_title: str = 'Конкурентная разведка'
     description: str = 'API управлния проектом конкурентная разведка'

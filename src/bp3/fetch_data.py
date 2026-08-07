@@ -1,18 +1,15 @@
-import os
-
-from dotenv import load_dotenv
 from sqlalchemy import and_, create_engine, exists, func, not_, select
 from sqlalchemy.orm import sessionmaker
 
+from core.config import settings
 from src.bp1.models import Competitor, Source
 from src.bp2.models import NormalizedItem
 from src.bp3.models import CategorizedEvent, Category, Department
 from src.bp7.models import SourceCandidate
 
-load_dotenv()
 DATABASE_URL = (
-    f'postgresql://{os.getenv("DB_USER")}:{os.getenv("DB_PASSWORD")}'
-    f'@{os.getenv("DB_HOST")}:{os.getenv("DB_PORT")}/{os.getenv("DB_NAME")}'
+    f'postgresql+psycopg2://{settings.postgres_user}:{settings.postgres_password}'
+    f'@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}'
 )
 
 

@@ -1,19 +1,17 @@
-import os
 from datetime import timedelta
 
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from core.config import settings
 from core.enums import PriorityLevel
 from src.bp2.models import NormalizedItem
 from src.bp3.models import CategorizedEvent, Category, Department
 from src.bp3.models_llm import BaseModule, ProjectContext
 
-load_dotenv()
 DATABASE_URL = (
-    f'postgresql://{os.getenv("DB_USER")}:{os.getenv("DB_PASSWORD")}'
-    f'@{os.getenv("DB_HOST")}:{os.getenv("DB_PORT")}/{os.getenv("DB_NAME")}'
+    f'postgresql+psycopg2://{settings.postgres_user}:{settings.postgres_password}'
+    f'@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}'
 )
 engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
@@ -52,6 +50,8 @@ class SaveResultsModule(BaseModule):
             data_by_id.setdefault(item['id'], {})['action'] = item.get(
                 'actions'
             )
+        for item in ctx.tasks or []:
+            data_by_id.setdefault(item['id'], {})['task'] = item.get('tasks')
 
         if not data_by_id:
             return ctx
@@ -141,6 +141,7 @@ class SaveResultsModule(BaseModule):
                     category_id=category_id,
                     tonality=fields.get('tonality'),
                     action=fields.get('action'),
+                    task=fields.get('task'),
                     deadline=deadline,
                     department_id=department_id,
                     comment=fields.get('comment'),

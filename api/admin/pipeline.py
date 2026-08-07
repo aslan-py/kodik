@@ -122,7 +122,9 @@ class CategorizedEventAdmin(ReadOnlyModelAdmin):
         'category',
         'tonality',
         'department',
+        'task',
         'deadline',
+        'expected_result',
         'categorized_at',
     )
     list_display_labels = {  # noqa: RUF012
@@ -133,9 +135,11 @@ class CategorizedEventAdmin(ReadOnlyModelAdmin):
         'tonality': 'Тональность',
         'media_index': 'Медиаиндекс',
         'action': 'Требуемое действие',
+        'task': 'Задачи',
         'deadline': 'Срок реакции',
         'department': 'Отдел',
         'comment': 'Комментарий',
+        'expected_result': 'Ожидаемый результат',
         'llm_model': 'Модель LLM',
         'prompt_version': 'Версия промпта',
         'categorized_at': 'Размечено',

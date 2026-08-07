@@ -23,9 +23,11 @@ class CategorizedEventRead(BaseModel):
     tonality: TonalityLevel
     media_index: Decimal | None
     action: str | None
+    task: list[str] | None
     deadline: date | None
     department_id: int | None
     comment: str | None
+    expected_result: str | None
     llm_model: str | None
     prompt_version: str | None
     categorized_at: datetime

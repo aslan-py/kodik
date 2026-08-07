@@ -19,14 +19,29 @@ class GenerationTaskModule(LLMModule):
             ctx.tasks = []
             return ctx
 
-        actions_for_prompt = []
+        # Разделяем действия на «валидные» и «невалидные» (action == None)
+        valid_actions = []
+        invalid_ids = set()
         for item in actions:
-            actions_for_prompt.append(
-                {
-                    'id': item.get('id'),
-                    'action': item.get('actions', 'Нет рекомендации'),
-                }
-            )
+            action_val = item.get('actions')
+            # Считаем невалидным, если action равен None
+            if action_val is None:
+                invalid_ids.add(item.get('id'))
+            else:
+                valid_actions.append(item)
+
+        # Если нет ни одного валидного действия — все задачи будут None
+        if not valid_actions:
+            ctx.tasks = [
+                {'id': item.get('id'), 'tasks': None} for item in actions
+            ]
+            return ctx
+
+        # Подготовка данных для LLM (только валидные действия)
+        actions_for_prompt = [
+            {'id': item.get('id'), 'action': item.get('actions')}
+            for item in valid_actions
+        ]
 
         with open(PROMPT_PATH, encoding='utf-8') as f:
             template = f.read()
@@ -42,13 +57,27 @@ class GenerationTaskModule(LLMModule):
             response: GenerationTaskResponse = self.structured_llm.invoke(
                 prompt
             )
-            ctx.tasks = [
-                {'id': item.id, 'tasks': item.tasks} for item in response.items
-            ]
+            # Сопоставляем id -> список задач из ответа LLM
+            generated_tasks_map = {
+                item.id: item.tasks for item in response.items
+            }
         except Exception as e:
             print(f'[ОШИБКА] GenerationTaskModule: {e}')
-            ctx.tasks = [
-                {'id': item.get('id'), 'tasks': ['Ошибка генерации задач']}
-                for item in actions
-            ]
+            generated_tasks_map = {
+                item.get('id'): ['Ошибка генерации задач']
+                for item in valid_actions
+            }
+
+        # Формируем итоговый список для всех исходных actions
+        result_tasks = []
+        for item in actions:
+            news_id = item.get('id')
+            if news_id in generated_tasks_map:
+                result_tasks.append(
+                    {'id': news_id, 'tasks': generated_tasks_map[news_id]}
+                )
+            else:
+                result_tasks.append({'id': news_id, 'tasks': None})
+
+        ctx.tasks = result_tasks
         return ctx

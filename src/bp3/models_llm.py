@@ -38,8 +38,7 @@ class ProjectContext(BaseModel):
     tasks: list[dict] | None = None
 
     # Добавление новых ресурсов
-    company_sources: dict[int, list[dict]] | None = None
-    domains_to_add: list[str] | None = None
+    domains_to_add: dict[int, dict] | None = None
 
 
 # ========== Базовые классы модулей ==========

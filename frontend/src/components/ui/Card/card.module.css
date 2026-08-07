@@ -1,0 +1,89 @@
+.wrapper {
+  display: flex;
+  align-items: flex-start;
+  height: 100vh;
+  animation: slideIn 0.25s ease-out;
+}
+
+.sideButtons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px 0px 20px 0;
+}
+
+.card {
+  height: 100vh;
+  width: 600px;
+  max-width: 90vw;
+  background: var(--color-light);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  background: var(--color-accent);
+  border: none;
+  cursor: pointer;
+  border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+  color: white;
+  transition: background 0.15s, color 0.15s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.iconButton:hover {
+  background: #527BCF;
+  color: white;
+}
+.iconButton:active {
+  background: #486FC0;
+}
+
+.iconButtonInverse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  background: var(--color-light);
+  border: none;
+  cursor: pointer;
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+  color: var(--color-accent);
+  transition: background 0.15s, color 0.15s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.iconButtonInverse:hover {
+  background: #f0f4ff;
+  color: #527BCF;
+}
+
+.iconButtonInverse:active {
+  background: #e0e8ff;
+  color: #486FC0;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}

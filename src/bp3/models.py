@@ -26,9 +26,12 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Numeric,
+    String,
+    Text,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import (
@@ -37,6 +40,7 @@ from core.enums import (
     priority_level,
     tonality_level,
 )
+from src.bp2.models import NormalizedItem
 
 # ============================================================================
 #  Справочники BP-3
@@ -65,6 +69,9 @@ class Category(Base, Mixin, ActiveMixin):
         comment='Определение категории для аналитика: что под неё подпадает',
     )
 
+    def __str__(self) -> str:
+        return self.name
+
     __table_args__ = (
         CheckConstraint('name = btrim(name)', name='ck_category_name_trimmed'),
         CheckConstraint('note = btrim(note)', name='ck_category_note_trimmed'),
@@ -87,6 +94,9 @@ class Department(Base, Mixin, ActiveMixin):
         StrippedString(512),
         comment='Зона ответственности отдела: какие категории он ведёт',
     )
+
+    def __str__(self) -> str:
+        return self.name
 
     __table_args__ = (
         CheckConstraint(
@@ -146,6 +156,13 @@ class CategorizedEvent(Base, Mixin):
         StrippedString(512),
         comment='Требуемое действие (черновик от LLM)',
     )
+    task: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String),
+        comment=(
+            'Список конкретных задач от LLM (GenerationTaskModule): '
+            '1-3 практических шага по реализации action'
+        ),
+    )
     deadline: Mapped[date | None] = mapped_column(
         Date,
         comment='Срок реакции. Считает код: П1 = дата+48ч, П2 = +7 дней',
@@ -157,6 +174,13 @@ class CategorizedEvent(Base, Mixin):
     comment: Mapped[str | None] = mapped_column(
         StrippedString(512),
         comment='Комментарий от LLM',
+    )
+    expected_result: Mapped[str | None] = mapped_column(
+        Text,
+        comment=(
+            'Ожидаемый результат по событию. Источника в BP-3 пока нет — '
+            'заполняется NULL, задел под будущий LLM-модуль'
+        ),
     )
 
     llm_model: Mapped[str | None] = mapped_column(
@@ -186,6 +210,15 @@ class CategorizedEvent(Base, Mixin):
             'проставлять руками'
         ),
     )
+
+    # Связи нужны админке (FastAdmin показывает FK только через relationship).
+    # Ленивые по умолчанию: сериализация читает *_id, объект не трогает.
+    normalized_item: Mapped['NormalizedItem'] = relationship('NormalizedItem')
+    category: Mapped['Category'] = relationship('Category')
+    department: Mapped['Department | None'] = relationship('Department')
+
+    def __str__(self) -> str:
+        return f'#{self.id} · {self.priority}'
 
     __table_args__ = (
         CheckConstraint(

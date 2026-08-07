@@ -29,9 +29,11 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import Base, Mixin, StrippedString
+from src.bp1.models import RawItem
+from src.bp3.models import CategorizedEvent
 
 
 class ShowcaseEvent(Base, Mixin):
@@ -154,6 +156,16 @@ class ShowcaseEvent(Base, Mixin):
             '«проверено, но не значимо»'
         ),
     )
+
+    # Связи нужны админке (FastAdmin показывает FK только через relationship).
+    # Ленивые по умолчанию: сериализация читает *_id, объект не трогает.
+    categorized_event: Mapped['CategorizedEvent'] = relationship(
+        'CategorizedEvent'
+    )
+    raw_item: Mapped['RawItem'] = relationship('RawItem')
+
+    def __str__(self) -> str:
+        return self.title
 
     __table_args__ = (
         CheckConstraint(

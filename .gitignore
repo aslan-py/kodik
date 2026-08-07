@@ -195,9 +195,22 @@ test_file.txt
 gg.py
 __pycache__/
 .ruff_cache
+HEAD
 my_folder
 .ipynb_checkpoints
-bp_parsing/
+env/
+llm.ipynb
+dataset.ipynb
+dataset/
+*.ipynb
+.next/
+next-env.d.ts
 
 # ── Сырые данные (HTML, JSONB) — не коммитятся ──────────────────────────────
 /data/
+src/bp1/data/html_pages/*
+src/bp1/data/raw/*
+SPECIFICATION.md
+ai_prompt_adaptive.md
+Правила.md
+src/bp1/data/

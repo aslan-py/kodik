@@ -233,9 +233,11 @@ Table categorized_event {
   tonality tonality_level [not null, note: "Тональность"]
   media_index numeric [null, note: "Медиаиндекс (охват/заметность), если применимо"]
   action varchar [null, note: "Требуемое действие"]
+  task varchar[] [null, note: "Список задач от LLM (GenerationTaskModule), 1-3 практических шага. Массив — по образцу event_type.keywords/region.name_aliases"]
   deadline date [null, note: "Срок реакции"]
   department_id int [null, ref: > department.id, note: "Ответственный отдел (маршрутизация)"]
   comment varchar [null, note: "Комментарий от LLM"]
+  expected_result varchar [null, note: "Ожидаемый результат по событию. Источника в BP-3 пока нет — NULL, задел под будущий LLM-модуль"]
 
   // ---- метаданные прогона LLM (для перекатегоризации и аудита) ----
   llm_model varchar [null, note: "Какая модель разметила"]
@@ -429,26 +431,28 @@ Table action_item {
 //  BP-7 — АГЕНТ РАСШИРЕНИЯ ИСТОЧНИКОВ (админка = CRUD над существующими справочниками)
 // ============================================================================
 
-enum candidate_status {
-  pending    // предложен агентом, ждёт модерации
-  approved   // одобрен -> уходит в source
-  rejected   // отклонён человеком
+enum source_candidate_status {
+  new        // ещё не переносился (или переносился, но не прошёл по score/порогу)
+  promoted   // перенесён в source
 }
 
-// 21. Очередь предложений новых источников на модерацию.
-//     Агент ПИШЕТ pending; человек approve/reject; при approve -> INSERT в source.
+// 21. Очередь кандидатов в новые источники.
+//     Агент (следующая итерация) пишет domain/url/competitor_id/score.
+//     Когда score строго больше настраиваемого порога (core.config.settings.
+//     source_candidate_score_threshold, env SOURCE_CANDIDATE_SCORE_THRESHOLD,
+//     по умолчанию 0.5) — SourceCandidatePromoter (src/bp7/pipeline.py)
+//     переносит domain в source (is_active=true) и ставит status=promoted.
 Table source_candidate {
   id int [pk, increment, note: "Уникальный ID кандидата"]
   domain varchar [not null, unique, note: "Найденный домен-кандидат. UNIQUE — не предлагать дважды"]
   competitor_id int [null, ref: > competitor.id, note: "По какому конкуренту/запросу нашли"]
-  evidence_url varchar [null, note: "Ссылка-доказательство: где упомянут конкурент"]
-  llm_assessment varchar [null, note: "Краткая оценка LLM: что за ресурс, релевантность, публичность"]
-  status candidate_status [not null, default: "pending", note: "pending -> approved / rejected"]
-  moderated_by varchar [null, note: "Кто промодерировал"]
-  moderated_at timestamp [null, note: "Когда промодерировали"]
-  created_at timestamp [not null, default: `now()`, note: "Когда агент предложил"]
+  url varchar [null, note: "Url найденного кандидата к парсингу"]
+  score decimal [null, note: "Оценка релевантности от LLM, 0.00–1.00"]
+  status source_candidate_status [not null, default: "new", note: "new -> promoted. Индекс — отбор на перенос без JOIN/NOT EXISTS с source"]
+  is_active boolean [not null, default: true, note: "false — снять кандидата с рассмотрения, не удаляя строку"]
+  created_at timestamp [not null, default: `now()`, note: "Когда кандидат добавлен"]
 
-  Note: "BP-7: очередь модерации источников. Агент пишет pending (шаг 6), человек в админке approve/reject (шаг 7). При approve домен уходит в source (шаг 8), и следующий цикл его парсит. Автоподключения нет — только через модерацию (правило ТЗ)."
+  Note: "BP-7: очередь кандидатов в источники. Перенос в source — автоматический, по порогу score (не ручная модерация): см. src/bp7/pipeline.py::SourceCandidatePromoter и src/bp7/BP7_README.md. Порог настраивается через .env, без правки кода. status=promoted проставляется в момент переноса, чтобы при росте таблицы не пересматривать уже обработанные строки."
 }
 
 // ============================================================================

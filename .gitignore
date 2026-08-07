@@ -95,7 +95,7 @@ ipython_config.py
 __pypackages__/
 
 # Celery stuff
-celerybeat-schedule
+celerybeat-schedule*
 celerybeat.pid
 
 # SageMath parsed files
@@ -174,3 +174,4 @@ ai_prompt_adaptive.md
 Правила.md
 src/bp1/data/
 testik
+run_test.py

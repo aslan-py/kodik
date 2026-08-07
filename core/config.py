@@ -51,6 +51,26 @@ class Settings(BaseSettings):
             return f'redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}'
         return f'redis://{self.redis_host}:{self.redis_port}/{self.redis_db}'
 
+    # ===== Celery =====
+    # Отдельные номера БД Redis (не redis_db — та занята под дедуп-хэши
+    # BP-1), чтобы очередь/результаты Celery не смешивались с бизнес-данными.
+    celery_broker_db: int = 1
+    celery_result_backend_db: int = 2
+
+    @property
+    def celery_broker_url(self) -> str:
+        """Собирает URL брокера Celery (Redis)."""
+        if self.redis_password:
+            return f'redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.celery_broker_db}'
+        return f'redis://{self.redis_host}:{self.redis_port}/{self.celery_broker_db}'
+
+    @property
+    def celery_result_backend_url(self) -> str:
+        """Собирает URL result backend Celery (Redis)."""
+        if self.redis_password:
+            return f'redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.celery_result_backend_db}'
+        return f'redis://{self.redis_host}:{self.redis_port}/{self.celery_result_backend_db}'
+
     # ===== Пути для хранения данных =====
     # Корневая папка для данных BP-1
     bp1_data_root: str = './src/bp1/data'

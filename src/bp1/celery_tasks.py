@@ -8,22 +8,21 @@ import asyncio
 import logging
 from typing import Any
 
-from celery import shared_task
-
-from core.database import AsyncSessionLocal
-from core.redis_client import redis_client as redis_client_instance
-from src.bp1.constants import (
+from core.celery_app import (
     CELERY_DEFAULT_RETRY_DELAY,
     CELERY_MAX_RETRIES,
     CELERY_RETRY_BACKOFF_MAX,
-    DEFAULT_TIMEOUT_MS,
+    app,
 )
+from core.database import AsyncSessionLocal
+from core.redis_client import redis_client as redis_client_instance
+from src.bp1.constants import DEFAULT_TIMEOUT_MS
 from src.bp1.tasks import run_parser_async
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(
+@app.task(
     bind=True,
     max_retries=CELERY_MAX_RETRIES,
     default_retry_delay=CELERY_DEFAULT_RETRY_DELAY,

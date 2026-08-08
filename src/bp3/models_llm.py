@@ -37,9 +37,11 @@ class ProjectContext(BaseModel):
     # Формирование задач
     tasks: list[dict] | None = None
 
+    # Ожидаемый результат
+    expected_result: list[dict] | None = None
+
     # Добавление новых ресурсов
-    company_sources: dict[int, list[dict]] | None = None
-    domains_to_add: list[str] | None = None
+    domains_to_add: dict[int, dict] | None = None
 
 
 # ========== Базовые классы модулей ==========
@@ -122,5 +124,21 @@ class GenerationTaskItem(BaseModel):
 
 class GenerationTaskResponse(BaseModel):
     items: list[GenerationTaskItem] = Field(
+        ..., description='Список элементов для каждой новости'
+    )
+
+
+class ExpectedResultItem(BaseModel):
+    id: int
+    expected_result: str = Field(
+        description=(
+            'Ожидаемый измеримый результат, '
+            'к которому приведёт выполнение задач по данной новости'
+        ),
+    )
+
+
+class ExpectedResultResponse(BaseModel):
+    items: list[ExpectedResultItem] = Field(
         ..., description='Список элементов для каждой новости'
     )

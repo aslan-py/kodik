@@ -1,20 +1,19 @@
-"""init_03_08
+"""описание
 
-Revision ID: 12c9d64c423c
+Revision ID: d34e5dc3a23b
 Revises:
-Create Date: 2026-08-03 21:53:24.512956
+Create Date: 2026-08-07 18:19:19.928084
 
 """
 from typing import Sequence, Union
 
 from alembic import op
+import core.database
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-import core.database  # noqa: F401 — для типа StrippedString
-
 # revision identifiers, used by Alembic.
-revision: str = '12c9d64c423c'
+revision: str = 'd34e5dc3a23b'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -150,19 +149,19 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('domain', core.database.StrippedString(length=256), nullable=False, comment='Найденный домен-кандидат. UNIQUE — не предлагать дважды'),
     sa.Column('competitor_id', sa.Integer(), nullable=True, comment='По какому конкуренту/запросу нашли'),
-    sa.Column('evidence_url', core.database.StrippedString(length=512), nullable=True, comment='Ссылка-доказательство: где упомянут конкурент'),
-    sa.Column('llm_assessment', sa.Text(), nullable=True, comment='Краткая оценка LLM: что за ресурс, релевантность, публичность'),
-    sa.Column('status', sa.Enum('pending', 'approved', 'rejected', name='candidate_status'), server_default=sa.text("'pending'"), nullable=False, comment='pending → approved / rejected'),
-    sa.Column('moderated_by', core.database.StrippedString(length=128), nullable=True, comment='Кто промодерировал'),
-    sa.Column('moderated_at', sa.DateTime(timezone=True), nullable=True, comment='Когда промодерировали'),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Когда агент предложил'),
+    sa.Column('url', core.database.StrippedString(length=512), nullable=True, comment='Url найденного кандидата к парсингу'),
+    sa.Column('score', sa.Numeric(precision=3, scale=2), nullable=True, comment='Оценка релевантности от LLM (0.00–1.00). Кандидат переносится в source, когда score строго больше настраиваемого порога (core.config.settings.source_candidate_score_threshold)'),
+    sa.Column('status', sa.Enum('new', 'promoted', name='source_candidate_status'), server_default=sa.text("'new'"), nullable=False, comment='new -> promoted. Проставляется В МОМЕНТ переноса в source (SourceCandidatePromoter) — отбор кандидатов на перенос идёт по индексу на status, без JOIN/NOT EXISTS с source'),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Когда агент предложил кандидата'),
+    sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False, comment='Мягкое выключение записи: не участвует в выборках, из БД не удаляем'),
     sa.CheckConstraint('domain = btrim(domain)', name='ck_source_candidate_domain_trimmed'),
-    sa.CheckConstraint('evidence_url = btrim(evidence_url)', name='ck_source_candidate_evidence_url_trimmed'),
-    sa.CheckConstraint('moderated_by = btrim(moderated_by)', name='ck_source_candidate_moderated_by_trimmed'),
+    sa.CheckConstraint('score IS NULL OR (score BETWEEN 0 AND 1)', name='ck_source_candidate_score_range'),
+    sa.CheckConstraint('url = btrim(url)', name='ck_source_candidate_url_trimmed'),
     sa.ForeignKeyConstraint(['competitor_id'], ['competitor.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('domain')
     )
+    op.create_index('ix_source_candidate_status', 'source_candidate', ['status'], unique=False)
     op.create_table('user',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('full_name', core.database.StrippedString(length=256), nullable=True, comment='ФИО — для читаемости в админке, не критично'),
@@ -178,6 +177,17 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('email'),
     sa.UniqueConstraint('telegram_id')
+    )
+    op.create_table('password_reset_code',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False, comment='Кому принадлежит код'),
+    sa.Column('code_hash', core.database.StrippedString(length=256), nullable=False, comment='bcrypt-хэш 6-значного кода'),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False, comment='Когда код перестаёт быть валиден'),
+    sa.Column('used_at', sa.DateTime(timezone=True), nullable=True, comment='Когда код использован (успешно или исчерпаны попытки)'),
+    sa.Column('attempts', sa.Integer(), server_default=sa.text('0'), nullable=False, comment='Число неверных попыток ввода — защита от перебора'),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Когда код сгенерирован'),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_table('raw_item',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -246,9 +256,11 @@ def upgrade() -> None:
     sa.Column('tonality', sa.Enum('positive', 'neutral', 'negative', 'alarming', 'irrelevant', name='tonality_level'), nullable=False, comment='Тональность (от LLM)'),
     sa.Column('media_index', sa.Numeric(precision=10, scale=2), nullable=True, comment='Медиаиндекс (охват/заметность) из лицензионного агрегатора. НЕ выход LLM. NULL если источника нет'),
     sa.Column('action', core.database.StrippedString(length=512), nullable=True, comment='Требуемое действие (черновик от LLM)'),
+    sa.Column('task', postgresql.ARRAY(sa.String()), nullable=True, comment='Список конкретных задач от LLM (GenerationTaskModule): 1-3 практических шага по реализации action'),
     sa.Column('deadline', sa.Date(), nullable=True, comment='Срок реакции. Считает код: П1 = дата+48ч, П2 = +7 дней'),
     sa.Column('department_id', sa.Integer(), nullable=True, comment='Ответственный отдел (LLM → lookup id)'),
     sa.Column('comment', core.database.StrippedString(length=512), nullable=True, comment='Комментарий от LLM'),
+    sa.Column('expected_result', sa.Text(), nullable=True, comment='Ожидаемый результат по событию. Источника в BP-3 пока нет — заполняется NULL, задел под будущий LLM-модуль'),
     sa.Column('llm_model', core.database.StrippedString(length=64), nullable=True, comment='Какая модель разметила (для аудита)'),
     sa.Column('prompt_version', core.database.StrippedString(length=32), nullable=True, comment='Версия промпта/правил (для перекатегоризации)'),
     sa.Column('categorized_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Когда разметили (INSERT) или переразметили (UPDATE). По индексу BP-4 отбирает переразмеченные события (categorized_at > showcase_event.updated_at). onupdate срабатывает автоматически на ЛЮБОМ UPDATE через SQLAlchemy (и точечная правка атрибута, и bulk update()) — колонка не перечислена в .values(), компилятор сам подставит значение. НЕ сработает при INSERT ... ON CONFLICT DO UPDATE (это технически INSERT, не UPDATE) и при правке в обход SQLAlchemy — сырой SQL, DBeaver, pgAdmin: там колонку нужно проставлять руками'),
@@ -311,12 +323,14 @@ def upgrade() -> None:
     sa.Column('showcase_event_id', sa.Integer(), nullable=False, comment='По какому событию витрины заведена задача'),
     sa.Column('task', core.database.StrippedString(length=512), nullable=False, comment='Задача: что конкретно сделать (решение человека)'),
     sa.Column('department_id', sa.Integer(), nullable=False, comment='Ответственный отдел'),
+    sa.Column('assigned_user_id', sa.Integer(), nullable=True, comment='Кому конкретно назначена задача (адресат алерта BP-5, если задачу завёл AI-ассистент). NULL — задача отдела в целом, без привязки к конкретному человеку'),
     sa.Column('deadline', sa.Date(), nullable=True, comment='Срок'),
     sa.Column('expected_result', sa.Text(), nullable=True, comment='Ожидаемый результат'),
     sa.Column('status', sa.Enum('open', 'in_progress', 'done', name='action_status'), server_default=sa.text("'open'"), nullable=False, comment='Статус: open → in_progress → done. Меняют отделы'),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Когда задача заведена'),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Обновляется при смене статуса'),
     sa.CheckConstraint('task = btrim(task)', name='ck_action_item_task_trimmed'),
+    sa.ForeignKeyConstraint(['assigned_user_id'], ['user.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['department_id'], ['department.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['showcase_event_id'], ['showcase_event.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id')
@@ -358,7 +372,9 @@ def downgrade() -> None:
     op.drop_table('normalized_item')
     op.drop_table('routing_rule')
     op.drop_table('raw_item')
+    op.drop_table('password_reset_code')
     op.drop_table('user')
+    op.drop_index('ix_source_candidate_status', table_name='source_candidate')
     op.drop_table('source_candidate')
     op.drop_index('uq_search_task_no_trigger', table_name='search_task', postgresql_where=sa.text('trigger_id IS NULL'))
     op.drop_table('search_task')

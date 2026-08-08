@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from src.bp3.models_llm import CommentActionResponse, LLMModule, ProjectContext
+from src.bp3.utils import clear_p4_comments_actions
 
 PROMPT_PATH = (
     Path(__file__).parent.parent / 'prompts' / 'comment_action_prompt.txt'
@@ -80,4 +81,8 @@ class CommentActionModule(LLMModule):
                 {'id': item.get('id'), 'actions': 'Требуется ручной анализ'}
                 for item in categorized_news
             ]
+            pass
+
+        clear_p4_comments_actions(ctx.comments, ctx.actions, priority_dict)
+
         return ctx

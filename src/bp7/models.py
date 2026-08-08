@@ -51,7 +51,8 @@ class SourceCandidate(Base, Mixin, ActiveMixin):
 
     domain: Mapped[str] = mapped_column(
         StrippedString(256),
-        unique=True,
+        unique=False,
+        nullable=True,
         comment='Найденный домен-кандидат. UNIQUE — не предлагать дважды',
     )
     competitor_id: Mapped[int | None] = mapped_column(

@@ -21,8 +21,7 @@ class SourceFinderModule(BaseModule):
         exclude_domains = ctx.domains or []
         companies = ctx.competitors or []
 
-        company_sources: dict[int, list[dict]] = {}
-        all_urls = []
+        company_data = {}
 
         for comp in companies:
             company_id, name = next(iter(comp.items()))
@@ -33,7 +32,7 @@ class SourceFinderModule(BaseModule):
                 response = client.search(
                     query=f'Найди новые источники новостей о компании {name}',
                     topic='news',
-                    max_results=10,
+                    max_results=1,
                     search_depth='basic',
                     time_range='week',
                     exclude_domains=exclude_domains,
@@ -41,33 +40,32 @@ class SourceFinderModule(BaseModule):
                     include_raw_content=False,
                 )
                 results = response.get('results', [])
-                sources = [
-                    {'url': item['url'], 'score': item.get('score')}
-                    for item in results
-                ]
-                company_sources[company_id] = sources
+                sources = []
+                for item in results:
+                    url = item['url']
+                    score = item.get('score')
 
-                for src in sources:
-                    all_urls.append(src['url'])
+                    parsed = urlparse(url)
+                    host = parsed.netloc.lower()
+                    if host.startswith('www.'):
+                        host = host[4:]
+                    sources.append(
+                        {
+                            'url': url,
+                            'score': score,
+                            'domain': host,
+                        }
+                    )
+
+                company_data[company_id] = {
+                    'sources': sources,
+                }
 
             except Exception as e:
                 print(f'Ошибка при поиске для {name} (ID={company_id}): {e}')
-                company_sources[company_id] = []
+                company_data[company_id] = {'sources': []}
 
             time.sleep(1)
 
-        ctx.company_sources = company_sources
-        #        if all_urls:
-        #            ctx.urls = list(set(all_urls))
-        domains = []
-        for url in all_urls:
-            parsed = urlparse(url)
-            host = parsed.netloc.lower()
-            if host.startswith('www.'):
-                host = host[4:]
-            domains.append(host)
-
-        domains_to_add = list(set(domains))
-        ctx.domains_to_add = domains_to_add
-
+        ctx.domains_to_add = company_data
         return ctx

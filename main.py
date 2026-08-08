@@ -12,18 +12,16 @@ from src.bp3.models_llm import Pipeline
 from src.bp3.modules.action_planning_module import ActionPlanningModule
 from src.bp3.modules.categorized_module import CategorizedModule
 from src.bp3.modules.comment_action_module import CommentActionModule
+from src.bp3.modules.expected_result_module import ExpectedResultModule
 from src.bp3.modules.generation_task_module import GenerationTaskModule
 from src.bp3.modules.input_data_module import InputDataModule
 from src.bp3.modules.media_activity_module import MediaActivityModule
 from src.bp3.modules.save_results_module import SaveResultsModule
-from src.bp3.modules.source_finder_module import SourceFinderModule
 from src.bp3.modules.tone_analysis_module import ToneAnalysisModule
 
 if __name__ == '__main__':
     load_dotenv()
-    api_key = os.getenv(
-        'OPENROUTER_API_KEY'
-    )  # OPENROUTER_API_KEY   KODIK_API_KEY
+    api_key = os.getenv('KODIK_API_KEY')  # OPENROUTER_API_KEY   KODIK_API_KEY
     if not api_key:
         raise ValueError('KODIK_API_KEY не найден')
 
@@ -42,7 +40,8 @@ if __name__ == '__main__':
             CommentActionModule(llm),
             MediaActivityModule(),
             GenerationTaskModule(llm),
-            SourceFinderModule(),
+            ExpectedResultModule(llm),
+            #            SourceFinderModule(),
             SaveResultsModule(),
         ]
     )
@@ -65,7 +64,7 @@ if __name__ == '__main__':
     print(result.actions)
     print('\n========== GenerationTaskModule ==========')
     print(result.tasks)
-    print('\n========== SourceFinderModule ==========')
-    print(result.company_sources)
-    print('\n')
-    print(result.domains_to_add)
+    print('\n========== ExpectedResultModule ==========')
+    print(result.expected_result)
+    # print('\n========== SourceFinderModule ==========')
+    # print(result.domains_to_add)

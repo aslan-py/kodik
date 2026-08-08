@@ -32,7 +32,7 @@ class SourceFinderModule(BaseModule):
                 response = client.search(
                     query=f'Найди новые источники новостей о компании {name}',
                     topic='news',
-                    max_results=10,
+                    max_results=1,
                     search_depth='basic',
                     time_range='week',
                     exclude_domains=exclude_domains,
@@ -40,29 +40,30 @@ class SourceFinderModule(BaseModule):
                     include_raw_content=False,
                 )
                 results = response.get('results', [])
-                sources = [
-                    {'url': item['url'], 'score': item.get('score')}
-                    for item in results
-                ]
+                sources = []
+                for item in results:
+                    url = item['url']
+                    score = item.get('score')
 
-                # Извлечение доменов из источников
-                domains = []
-                for src in sources:
-                    parsed = urlparse(src['url'])
+                    parsed = urlparse(url)
                     host = parsed.netloc.lower()
                     if host.startswith('www.'):
                         host = host[4:]
-                    domains.append(host)
-                domains = list(set(domains))
+                    sources.append(
+                        {
+                            'url': url,
+                            'score': score,
+                            'domain': host,
+                        }
+                    )
 
                 company_data[company_id] = {
                     'sources': sources,
-                    'domains': domains,
                 }
 
             except Exception as e:
                 print(f'Ошибка при поиске для {name} (ID={company_id}): {e}')
-                company_data[company_id] = {'sources': [], 'domains': []}
+                company_data[company_id] = {'sources': []}
 
             time.sleep(1)
 

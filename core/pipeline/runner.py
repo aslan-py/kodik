@@ -53,15 +53,25 @@ async def _preflight(descriptor: StageDescriptor) -> None:
         )
 
 
-async def run_stage(number: int) -> StageResult:
+async def run_stage(number: int, *, reparse: bool = False) -> StageResult:
     """Запустить один этап: preflight -> вызов -> результат.
 
+    `reparse=True` — пересобрать уже обработанные данные этапа новыми
+    правилами вместо обычного прогона; поддерживается не всеми этапами
+    (см. `StageDescriptor.run_reparse`).
+
     Поднимает `UnknownStageError`/`RuntimeError` — вызывающий код (CLI,
-    позже API) решает, как их показать.
+    позже API/админка) решает, как их показать.
     """
     descriptor = _get_stage(number)
+    if reparse and descriptor.run_reparse is None:
+        raise RuntimeError(
+            f'Этап {descriptor.number} ({descriptor.title}): '
+            'не поддерживает режим пересборки.'
+        )
     await _preflight(descriptor)
-    result = await descriptor.run()
+    run = descriptor.run_reparse if reparse else descriptor.run
+    result = await run()
     return StageResult(
         number=descriptor.number,
         title=descriptor.title,

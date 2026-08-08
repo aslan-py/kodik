@@ -98,6 +98,7 @@ MENU_ADMIN_PARSING = 'Настройки парсинга'
 MENU_ADMIN_NORMALIZATION = 'Настройки валидации'
 MENU_ADMIN_ALERTING = 'Настройки алертинга'
 MENU_PIPELINE = 'Данные конвейера'
+MENU_PIPELINE_CONTROL = 'Пайплайн'
 
 
 class IntPrimaryKeyMixin:

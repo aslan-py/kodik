@@ -44,6 +44,10 @@ class StageDescriptor:
     # цепочку, либо этап сам решает, что делать с пустыми данными).
     requires: type | None
     is_stub: bool
+    # Альтернативная точка входа — пересборка уже обработанных данных
+    # новыми правилами, без повторного сбора исходных. None у этапов, для
+    # которых такой концепции не существует (сегодня — только этап 2).
+    run_reparse: Callable[[], Awaitable[dict]] | None = None
 
 
 async def _run_stub(
@@ -100,6 +104,7 @@ STAGES: dict[int, StageDescriptor] = {
         run=run_bp2,
         requires=RawItem,
         is_stub=False,
+        run_reparse=functools.partial(run_bp2, reparse=True),
     ),
     3: StageDescriptor(
         number=3,

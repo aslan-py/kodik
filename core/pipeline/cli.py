@@ -1,8 +1,9 @@
 """Минимальный CLI поверх раннера этапов — без лишних флагов/подкоманд.
 
 Использование:
-    python -m core.pipeline.cli <номер>   — запустить один этап (1..7)
-    python -m core.pipeline.cli all        — запустить весь конвейер
+    python -m core.pipeline.cli <номер>          — запустить этап (1..7)
+    python -m core.pipeline.cli <номер> reparse  — с пересборкой (если есть)
+    python -m core.pipeline.cli all               — весь конвейер
 """
 
 import asyncio
@@ -20,12 +21,15 @@ def _print_result(r: StageResult) -> None:
 
 
 async def _main(argv: list[str]) -> int:
-    if len(argv) != 1:
+    if len(argv) not in (1, 2):
         print(__doc__)
         return 1
 
     arg = argv[0]
     if arg == 'all':
+        if len(argv) != 1:
+            print(__doc__)
+            return 1
         results = await run_all()
         print('Сводка по прогону всего конвейера:')
         for r in results:
@@ -38,8 +42,15 @@ async def _main(argv: list[str]) -> int:
         print(__doc__)
         return 1
 
+    reparse = False
+    if len(argv) == 2:
+        if argv[1] != 'reparse':
+            print(__doc__)
+            return 1
+        reparse = True
+
     try:
-        result = await run_stage(number)
+        result = await run_stage(number, reparse=reparse)
     except Exception as exc:  # неизвестный номер / preflight / сбой этапа
         print(f'Ошибка: {exc}')
         return 1

@@ -21,10 +21,13 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import Base, Mixin, StrippedString
 from core.enums import ActionStatus, action_status
+from src.bp3.models import Department
+from src.bp4.models import ShowcaseEvent
+from src.bp5.models import User
 
 
 class ActionItem(Base, Mixin):
@@ -82,6 +85,15 @@ class ActionItem(Base, Mixin):
         server_default=func.now(),
         comment='Обновляется при смене статуса',
     )
+
+    # Связи нужны админке (FastAdmin показывает FK только через relationship).
+    # Ленивые по умолчанию: сериализация читает *_id, объект не трогает.
+    showcase_event: Mapped['ShowcaseEvent'] = relationship('ShowcaseEvent')
+    department: Mapped['Department'] = relationship('Department')
+    assigned_user: Mapped['User | None'] = relationship('User')
+
+    def __str__(self) -> str:
+        return self.task
 
     __table_args__ = (
         CheckConstraint(

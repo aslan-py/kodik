@@ -95,7 +95,7 @@ ipython_config.py
 __pypackages__/
 
 # Celery stuff
-celerybeat-schedule
+celerybeat-schedule*
 celerybeat.pid
 
 # SageMath parsed files
@@ -154,9 +154,16 @@ test_file.txt
 gg.py
 __pycache__/
 .ruff_cache
+HEAD
 my_folder
 .ipynb_checkpoints
-bp_parsing/
+env/
+llm.ipynb
+dataset.ipynb
+dataset/
+*.ipynb
+.next/
+next-env.d.ts
 
 # ── Сырые данные (HTML, JSONB) — не коммитятся ──────────────────────────────
 /data/
@@ -171,3 +178,6 @@ SPECIFICATION.md
 ai_prompt_adaptive.md
 Правила.md
 vibe/
+src/bp1/data/
+testik
+run_test.py

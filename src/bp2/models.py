@@ -35,7 +35,7 @@ from sqlalchemy import (
     text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import ActiveMixin, Base, Mixin, StrippedString
 from core.enums import (
@@ -50,6 +50,7 @@ from core.enums import (
     reject_reason_t,
     stop_type,
 )
+from src.bp1.models import Competitor, RawItem, Source
 
 # ============================================================================
 #  Справочники BP-2
@@ -96,6 +97,9 @@ class Region(Base, Mixin):
         comment='Долгота центра региона (WGS-84), для карты рынка',
     )
 
+    def __str__(self) -> str:
+        return self.name_display
+
     __table_args__ = (
         Index(
             'ix_region_name_aliases',
@@ -141,6 +145,9 @@ class BlackDomain(Base, Mixin, ActiveMixin):
         comment='Время добавления домена в чёрный список',
     )
 
+    def __str__(self) -> str:
+        return self.domain
+
     __table_args__ = (
         CheckConstraint(
             'domain = btrim(domain)', name='ck_black_domain_domain_trimmed'
@@ -176,6 +183,9 @@ class StopWord(Base, Mixin, ActiveMixin):
         StrippedString(512),
         comment='Пояснение для аналитика: почему добавили и от чего защищает',
     )
+
+    def __str__(self) -> str:
+        return f'{self.phrase} ({self.type})'
 
     __table_args__ = (
         UniqueConstraint('phrase', 'type', name='uq_stop_word_phrase_type'),
@@ -218,6 +228,9 @@ class TopicLimit(Base, Mixin, ActiveMixin):
         StrippedString(512),
         comment='Напр.: «СКС занимает ~40% отчёта 5 недель подряд»',
     )
+
+    def __str__(self) -> str:
+        return f'{self.scope} ≤ {self.max_count} / {self.window}'
 
     __table_args__ = (
         CheckConstraint(
@@ -332,6 +345,17 @@ class NormalizedItem(Base, Mixin):
         server_default=func.now(),
         comment='Время нормализации события',
     )
+
+    # Связи нужны админке: FastAdmin показывает FK только через relationship
+    # (FK-колонки он из формы исключает). Ленивые по умолчанию — сериализация
+    # читает *_id, сам объект не трогает, лишних запросов в конвейере нет.
+    raw_item: Mapped['RawItem'] = relationship('RawItem')
+    competitor: Mapped['Competitor | None'] = relationship('Competitor')
+    region: Mapped['Region | None'] = relationship('Region')
+    source: Mapped['Source | None'] = relationship('Source')
+
+    def __str__(self) -> str:
+        return self.title
 
     __table_args__ = (
         CheckConstraint(

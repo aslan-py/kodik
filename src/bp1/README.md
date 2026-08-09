@@ -126,7 +126,7 @@ python -m src.bp1.cli run --task-id 26 --mode direct --no-headless
 python -m src.bp1.cli run --mode celery
 
 # Запустить воркер
-celery -A src.celery_app worker --loglevel=info
+celery -A core.celery_app worker --loglevel=info
 ```
 
 ### Вспомогательные команды

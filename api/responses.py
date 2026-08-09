@@ -56,6 +56,11 @@ ACTION_ITEM_CONFLICT_RESPONSE = {
         'assigned_user_id не состоит в указанном department_id'
     ),
 }
+REFERENCE_CONFLICT_RESPONSE = {
+    status.HTTP_409_CONFLICT: _response(
+        'Значение уже занято (нарушение unique/UniqueConstraint)'
+    ),
+}
 
 # ============================================================================
 #  Составы под конкретные эндпоинты (api/endpoints/*.py)
@@ -101,3 +106,24 @@ ACTION_ITEM_UPDATE_RESPONSES = {
     **NOT_FOUND_RESPONSE,
     **ACTION_ITEM_CONFLICT_RESPONSE,
 }
+
+# --- Справочники (api/endpoints/reference.py) и read-only просмотр
+# пайплайна (raw_item/normalized_item/categorized_event/alert) — обе группы
+# используют один и тот же набор: EditorDep везде (см. api/FASTAPI_PLAN.md,
+# раздел 6), различается только наличие 409 у мутаций.
+REFERENCE_LIST_RESPONSES = {**UNAUTHORIZED_RESPONSE, **FORBIDDEN_RESPONSE}
+REFERENCE_DETAIL_RESPONSES = {
+    **UNAUTHORIZED_RESPONSE,
+    **FORBIDDEN_RESPONSE,
+    **NOT_FOUND_RESPONSE,
+}
+REFERENCE_WRITE_RESPONSES = {
+    **UNAUTHORIZED_RESPONSE,
+    **FORBIDDEN_RESPONSE,
+    **NOT_FOUND_RESPONSE,
+    **REFERENCE_CONFLICT_RESPONSE,
+}
+
+# --- department: GET публичный (без токена), см. api/endpoints/department.py
+PUBLIC_LIST_RESPONSES: dict[int, dict[str, Any]] = {}
+PUBLIC_DETAIL_RESPONSES = {**NOT_FOUND_RESPONSE}

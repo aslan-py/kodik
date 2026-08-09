@@ -277,6 +277,31 @@ def build_normalized_rows(
     return rows
 
 
+REASONS_COUNTED_BEFORE_WRITE = (
+    RejectReason.black_domain,
+    RejectReason.stop_word,
+    RejectReason.stop_topic,
+    RejectReason.false_positive,
+    RejectReason.parse_error,
+)
+
+
+def count_rejected_by_reason(rows: Sequence[dict]) -> dict[str, int]:
+    """Разбивка отклонённых `rows` по `reject_reason` — для сводки прогона.
+
+    Считает только причины, которые проставляет `normalize_item`/
+    `apply_filters` ДО записи в БД. `noise_limit` сюда не входит — это
+    отдельный постфактум-проход поверх уже записанных строк (см. run_bp2,
+    шаг 8), в `rows` он появиться не может.
+    """
+    counts = {reason.value: 0 for reason in REASONS_COUNTED_BEFORE_WRITE}
+    for row in rows:
+        reason = row['reject_reason']
+        if reason is not None:
+            counts[reason.value] += 1
+    return counts
+
+
 # ============================================================================
 #  Оркестратор — весь конвейер BP-2 в один прогон (шаги помечены ниже)
 # ============================================================================
@@ -312,7 +337,11 @@ async def run_bp2(
     лимита (max_count уменьшили), наоборот, отработает верно при следующем
     вызове.
 
-    Возвращает сводку прогона (сколько снимков и строк обработано).
+    Возвращает сводку прогона: сколько снимков и строк обработано,
+    разбивку отклонённых строк по причине (rejected_by_reason —
+    black_domain/stop_word/stop_topic/false_positive/parse_error, посчитана
+    до записи в БД) и отдельно noise_rejected (постфактум-отсев по лимиту
+    шума, см. выше).
     """
     if raw_item_ids is not None and not reparse:
         raise ValueError('raw_item_ids допустим только вместе с reparse=True')
@@ -362,6 +391,7 @@ async def run_bp2(
         return {
             'raw_items': len(raw_items),
             'rows': len(rows),
+            'rejected_by_reason': count_rejected_by_reason(rows),
             'noise_rejected': noise_rejected,
         }
 

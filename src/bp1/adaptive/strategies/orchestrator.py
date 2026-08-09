@@ -13,7 +13,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 
-from .schemas import StrategyResult, StrategyType
+from ..schemas import StrategyResult, StrategyType
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,53 @@ _DEGRADATION_ORDER = (
     StrategyType.STEALTH,
     StrategyType.HITL,
 )
+
+# User-Agent по умолчанию для HTTP-стратегий.
+_DEFAULT_USER_AGENT = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/120.0 Safari/537.36'
+)
+
+
+def _ssl_unverified_context():
+    """Возвращает SSL-контекст без проверки сертификата.
+
+    Гос. порталы и некоторые коммерческие сайты отдают самоподписанные /
+    недоверенные сертификаты, из-за чего ``urllib.request`` бросает
+    ``CERTIFICATE_VERIFY_FAILED`` и FAST-стратегия ложно падает. Контекст без
+    верификации используется как fallback (аналогично ``ignore_https_errors``
+    в браузерных стратегиях).
+    """
+    import ssl
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _fetch_sync(url: str, timeout_ms: int, user_agent: str) -> str:
+    """Выполняет синхронный HTTP-запрос и возвращает тело ответа."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        headers={'User-Agent': user_agent},
+    )
+    timeout = timeout_ms / 1000
+    try:
+        # Сначала обычный запрос с проверкой сертификата.
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode('utf-8', errors='replace')
+    except Exception:
+        # SSL/сертификат недоверенный — повторяем без верификации, чтобы
+        # не ронять FAST-стратегию на гос.порталах с самоподписанными
+        # сертификатами.
+        with urllib.request.urlopen(
+            req, timeout=timeout, context=_ssl_unverified_context()
+        ) as resp:
+            return resp.read().decode('utf-8', errors='replace')
 
 
 class BaseStrategy(ABC):
@@ -53,7 +100,9 @@ class FastStrategy(BaseStrategy):
     async def fetch(self, url: str, **kwargs) -> StrategyResult:
         start = time.monotonic()
         try:
-            html = await asyncio.to_thread(self._fetch_sync, url)
+            html = await asyncio.to_thread(
+                _fetch_sync, url, self._timeout_ms, _DEFAULT_USER_AGENT
+            )
             elapsed = int((time.monotonic() - start) * 1000)
             return StrategyResult(
                 strategy=self.strategy_type,
@@ -71,23 +120,6 @@ class FastStrategy(BaseStrategy):
                 elapsed_ms=elapsed,
             )
 
-    def _fetch_sync(self, url: str) -> str:
-        import urllib.request
-
-        req = urllib.request.Request(
-            url,
-            headers={
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/120.0 Safari/537.36'
-                ),
-            },
-        )
-        timeout = self._timeout_ms / 1000
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode('utf-8', errors='replace')
-
 
 class WaybackStrategy(BaseStrategy):
     """Стратегия через Internet Archive Wayback Machine."""
@@ -102,7 +134,9 @@ class WaybackStrategy(BaseStrategy):
         try:
             # 1. Получаем ближайший снапшот из API Wayback Machine.
             api_url = f'https://archive.org/wayback/available?url={url}'
-            api_json = await asyncio.to_thread(self._fetch_sync, api_url)
+            api_json = await asyncio.to_thread(
+                _fetch_sync, api_url, self._timeout_ms, _DEFAULT_USER_AGENT
+            )
             snapshot_url = self._extract_snapshot_url(api_json)
             if not snapshot_url:
                 return StrategyResult(
@@ -113,7 +147,12 @@ class WaybackStrategy(BaseStrategy):
                 )
 
             # 2. Скачиваем сам HTML снапшота.
-            html = await asyncio.to_thread(self._fetch_sync, snapshot_url)
+            html = await asyncio.to_thread(
+                _fetch_sync,
+                snapshot_url,
+                self._timeout_ms,
+                _DEFAULT_USER_AGENT,
+            )
             elapsed = int((time.monotonic() - start) * 1000)
             return StrategyResult(
                 strategy=self.strategy_type,
@@ -144,17 +183,6 @@ class WaybackStrategy(BaseStrategy):
         except (json.JSONDecodeError, AttributeError):
             return None
 
-    def _fetch_sync(self, url: str) -> str:
-        import urllib.request
-
-        req = urllib.request.Request(
-            url,
-            headers={'User-Agent': 'Mozilla/5.0'},
-        )
-        timeout = self._timeout_ms / 1000
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode('utf-8', errors='replace')
-
 
 class BrowserStrategy(BaseStrategy):
     """Стратегия через Playwright (браузерная автоматизация)."""
@@ -174,7 +202,10 @@ class BrowserStrategy(BaseStrategy):
 
             p = await async_playwright().start()
             browser = await p.chromium.launch(headless=self._headless)
-            page = await browser.new_page()
+            # Игнорируем невалидные TLS-сертификаты (гос. порталы и др.
+            # с самоподписанными/недоверенными сертификатами).
+            context = await browser.new_context(ignore_https_errors=True)
+            page = await context.new_page()
             await page.goto(url, timeout=self._timeout_ms)
             html = await page.content()
 
@@ -270,8 +301,22 @@ class AgenticOrchestrator:
                 start_index = _DEGRADATION_ORDER.index(start_with)
             except ValueError:
                 start_index = 0
+            # start_with задаёт лишь начало перебора: проходим от start_with
+            # до конца цепочки, а затем «догоняем» стратегии из начала,
+            # не повторяя уже пройденные. Так при провале STEALTH будут
+            # испробованы HITL и остальные стратегии (BROWSER/WAYBACK/FAST/
+            # CRAWL4AI), а не только STEALTH → HITL.
+            trailing = _DEGRADATION_ORDER[start_index:]
+            leading = tuple(
+                t for t in _DEGRADATION_ORDER[:start_index] if t not in trailing
+            )
+            # Оба слагаемых — tuple, чтобы не получить
+            # "can only concatenate tuple (not 'list') to tuple".
+            order = trailing + leading
+        else:
+            order = _DEGRADATION_ORDER
 
-        for strategy_type in _DEGRADATION_ORDER[start_index:]:
+        for strategy_type in order:
             strategy = self._strategies.get(strategy_type)
             if strategy is None:
                 continue

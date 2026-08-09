@@ -18,9 +18,9 @@ from __future__ import annotations
 import logging
 import time
 
+from ..schemas import StrategyResult, StrategyType
 from .hitl import HITLManager
 from .orchestrator import MIN_CONTENT_LENGTH, BaseStrategy
-from .schemas import StrategyResult, StrategyType
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class Crawl4AIStrategy(BaseStrategy):
 
             browser_config = BrowserConfig(headless=True)
             run_config = CrawlerRunConfig(
-                page_timeout_ms=self._timeout_ms,
+                page_timeout=self._timeout_ms,
                 wait_until='domcontentloaded',
             )
             async with AsyncWebCrawler(config=browser_config) as crawler:
@@ -117,9 +117,12 @@ class StealthStrategy(BaseStrategy):
                     headless=self._headless,
                     args=get_launch_args(headless=self._headless),
                 )
-                context = await browser.new_context(
-                    **get_context_config(),
-                )
+                context_config = get_context_config()
+                # Игнорируем невалидные/самоподписанные TLS-сертификаты
+                # (zakupki.gov.ru и др. гос. порталы отдают
+                # ERR_CERT_AUTHORITY_INVALID).
+                context_config.setdefault('ignore_https_errors', True)
+                context = await browser.new_context(**context_config)
                 await apply_stealth(context)
                 page = await context.new_page()
                 response = await page.goto(url, timeout=self._timeout_ms)
@@ -187,11 +190,28 @@ class HITLStrategy(BaseStrategy):
             )
             elapsed = int((time.monotonic() - start) * 1000)
             if response.success:
+                # После решения CAPTCHA передаём HTML страницы дальше
+                # в пайплайн (раньше возвращался пустой data).
+                html = response.html or ''
+                if len(html) < MIN_CONTENT_LENGTH:
+                    # Профиль найден, но страница не загрузилась (например,
+                    # TLS-ошибка при использовании закэшированных cookies).
+                    # Возвращаем осмысленную ошибку, а не ложный успех.
+                    return StrategyResult(
+                        strategy=self.strategy_type,
+                        success=False,
+                        error=(
+                            'HITL profile found but page returned empty '
+                            'content (likely TLS/network issue)'
+                        ),
+                        content_length=len(html),
+                        elapsed_ms=elapsed,
+                    )
                 return StrategyResult(
                     strategy=self.strategy_type,
-                    success=True,
-                    data='',
-                    content_length=0,
+                    success=len(html) >= MIN_CONTENT_LENGTH,
+                    data=html,
+                    content_length=len(html),
                     elapsed_ms=elapsed,
                 )
             return StrategyResult(

@@ -1,4 +1,4 @@
-"""Модели BP-1 (слой сбора данных).
+"""BP-1 (слой сбора данных).
 
 Реэкспорт моделей, чтобы они регистрировались в Base.metadata при импорте
 пакета — нужно для Alembic autogenerate и create_all. Enum'ы живут в
@@ -22,17 +22,7 @@ from .base_parser import (
 
 # Celery задачи (для production режима)
 from .celery_tasks import run_parser_task
-from .parsers import (
-    FedresursAdapter,
-    FipsAdapter,
-    GoogleNewsAdapter,
-    HHAdapter,
-    KadArbitrAdapter,
-    KodikForumAdapter,
-    NicRuAdapter,
-    VKAdapter,
-    ZakupkiAdapter,
-)
+from .parsers import FedresursAdapter
 
 # Runner - оркестратор пайплайна
 from .runner import (
@@ -41,34 +31,24 @@ from .runner import (
     run_pipeline,
     run_pipeline_sync,
 )
+from .storage import RawDataService, calculate_content_hash
 from .tasks import run_parser_async
-
-# CLI интерфейс (импортируется для удобства, но не экспортируется)
-# from .cli import main
 
 __all__ = [
     'BPRunner',
     'BaseParser',
     'Competitor',
     'FedresursAdapter',
-    'FipsAdapter',
-    'GoogleNewsAdapter',
-    'HHAdapter',
-    'KadArbitrAdapter',
-    'KodikForumAdapter',
-    'NicRuAdapter',
     'ParsedItem',
     'ParsedResponse',
     'ParserFactory',
+    'RawDataService',
     'RawItem',
-    'RawItemStatus',
     'RunMode',
     'SearchTask',
     'Source',
     'Trigger',
-    'VKAdapter',
-    'ZakupkiAdapter',
-    'create_runner',
+    'calculate_content_hash',
     'run_parser_async',
     'run_parser_task',
     'run_pipeline',

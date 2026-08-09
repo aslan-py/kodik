@@ -4,40 +4,53 @@
 Интеллектуальная система сбора данных, которая автоматически определяет
 структуру сайта, извлекает данные без предварительной настройки и
 адаптируется к изменениям в реальном времени.
+
+Пакет организован по слоям:
+
+- ``core`` — инфраструктура (кэширование, контроль качества).
+- ``processing`` — обработка HTML и извлечение данных (парсер, LLM).
+- ``strategies`` — стратегии обхода источников.
+- ``integration`` — интеграция с BP-1 и внешними интерфейсами (MCP, CLI).
 """
 
-from .bridge import AdaptiveBridgeParser
-from .cache import UnifiedCache
-from .classifier import SourceClassifier
-from .engines import (
-    Crawl4AIStrategy,
-    HITLStrategy,
-    StealthStrategy,
-)
-from .hitl import HITLManager, ProfileManager
-from .llm import AIAgent, LLMClient
+from .core.cache import UnifiedCache
+from .core.quality import DataQualityGate
+from .integration.bridge import AdaptiveBridgeParser
+from .integration.mcp_server import MCPServer, run_mcp_server
+from .integration.runner import AdaptiveRunner
 from .logger import get_logger
-from .mcp_server import MCPServer, run_mcp_server
-from .orchestrator import AgenticOrchestrator
-from .parser import AdaptiveParser
-from .quality import DataQualityGate
-from .runner import AdaptiveRunner
+from .processing.llm import AIAgent, LLMClient
+from .processing.parser import AdaptiveParser
 from .schemas import (
     AdapterConfig,
     AdapterState,
     AdaptiveParseResult,
+    BusinessFeatures,
+    ExtendedSiteClassification,
     HITLRequest,
     HITLResponse,
+    PageSubType,
     PipelineReport,
     QualityGateLevel,
     QualityGateReport,
     QuarantineRecord,
+    SiteType,
     SourceClassification,
+    SourceRegistrationResult,
     SourceType,
     StrategyResult,
     StrategyType,
+    TechnicalFeatures,
     UnifiedConfig,
 )
+from .strategies.classifier import SourceClassifier
+from .strategies.engines import (
+    Crawl4AIStrategy,
+    HITLStrategy,
+    StealthStrategy,
+)
+from .strategies.hitl import HITLManager, ProfileManager
+from .strategies.orchestrator import AgenticOrchestrator
 
 __all__ = [
     'AIAgent',
@@ -48,25 +61,31 @@ __all__ = [
     'AdaptiveParser',
     'AdaptiveRunner',
     'AgenticOrchestrator',
+    'BusinessFeatures',
     'Crawl4AIStrategy',
     'DataQualityGate',
+    'ExtendedSiteClassification',
     'HITLManager',
     'HITLRequest',
     'HITLResponse',
     'HITLStrategy',
     'LLMClient',
     'MCPServer',
+    'PageSubType',
     'PipelineReport',
     'ProfileManager',
     'QualityGateLevel',
     'QualityGateReport',
     'QuarantineRecord',
+    'SiteType',
     'SourceClassification',
     'SourceClassifier',
+    'SourceRegistrationResult',
     'SourceType',
     'StealthStrategy',
     'StrategyResult',
     'StrategyType',
+    'TechnicalFeatures',
     'UnifiedCache',
     'UnifiedConfig',
     'get_logger',

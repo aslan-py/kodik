@@ -6,25 +6,16 @@
 from ..adaptive import AdaptiveBridgeParser
 from ..base_parser import ParserFactory
 from .fedresurs_adapter import FedresursAdapter
-from .fips_adapter import FipsAdapter
-from .google_news_adapter import GoogleNewsAdapter
-from .hh_adapter import HHAdapter
-from .kad_arbitr_adapter import KadArbitrAdapter
-from .kodik_forum_adapter import KodikForumAdapter
-from .nic_ru_adapter import NicRuAdapter
-from .vk_adapter import VKAdapter
-from .zakupki_adapter import ZakupkiAdapter
 
-# Регистрируем парсеры в фабрике
+# Регистрируем парсеры в фабрике.
+# В фабрике остаётся только реальный RPA-адаптер fedresurs.ru. Для всех
+# остальных источников (fips.ru, news.google.com, kad.arbitr.ru,
+# kodik.ru/forum, nic.ru, dev.vk.com, zakupki.gov.ru, api.hh.ru и т.д.)
+# используются НЕ заглушки, а универсальный адаптивный парсер
+# (AdaptiveBridgeParser): он классифицирует источник и применяет стратегии
+# обхода (FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL) и
+# интеллектуальное извлечение данных через LLM/эвристику.
 ParserFactory.register('https://fedresurs.ru/', FedresursAdapter)
-ParserFactory.register('https://www.fips.ru/', FipsAdapter)
-ParserFactory.register('https://news.google.com/', GoogleNewsAdapter)
-ParserFactory.register('https://api.hh.ru/', HHAdapter)
-ParserFactory.register('https://kad.arbitr.ru/', KadArbitrAdapter)
-ParserFactory.register('https://kodik.ru/forum', KodikForumAdapter)
-ParserFactory.register('https://www.nic.ru/', NicRuAdapter)
-ParserFactory.register('https://dev.vk.com/', VKAdapter)
-ParserFactory.register('https://zakupki.gov.ru/', ZakupkiAdapter)
 
 # Универсальный адаптивный парсер (для любых источников)
 ParserFactory.register('adaptive', AdaptiveBridgeParser)
@@ -32,13 +23,5 @@ ParserFactory.register('adaptive', AdaptiveBridgeParser)
 __all__ = [
     'AdaptiveBridgeParser',
     'FedresursAdapter',
-    'FipsAdapter',
-    'GoogleNewsAdapter',
-    'HHAdapter',
-    'KadArbitrAdapter',
-    'KodikForumAdapter',
-    'NicRuAdapter',
     'ParserFactory',
-    'VKAdapter',
-    'ZakupkiAdapter',
 ]

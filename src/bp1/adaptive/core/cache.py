@@ -9,11 +9,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from .schemas import AdapterState, SourceClassification
+from ..schemas import AdapterState, SourceClassification
 
 # TTL адаптера по умолчанию — 7 дней (в секундах).
 ADAPTER_TTL_SECONDS = 86400 * 7
@@ -22,12 +24,46 @@ ADAPTER_TTL_SECONDS = 86400 * 7
 CLASSIFICATION_TTL_SECONDS = 86400 * 7
 
 
+def _canonical_source_name(source_name: str) -> str:
+    """Приводит имя источника к каноническому hostname в нижнем регистре.
+
+    Источники в базе могут храниться как полный URL (``https://lenta.ru/``),
+    голый домен (``lenta.ru``) или с ``www``. Чтобы адаптер, классификация и
+    профиль находились независимо от формы ввода, ключ приводится к единому
+    hostname. Если значение не похоже на корректный источник/URL — возвращается
+    исходная строка без изменений (fallback).
+
+    Логика продублирована из ``integration.sources.extract_host`` намеренно,
+    чтобы избежать циклического импорта (``sources`` импортирует ``cache``).
+    """
+    value = (source_name or '').strip()
+    if not value or any(ch.isspace() for ch in value):
+        return source_name
+    try:
+        host = urlsplit(
+            value if '://' in value else f'https://{value}'
+        ).hostname
+        if not host:
+            return source_name
+    except Exception:
+        return source_name
+    host = host.lower()
+    if host.startswith('www.'):
+        host = host[4:]
+    return host
+
+
 class UnifiedCache:
     """
     Единое кэширование для всех компонентов.
 
     Адаптеры хранятся в Redis (если клиент передан) с TTL 7 дней.
     Профили браузеров и HTML-снапшоты — на диске в cache_dir.
+
+    Все ключи (адаптер, классификация) и имена файлов профилей приводятся
+    к каноническому hostname источника, поэтому ``lenta.ru``,
+    ``https://lenta.ru/`` и ``https://www.lenta.ru/news`` дают один и тот же
+    ключ. За счёт этого данные находятся независимо от формы ``--source``.
     """
 
     def __init__(
@@ -47,7 +83,7 @@ class UnifiedCache:
     # ========================================================================
 
     def _adapter_key(self, source_name: str) -> str:
-        return f'bp1:adapter:{source_name}'
+        return f'bp1:adapter:{_canonical_source_name(source_name)}'
 
     async def get_adapter(self, source_name: str) -> AdapterState | None:
         """Получить адаптер из Redis."""
@@ -87,7 +123,7 @@ class UnifiedCache:
     # ========================================================================
 
     def _classification_key(self, source_name: str) -> str:
-        return f'bp1:classification:{source_name}'
+        return f'bp1:classification:{_canonical_source_name(source_name)}'
 
     async def get_classification(
         self, source_name: str
@@ -129,7 +165,7 @@ class UnifiedCache:
     # ========================================================================
 
     def _profile_path(self, source_name: str) -> Path:
-        safe_name = source_name.replace('/', '_').replace(':', '_')
+        safe_name = _canonical_source_name(source_name)
         return self._profiles_dir / f'{safe_name}.json'
 
     async def get_profile(self, source_name: str) -> dict | None:
@@ -155,8 +191,6 @@ class UnifiedCache:
     # ========================================================================
 
     def _snapshot_path(self, url: str) -> Path:
-        import hashlib
-
         digest = hashlib.md5(url.encode('utf-8')).hexdigest()
         return self._snapshots_dir / f'{digest}.html'
 
@@ -174,3 +208,63 @@ class UnifiedCache:
         """Сохранить HTML-снапшот."""
         path = self._snapshot_path(url)
         path.write_text(html, encoding='utf-8')
+
+    # ========================================================================
+    # Circuit breaker источников (Redis)
+    #
+    # Двухуровневая защита от недоступных источников:
+    # 1. ``source_blocked:<src>`` — временная блокировка на TTL (circuit
+    #    breaker). Пока ключ существует, источник не пробуют парсить.
+    # 2. ``source_fail_count:<src>`` — счётчик подряд идущих полных отказов.
+    #    При достижении порога источник отключается в БД (is_active=False).
+    # ========================================================================
+
+    def _blocked_key(self, source_name: str) -> str:
+        return f'bp1:source_blocked:{_canonical_source_name(source_name)}'
+
+    def _fail_count_key(self, source_name: str) -> str:
+        return f'bp1:source_fail_count:{_canonical_source_name(source_name)}'
+
+    async def is_source_blocked(self, source_name: str) -> bool:
+        """Проверить, временно ли заблокирован источник в Redis."""
+        if self.redis is None:
+            return False
+        return bool(await self.redis.exists(self._blocked_key(source_name)))
+
+    async def block_source(
+        self,
+        source_name: str,
+        ttl: int = 86400,
+    ) -> None:
+        """Временно заблокировать источник в Redis на ``ttl`` секунд."""
+        if self.redis is None:
+            return
+        await self.redis.set(self._blocked_key(source_name), '1', ex=ttl)
+
+    async def unblock_source(self, source_name: str) -> None:
+        """Снять временную блокировку источника (при успешном парсинге)."""
+        if self.redis is None:
+            return
+        await self.redis.delete(self._blocked_key(source_name))
+
+    async def increment_fail_count(self, source_name: str) -> int:
+        """Инкрементировать счётчик отказов. Возвращает новое значение."""
+        if self.redis is None:
+            return 0
+        return int(await self.redis.incr(self._fail_count_key(source_name)))
+
+    async def get_fail_count(self, source_name: str) -> int:
+        """Текущее значение счётчика отказов (без инкремента)."""
+        if self.redis is None:
+            return 0
+        raw = await self.redis.get(self._fail_count_key(source_name))
+        try:
+            return int(raw) if raw else 0
+        except (TypeError, ValueError):
+            return 0
+
+    async def reset_fail_count(self, source_name: str) -> None:
+        """Сбросить счётчик отказов (при успешном парсинге)."""
+        if self.redis is None:
+            return
+        await self.redis.delete(self._fail_count_key(source_name))

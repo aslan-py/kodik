@@ -28,11 +28,11 @@ import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .cache import UnifiedCache
-from .classifier import SourceClassifier
-from .orchestrator import AgenticOrchestrator
-from .parser import AdaptiveParser
-from .schemas import MCPTool, StrategyType
+from ..core.cache import UnifiedCache
+from ..processing.parser import AdaptiveParser
+from ..schemas import MCPTool, StrategyType
+from ..strategies.classifier import SourceClassifier
+from ..strategies.orchestrator import AgenticOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,11 @@ class MCPServer:
     # Обработка запросов
     # ========================================================================
 
+    @staticmethod
+    def _text_response(text: str) -> dict[str, Any]:
+        """Формирует MCP-ответ с текстовым контентом."""
+        return {'content': [{'type': 'text', 'text': text}]}
+
     async def _handle_tool_call(
         self,
         name: str,
@@ -133,14 +138,7 @@ class MCPServer:
                 source_name=arguments.get('source_name', ''),
                 source_url=arguments.get('source_url', ''),
             )
-            return {
-                'content': [
-                    {
-                        'type': 'text',
-                        'text': classification.model_dump_json(),
-                    }
-                ]
-            }
+            return self._text_response(classification.model_dump_json())
 
         if name == 'run_adaptive_parse':
             result = await self._parser.parse(
@@ -149,27 +147,13 @@ class MCPServer:
                 competitor=arguments.get('competitor', ''),
                 trigger=arguments.get('trigger', ''),
             )
-            return {
-                'content': [
-                    {
-                        'type': 'text',
-                        'text': result.model_dump_json(),
-                    }
-                ]
-            }
+            return self._text_response(result.model_dump_json())
 
         if name == 'list_strategies':
             strategies = [s.value for s in StrategyType]
-            return {
-                'content': [
-                    {
-                        'type': 'text',
-                        'text': json.dumps(
-                            {'strategies': strategies}, ensure_ascii=False
-                        ),
-                    }
-                ]
-            }
+            return self._text_response(
+                json.dumps({'strategies': strategies}, ensure_ascii=False)
+            )
 
         if name == 'get_adapter':
             adapter = await self._cache.get_adapter(
@@ -180,18 +164,11 @@ class MCPServer:
                 if adapter
                 else json.dumps({'adapter': None})
             )
-            return {'content': [{'type': 'text', 'text': text}]}
+            return self._text_response(text)
 
         if name == 'clear_adapter':
             await self._cache.clear_adapter(arguments.get('source_name', ''))
-            return {
-                'content': [
-                    {
-                        'type': 'text',
-                        'text': json.dumps({'cleared': True}),
-                    }
-                ]
-            }
+            return self._text_response(json.dumps({'cleared': True}))
 
         raise ValueError(f'unknown tool: {name}')
 

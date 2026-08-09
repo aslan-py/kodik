@@ -154,7 +154,7 @@ def read_search_tasks_csv(path: Path) -> list[SearchTaskRow]:
                     line_no,
                 )
                 continue
-            trig_raw = row.get('trigger_keyword', '').strip()
+            trig_raw = (row.get('trigger_keyword') or '').strip()
             trig = trig_raw if trig_raw else None
             rows.append(
                 SearchTaskRow(

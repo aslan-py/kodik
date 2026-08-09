@@ -26,10 +26,10 @@ from src.bp1.tasks import (
     update_timestamp,
 )
 
-from .bridge import AdaptiveBridgeParser
-from .cache import UnifiedCache
-from .classifier import SourceClassifier
-from .quality import DataQualityGate
+from .core.cache import UnifiedCache
+from .core.quality import DataQualityGate
+from .integration.bridge import AdaptiveBridgeParser
+from .strategies.classifier import SourceClassifier
 
 logger = logging.getLogger(__name__)
 

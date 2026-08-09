@@ -48,7 +48,10 @@ class Settings(BaseSettings):
     def redis_url(self) -> str:
         """Собирает URL для подключения к Redis."""
         if self.redis_password:
-            return f'redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}'
+            return (
+                f'redis://:{self.redis_password}@'
+                f'{self.redis_host}:{self.redis_port}/{self.redis_db}'
+            )
         return f'redis://{self.redis_host}:{self.redis_port}/{self.redis_db}'
 
     # ===== Celery =====
@@ -61,15 +64,28 @@ class Settings(BaseSettings):
     def celery_broker_url(self) -> str:
         """Собирает URL брокера Celery (Redis)."""
         if self.redis_password:
-            return f'redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.celery_broker_db}'
-        return f'redis://{self.redis_host}:{self.redis_port}/{self.celery_broker_db}'
+            return (
+                f'redis://:{self.redis_password}@'
+                f'{self.redis_host}:{self.redis_port}/{self.celery_broker_db}'
+            )
+        return (
+            f'redis://{self.redis_host}:{self.redis_port}/'
+            f'{self.celery_broker_db}'
+        )
 
     @property
     def celery_result_backend_url(self) -> str:
         """Собирает URL result backend Celery (Redis)."""
         if self.redis_password:
-            return f'redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.celery_result_backend_db}'
-        return f'redis://{self.redis_host}:{self.redis_port}/{self.celery_result_backend_db}'
+            return (
+                f'redis://:{self.redis_password}@'
+                f'{self.redis_host}:{self.redis_port}/'
+                f'{self.celery_result_backend_db}'
+            )
+        return (
+            f'redis://{self.redis_host}:{self.redis_port}/'
+            f'{self.celery_result_backend_db}'
+        )
 
     # ===== Пути для хранения данных =====
     # Корневая папка для данных BP-1
@@ -140,6 +156,13 @@ class Settings(BaseSettings):
     deepseek_base_url: str = 'https://api.deepseek.com'
     deepseek_model: str = 'deepseek-chat'
 
+    # ===== Circuit breaker для источников (BP-1 Adaptive) =====
+    # Время временной блокировки источника в Redis после полного отказа
+    # (all strategies failed), в секундах. По умолчанию 24 часа.
+    source_circuit_ttl_seconds: int = 86400
+    # Число подряд идущих полных отказов (с промежутком в circuit TTL каждый),
+    # после которого источник отключается в БД (is_active=False).
+    source_disable_threshold: int = 3
     # ===== BP-7 (агент расширения источников) =====
     # Порог score, выше которого source_candidate переносится в source
     # (src/bp7/pipeline.py::SourceCandidatePromoter). Настраивается через

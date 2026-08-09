@@ -8,9 +8,20 @@ SourceClassifier — умный классификатор источников.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
-from .schemas import SourceClassification, SourceType, StrategyType
+from bs4 import BeautifulSoup
+
+from ..schemas import (
+    BusinessFeatures,
+    ExtendedSiteClassification,
+    SiteType,
+    SourceClassification,
+    SourceType,
+    StrategyType,
+    TechnicalFeatures,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +44,71 @@ _SPA_MARKERS = (
     'next-data',
     '__NEXT_DATA__',
     '__NUXT__',
+)
+
+# Маркеры JS-фреймворков по конкретным технологиям.
+_FRAMEWORK_MARKERS: dict[str, tuple[str, ...]] = {
+    'react': (
+        'data-reactroot',
+        'data-reactid',
+        '__REACT_DEVTOOLS_GLOBAL_HOOK__',
+        'react.development',
+        'react.production',
+    ),
+    'vue': (
+        'data-v-',
+        '__VUE__',
+        'v-if',
+        'v-for',
+        'v-bind',
+        'vue.global',
+    ),
+    'angular': (
+        'ng-app',
+        'ng-controller',
+        'ng-version',
+        'angular.min',
+    ),
+    'nextjs': (
+        '__NEXT_DATA__',
+        'next-page',
+    ),
+    'nuxt': (
+        '__NUXT__',
+        'data-nuxt',
+    ),
+}
+
+# Маркеры CSS-фреймворков.
+_CSS_FRAMEWORK_MARKERS: dict[str, tuple[str, ...]] = {
+    'bootstrap': (
+        'bootstrap.min.css',
+        'bootstrap.bundle',
+        'btn-primary',
+    ),
+    'tailwind': (
+        'tailwindcss',
+        'tailwind.min',
+        'hover:',
+        'focus:',
+    ),
+    'material': (
+        'material.',
+        'mdc-',
+    ),
+    'semantic_ui': (
+        'semantic.min.css',
+        'semantic-ui',
+    ),
+}
+
+# CSS-селекторы корзины/магазина (для детекции e-commerce).
+_CART_SELECTORS = (
+    '.cart',
+    '#cart',
+    '.basket',
+    '.shopping-cart',
+    '.buy',
 )
 
 # Маркеры CAPTCHA-виджетов.
@@ -231,6 +307,147 @@ class SourceClassifier:
         """Определяет, является ли сайт SPA-приложением."""
         html_lower = html.lower()
         return any(marker in html_lower for marker in _SPA_MARKERS)
+
+    # ========================================================================
+    # Расширенные детекторы (SiteType, JS/CSS-фреймворки, мета)
+    # ========================================================================
+
+    def _detect_site_type(self, html: str) -> SiteType:
+        """Определяет детализированный тип сайта по структуре HTML.
+
+        Приоритет: schema.org разметка → Open Graph → корзина/магазин →
+        маркеры контента. Возвращает ``SiteType.OTHER``, если тип не распознан.
+        """
+        if not html:
+            return SiteType.OTHER
+
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # schema.org разметка.
+        for item in soup.find_all(
+            attrs={'itemtype': re.compile(r'schema\.org')}
+        ):
+            item_str = str(item).lower()
+            if 'product' in item_str:
+                return SiteType.E_COMMERCE
+            if 'jobposting' in item_str:
+                return SiteType.JOB_BOARD
+            if 'review' in item_str:
+                return SiteType.REVIEW_AGGREGATOR
+            if 'faqpage' in item_str:
+                return SiteType.QUESTION_ANSWER
+            if 'article' in item_str:
+                return SiteType.NEWS
+
+        # Open Graph тип.
+        og_type = soup.find('meta', attrs={'property': 'og:type'})
+        if og_type:
+            og_value = (og_type.get('content') or '').lower()
+            if og_value == 'product':
+                return SiteType.E_COMMERCE
+            if og_value == 'article':
+                return SiteType.NEWS
+
+        # Корзина / магазин.
+        if any(soup.select_one(sel) for sel in _CART_SELECTORS):
+            return SiteType.E_COMMERCE
+
+        # Маркеры классифицированного контента.
+        html_lower = html.lower()
+        if 'вакансия' in html_lower or 'вакансии' in html_lower:
+            return SiteType.JOB_BOARD
+        if 'объявлени' in html_lower:
+            return SiteType.CLASSIFIEDS
+        if 'отзыв' in html_lower:
+            return SiteType.REVIEW_AGGREGATOR
+
+        return SiteType.OTHER
+
+    def _detect_js_frameworks(self, html: str) -> list[str]:
+        """Определяет JS-фреймворки по маркерам в HTML."""
+        html_lower = html.lower()
+        frameworks: list[str] = []
+        for name, markers in _FRAMEWORK_MARKERS.items():
+            if any(marker in html_lower for marker in markers):
+                frameworks.append(name)
+        return frameworks
+
+    def _detect_css_patterns(self, html: str) -> list[str]:
+        """Определяет CSS-фреймворки по маркерам в HTML."""
+        html_lower = html.lower()
+        frameworks: list[str] = []
+        for name, markers in _CSS_FRAMEWORK_MARKERS.items():
+            if any(marker in html_lower for marker in markers):
+                frameworks.append(name)
+        return frameworks
+
+    def _detect_meta(self, html: str) -> dict[str, bool]:
+        """Анализирует присутствие метрик и верификации в HTML."""
+        html_lower = html.lower()
+        return {
+            'has_ya_metrika': 'metrika' in html_lower
+            or 'yandex_metrika' in html_lower,
+            'has_ga': 'google-analytics' in html_lower or 'gtag' in html_lower,
+            'has_fb_pixel': 'fbq' in html_lower
+            or 'facebook-pixel' in html_lower,
+            'has_verification': bool(
+                BeautifulSoup(html, 'html.parser').find(
+                    'meta', attrs={'name': re.compile(r'verification', re.I)}
+                )
+            ),
+        }
+
+    async def classify_extended(
+        self,
+        source_name: str,
+        source_url: str,
+        headers: dict[str, Any] | None = None,
+        html: str | None = None,
+    ) -> ExtendedSiteClassification:
+        """Расширенная классификация с детализацией типа сайта.
+
+        Дополняет ``classify`` детализированным ``SiteType``, подтипом страницы
+        (не определяется автоматически — ``OTHER``), бизнес- и техническими
+        характеристиками. Обратно совместим с ``classify``.
+        """
+        base = await self.classify(
+            source_name=source_name,
+            source_url=source_url,
+            headers=headers,
+            html=html,
+        )
+
+        html_lower = (html or '').lower()
+        technical = TechnicalFeatures(
+            frameworks=self._detect_js_frameworks(html or ''),
+            css_frameworks=self._detect_css_patterns(html or ''),
+            has_antibot=base.has_antibot,
+            has_captcha=base.has_captcha,
+            is_spa=base.is_spa,
+        )
+        business = BusinessFeatures(
+            has_cart=any(
+                sel in html_lower for sel in ('.cart', '#cart', '.basket')
+            ),
+            has_search='search' in html_lower,
+            has_pagination='pagination' in html_lower or 'page=' in html_lower,
+        )
+        meta = self._detect_meta(html or '')
+
+        return ExtendedSiteClassification(
+            source_name=base.source_name,
+            site_type=self._detect_site_type(html or ''),
+            confidence=(
+                1.0
+                if self._detect_site_type(html or '') != SiteType.OTHER
+                else 0.5
+            ),
+            business_features=business,
+            technical_features=technical,
+            complexity_score=base.complexity_score,
+            recommended_strategy=base.recommended_strategy,
+            metadata={**meta, 'url': source_url},
+        )
 
     # ========================================================================
     # Оценка сложности и выбор стратегии

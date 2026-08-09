@@ -5,7 +5,7 @@
 Поиск осуществляется по ИНН компании.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from ..base_parser import BaseParser, ParsedItem, ParsedResponse
 from ..collectors.fedresurs_rpa import (
@@ -30,6 +30,11 @@ class FedresursAdapter(BaseParser):
             competitor='ООО "Ромашка"'
         )
     """
+
+    # fedresurs выполняет поиск по ИНН компании — без него RPA-сценарий
+    # падает (Frame.fill() без value). Декларируем обязательность для
+    # предварительной валидации в AdaptiveRunner.run_task.
+    required_kwargs: tuple[str, ...] = ('inn',)
 
     def __init__(
         self,
@@ -124,7 +129,7 @@ class FedresursAdapter(BaseParser):
                 'trigger': None,
                 # URL страницы поиска (entities?searchString=...)
                 'source_request_url': result.search_url,
-                'fetched_at': datetime.utcnow().isoformat(),
+                'fetched_at': datetime.now(UTC).isoformat(),
             },
             items=[item],
         )

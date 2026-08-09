@@ -43,7 +43,7 @@ from .llm import AIAgent, LLMClient
 logger = logging.getLogger(__name__)
 
 # Максимальное количество новостей, собираемых за один проход пагинации.
-DEFAULT_MAX_NEWS = 10
+DEFAULT_MAX_NEWS = 5
 
 # Минимальная длина текста, при которой результат извлечения считается
 # успешным (для каскада CSS → LLM → сниппет).
@@ -51,6 +51,25 @@ MIN_ARTICLE_TEXT_LENGTH = 100
 
 # Максимальное количество одновременно докачиваемых статей (глубокий фетч).
 MAX_CONCURRENT_FETCHES = 5
+
+# Таймаут (в секундах) на извлечение полного текста одной статьи. Защищает
+# глубокий фетч от зависания на проблемной странице, чтобы медленная статья
+# не занимала слот конкурентности и не лишала остальные новости полного
+# текста (раньше первые 1-2 статьи «съедали» все ресурсы, а остальные падали
+# в сниппет-фолбэк).
+ARTICLE_FETCH_TIMEOUT_SECONDS = 20.0
+
+# Минимальное количество символов, при котором извлечённый LLM/CSS текст
+# считается полным. Если текст короче — вероятна обрезка, и нужна докачка
+# хвоста.
+MIN_FULL_ARTICLE_TEXT_LENGTH = 300
+
+# Максимальное количество итераций докачки обрезанного хвоста статьи.
+MAX_TAIL_FETCH_ATTEMPTS = 3
+
+# Максимальное количество байт исходного HTML, отдаваемых LLM в одном запросе
+# докачки хвоста (смещение по оффсету в конец документа).
+TAIL_FETCH_CHUNK_SIZE = 12000
 
 # Служебные пути URL, которые не являются элементами данных и должны быть
 # отброшены при извлечении (логин, регистрация, cookie-политика и т.п.).
@@ -87,7 +106,27 @@ def _is_noise_url(url: str) -> bool:
         return False
 
     path = url.split('?', 1)[0].split('#', 1)[0]
-    return any(pattern in path for pattern in _NOISE_URL_PATTERNS)
+    if any(pattern in path for pattern in _NOISE_URL_PATTERNS):
+        return True
+    # Служебные ссылки ограничены шаблонами выше. Не-HTTP(S) ссылки
+    # (``mailto:``, ``tel:``, ``javascript:``) не считаются шумом здесь:
+    # их отфильтровывает ``_is_fetchable_url`` на уровне кандидатов.
+    return False
+
+
+def _reject_non_http_scheme(url: str) -> bool:
+    """Возвращает True для явных не-HTTP(S) схем
+    (``mailto:``, ``tel:``, ``javascript:``).
+
+    Относительные ссылки (без ``:``) и обычные URL пропускаются — они
+    нормализуются в абсолютные через ``_to_absolute``.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    if ':' not in url:
+        return False
+    scheme = url.split(':', 1)[0].lower()
+    return scheme not in ('http', 'https')
 
 
 def _to_absolute(url: str, base_url: str) -> str:
@@ -153,7 +192,10 @@ class _LinkCollector(HTMLParser):
             self._in_a = False
             text = ' '.join(self._current_text).strip()
             href = getattr(self, '_pending_href', '')
-            if text and href:
+            # Относительные ссылки (без ``:``) сохраняются — они станут
+            # абсолютными через ``_to_absolute``. Не-HTTP(S) схемы
+            # (``mailto:``, ``tel:``, ``javascript:``) в парсинг не попадают.
+            if text and href and not _reject_non_http_scheme(href):
                 self.links.append((text, href))
 
 
@@ -543,21 +585,56 @@ class AdaptiveParser:
         Returns:
             Список ``{"title", "url", "text"}`` (url — полная ссылка).
         """
+
+        # Приоритет отдаём статьям с настроенным CSS-селектором ``text``
+        # (дёшево и быстро), а LLM-фолбэк оставляем для остальных. Так полный
+        # текст равномерно распределяется по всем новостям, а не достаётся
+        # только первым нескольким, выигравшим гонку за ресурсы.
+        def _css_first_key(cand: tuple[str, str, str]) -> tuple[int, int]:
+            has_css = bool((selectors or {}).get('text'))
+            return (0 if has_css else 1, 0)
+
+        ordered = sorted(candidates, key=_css_first_key)
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
 
         async def _one(cand: tuple[str, str, str]) -> dict[str, Any]:
             title, url_abs, _url_rel = cand
-            async with semaphore:
-                text, _method = await self._extract_article_text(
-                    url_abs, source_name, selectors
-                )
-            if not text:
-                text = title  # сниппет-фолбэк: не теряем новость
+            # Кэш полного текста по URL: повторно не скачиваем страницу и не
+            # тратим LLM-токены, если текст уже извлекался ранее.
+            cached = await self._cache.get_article_text(url_abs)
+            if cached and cached.get('text'):
+                text = cached['text']
+                method = cached.get('method') or 'cache'
+            else:
+                try:
+                    async with semaphore:
+                        text, method = await asyncio.wait_for(
+                            self._extract_article_text(
+                                url_abs, source_name, selectors
+                            ),
+                            timeout=ARTICLE_FETCH_TIMEOUT_SECONDS,
+                        )
+                except TimeoutError:
+                    self._logger.warning(
+                        'Таймаут извлечения текста статьи: %s', url_abs
+                    )
+                    text, method = None, 'timeout'
+                if not text:
+                    text = title  # сниппет-фолбэк: не теряем новость
+                    method = 'snippet'
+                else:
+                    await self._cache.set_article_text(url_abs, text, method)
             # Ключи в extra имеют префикс ex_, чтобы не конфликтовать с
             # обязательными полями item (title/url/text) на уровне BP-2.
-            return {'ex_title': title, 'ex_url': url_abs, 'ex_text': text}
+            # method — способ получения текста (css/llm/snippet/cache).
+            return {
+                'ex_title': title,
+                'ex_url': url_abs,
+                'ex_text': text,
+                'ex_method': method,
+            }
 
-        return await asyncio.gather(*(_one(c) for c in candidates))
+        return await asyncio.gather(*(_one(c) for c in ordered))
 
     async def _extract_article_text(
         self,
@@ -593,9 +670,15 @@ class AdaptiveParser:
                 if len(text) >= MIN_ARTICLE_TEXT_LENGTH:
                     return text, 'css'
 
-        # Этап B: LLM-извлечение (fallback при сбое CSS).
+        # Этап B: LLM-извлечение (fallback при сбое CSS). Если результат
+        # подозрительно короткий или обрывается без финального знака
+        # препинания — считаем текст обрезанным и пробуем докачать хвост.
         llm_text = await self._llm_extract_text(html)
         if llm_text and len(llm_text) >= MIN_ARTICLE_TEXT_LENGTH:
+            if _looks_truncated(llm_text):
+                llm_text = await self._extract_missing_tail(
+                    html, llm_text, source_name
+                )
             return llm_text, 'llm'
 
         # Этап C: сниппет из очищенного контента.
@@ -603,6 +686,47 @@ class AdaptiveParser:
         if snippet:
             return snippet, 'snippet'
         return None, 'snippet'
+
+    async def _extract_missing_tail(
+        self,
+        html: str,
+        extracted: str,
+        source_name: str,
+    ) -> str:
+        """Докачивает обрезанный хвост статьи по оффсету в исходном HTML.
+
+        LLM-извлечение часто теряет окончание длинных статей из-за лимита
+        токенов одного запроса или ограничения числа чанков. Если текст
+        оборван (нет финального знака препинания или он слишком короткий),
+        идём в конец исходного HTML и повторно извлекаем текст из хвоста,
+        приклеивая его к уже полученному.
+
+        Args:
+            html: Исходный HTML статьи.
+            extracted: Уже извлечённый (обрезанный) текст.
+            source_name: Имя источника.
+
+        Returns:
+            Полный текст с доклеенным хвостом или исходный текст, если
+            докачка не дала нового контента.
+        """
+        result = extracted
+        length = len(html)
+        for attempt in range(MAX_TAIL_FETCH_ATTEMPTS):
+            if not _looks_truncated(result):
+                break
+            # Берём окно из конца документа, растущее с каждой попыткой,
+            # чтобы захватить всё более ранний хвост.
+            offset = max(0, length - TAIL_FETCH_CHUNK_SIZE * (attempt + 1))
+            tail_html = html[offset:]
+            tail_text = await self._llm_extract_text(tail_html)
+            if not tail_text:
+                break
+            tail_text = tail_text.strip()
+            if tail_text in result or not tail_text:
+                break
+            result = f'{result}\n\n{tail_text}'
+        return result
 
     async def _llm_extract_text(self, html: str) -> str | None:
         """Извлекает основной текст статьи через LLM (если настроен)."""
@@ -627,6 +751,24 @@ def _plain_text(html: str) -> str:
         return soup.get_text(' ', strip=True)
     except Exception:
         return ''
+
+
+def _looks_truncated(text: str) -> bool:
+    """Возвращает True, если извлечённый текст, вероятно, обрезан.
+
+    Длинный текст (больше ``MIN_FULL_ARTICLE_TEXT_LENGTH``), заканчивающийся
+    без финального знака препинания, или текст с маркерами обрыва
+    (``[...]``, ``…``) считается неполным. Такой результат нуждается в
+    докачке хвоста через ``_extract_missing_tail``.
+    """
+    if not text:
+        return False
+    stripped = text.rstrip()
+    if any(marker in stripped[-8:] for marker in ('...', '…', '[...]')):
+        return True
+    if len(stripped) < MIN_FULL_ARTICLE_TEXT_LENGTH:
+        return False
+    return stripped[-1:] not in ('.', '!', '?')
 
 
 def _pagination_url(base_url: str, page: int) -> str:
@@ -661,14 +803,18 @@ def _page_items(
         for raw in _extract_by_selectors(html, selectors)[:DEFAULT_MAX_NEWS]:
             url_rel = raw.get('url', '')
             title = raw.get('title', '')
-            if _is_noise_url(url_rel) or not title:
+            if (
+                _is_noise_url(url_rel)
+                or _reject_non_http_scheme(url_rel)
+                or not title
+            ):
                 continue
             pairs.append((title, url_rel))
     else:
         collector = _LinkCollector()
         collector.feed(html)
         for title, href in collector.links[:DEFAULT_MAX_NEWS]:
-            if _is_noise_url(href):
+            if _is_noise_url(href) or _reject_non_http_scheme(href):
                 continue
             pairs.append((title, href))
 
@@ -777,7 +923,10 @@ def _parse_items(
                 base_url=base_url,
             )
             for raw in _extract_by_selectors(html, selectors)[:DEFAULT_MAX_NEWS]
-            if not _is_noise_url(raw.get('url'))
+            if (
+                not _is_noise_url(raw.get('url'))
+                and not _reject_non_http_scheme(raw.get('url'))
+            )
         ]
 
     collector = _LinkCollector()
@@ -793,5 +942,5 @@ def _parse_items(
             base_url=base_url,
         )
         for title, href in collector.links[:DEFAULT_MAX_NEWS]
-        if not _is_noise_url(href)
+        if not _is_noise_url(href) and not _reject_non_http_scheme(href)
     ]

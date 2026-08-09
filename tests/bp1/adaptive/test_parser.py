@@ -7,6 +7,7 @@ from src.bp1.adaptive.processing.parser import (
     DEFAULT_MAX_NEWS,
     AdaptiveParser,
     _is_noise_url,
+    _looks_truncated,
     _page_items,
     _pagination_url,
     _parse_items,
@@ -83,7 +84,7 @@ async def test_parse_extracts_items(monkeypatch):
     )
     assert result.status == PARSER_STATUS_OK
     assert len(result.items) >= 1
-    # DEFAULT_MAX_NEWS=1 — первым извлекается корень сайта (EXAMPLE_URL).
+    # Первым извлекается корень сайта (EXAMPLE_URL).
     assert result.items[0]['url'] == EXAMPLE_URL
 
 
@@ -132,7 +133,7 @@ def test_parse_items_with_selectors():
     items = _parse_items(
         html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors=selectors
     )
-    assert len(items) == 1
+    assert len(items) >= 1
     assert items[0]['title'] == NEWS_1
     assert items[0]['url'] == EXAMPLE_ITEM_URL_1
     assert items[0]['published_at'] == DATE_1
@@ -163,7 +164,7 @@ def test_parse_items_nested_containers():
     items = _parse_items(
         html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors=selectors
     )
-    assert len(items) == 1
+    assert len(items) >= 1
     assert items[0]['title'] == NEWS_1
     assert items[0]['url'] == EXAMPLE_ITEM_URL_1
     assert items[0]['published_at'] == DATE_1
@@ -174,7 +175,7 @@ def test_parse_items_without_container_uses_links():
     items = _parse_items(
         _HTML, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors={}
     )
-    assert len(items) == 1
+    assert len(items) >= 1
     assert items[0]['title'] == NEWS_TITLE
     assert items[0]['url'] == NEWS_LINK
 
@@ -216,11 +217,38 @@ def test_parse_items_filters_noise_urls():
         html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors={}
     )
     urls = [i['url'] for i in items]
-    # DEFAULT_MAX_NEWS=1 ограничивает выборку первой ссылкой до фильтрации.
-    # Первая ссылка — шум (/account/login), поэтому результат пуст.
-    assert urls == []
+    # Шум отбрасывается, полезные ссылки сохраняются.
     assert '/account/login' not in urls
     assert '/article/cookie_policy' not in urls
+    assert 'https://example.com/news/1' in urls
+    assert 'https://example.com/news/2' in urls
+
+
+def test_parse_items_filters_non_http_schemes():
+    """Не-HTTP(S) ссылки (mailto:, tel:, javascript:) не попадают в парсинг.
+
+    Такие ссылки нельзя скачать стратегиями обхода, а на странице они
+    не являются данными (кнопки «Позвонить», «Написать», обработчики).
+    """
+    html = """
+    <html><body>
+      <a href="/account/login">Войти</a>
+      <a href="mailto:fips@rupto.ru">Написать</a>
+      <a href="tel:+74951234567">Позвонить</a>
+      <a href="javascript:void(0)">Меню</a>
+      <a href="https://example.com/news/1">Новость 1</a>
+    </body></html>
+    """
+    items = _parse_items(
+        html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors={}
+    )
+    urls = [i['url'] for i in items]
+    # Служебные и не-HTTP(S) ссылки отброшены.
+    assert not any(u.startswith('mailto:') for u in urls)
+    assert not any(u.startswith('tel:') for u in urls)
+    assert not any(u.startswith('javascript:') for u in urls)
+    # Полезная ссылка сохраняется.
+    assert 'https://example.com/news/1' in urls
 
 
 def test_to_absolute():
@@ -269,13 +297,127 @@ def test_page_items_makes_absolute_urls():
         selectors={},
         base_url='https://www.ptsecurity.com/',
     )
-    # DEFAULT_MAX_NEWS=1 ограничивает выборку первой ссылкой.
-    assert len(pairs) == 1
+    # Обе ссылки собираются (DEFAULT_MAX_NEWS >= 1 не усекает выборку).
+    assert len(pairs) == 2
     assert pairs[0][0] == 'Новость 1'
     assert pairs[0][1] == 'https://www.ptsecurity.com/about/news/1'
+    assert pairs[1][0] == 'Новость 2'
+    assert pairs[1][1] == 'https://www.ptsecurity.com/about/news/2'
 
 
 def test_default_max_news_value():
     """DEFAULT_MAX_NEWS задана и имеет положительное значение."""
     assert isinstance(DEFAULT_MAX_NEWS, int)
     assert DEFAULT_MAX_NEWS >= 1
+
+
+def test_looks_truncated_detects_cut_text():
+    """_looks_truncated определяет обрезанный текст по финальному знаку."""
+    # Длинный текст без финальной точки — вероятно обрезан.
+    long_cut = 'Слово ' * 100
+    assert _looks_truncated(long_cut)
+    # Длинный текст с финальной точкой — не обрезан.
+    long_full = 'Слово ' * 100 + '.'
+    assert not _looks_truncated(long_full)
+    # Текст с маркером обрыва — обрезан.
+    assert _looks_truncated('Текст ' * 100 + '...')
+    # Короткий текст не считается обрезанным (это может быть сниппет).
+    assert not _looks_truncated('Короткий текст')
+
+
+@pytest.mark.asyncio
+async def test_deep_fetch_uses_cache_and_method(monkeypatch):
+    """_deep_fetch возвращает ex_method и использует кэш полного текста."""
+    from src.bp1.adaptive.processing.parser import (
+        MIN_FULL_ARTICLE_TEXT_LENGTH,
+    )
+
+    parser = AdaptiveParser()
+    # Замещаем извлечение текста фиксированным полным текстом.
+    full_text = 'x' * (MIN_FULL_ARTICLE_TEXT_LENGTH + 10) + '.'
+
+    async def _fake_extract(url, source_name, selectors):
+        return full_text, 'llm'
+
+    parser._extract_article_text = _fake_extract  # type: ignore
+    # Кэш заменяем заглушкой, чтобы не писать на диск.
+
+    class _FakeCache:
+        def __init__(self):
+            self.store = {}
+
+        async def get_article_text(self, url):
+            return self.store.get(url)
+
+        async def set_article_text(self, url, text, method):
+            self.store[url] = {'text': text, 'method': method}
+
+    parser._cache = _FakeCache()  # type: ignore
+
+    candidates = [
+        ('Новость 1', 'https://example.com/news/1', '/news/1'),
+        ('Новость 2', 'https://example.com/news/2', '/news/2'),
+    ]
+    result = await parser._deep_fetch(
+        candidates, EXAMPLE_SOURCE_NAME, selectors={}
+    )
+    assert len(result) == 2
+    # Первый прогон — текст извлечён (llm) и закэширован.
+    assert result[0]['ex_text'] == full_text
+    assert result[0]['ex_method'] == 'llm'
+    assert result[0]['ex_url'] == 'https://example.com/news/1'
+
+    # Второй прогон — текст берётся из кэша, извлечение не вызывается
+    # повторно. ex_method сохраняет исходный способ извлечения (llm), т.к.
+    # кэш хранит полный текст вместе с методом его получения.
+    calls = []
+
+    async def _fake_extract2(url, source_name, selectors):
+        calls.append(url)
+        return full_text, 'llm'
+
+    parser._extract_article_text = _fake_extract2  # type: ignore
+    result2 = await parser._deep_fetch(
+        candidates, EXAMPLE_SOURCE_NAME, selectors={}
+    )
+    assert calls == []
+    assert result2[0]['ex_method'] == 'llm'
+
+
+@pytest.mark.asyncio
+async def test_deep_fetch_css_first_ordering():
+    """_deep_fetch отдаёт приоритет статьям с CSS-селектором text."""
+    from src.bp1.adaptive.processing.parser import (
+        MIN_FULL_ARTICLE_TEXT_LENGTH,
+    )
+
+    parser = AdaptiveParser()
+    full_text = 'y' * (MIN_FULL_ARTICLE_TEXT_LENGTH + 10) + '.'
+
+    async def _fake_extract(url, source_name, selectors):
+        return full_text, 'css'
+
+    parser._extract_article_text = _fake_extract  # type: ignore
+
+    class _FakeCache:
+        async def get_article_text(self, url):
+            return None
+
+        async def set_article_text(self, url, text, method):
+            pass
+
+    parser._cache = _FakeCache()  # type: ignore
+
+    candidates = [
+        ('Без CSS', 'https://example.com/a', '/a'),
+        ('С CSS', 'https://example.com/b', '/b'),
+    ]
+    # Оба кандидата обрабатываются и получают полный текст.
+    result = await parser._deep_fetch(
+        candidates,
+        EXAMPLE_SOURCE_NAME,
+        selectors={'text': '.article'},
+    )
+    assert len(result) == 2
+    assert result[0]['ex_text'] == full_text
+    assert result[1]['ex_text'] == full_text

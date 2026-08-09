@@ -313,6 +313,11 @@ class LLMClient(_BaseLLMClient):
         настроен или запрос не удался — возвращает ``None`` (передаёт
         управление следующему способу извлечения).
 
+        Длинные статьи (больше ``_max_chunk_size``) обрабатываются по
+        частям через ``StructuredChunker``: каждая часть извлекается
+        отдельным запросом, результаты склеиваются. Это не теряет
+        окончание текста (раньше обрезалось ``content[:max_chunk_size]``).
+
         Args:
             content: Очищенный HTML статьи (см. ``HtmlCleaner.clean``).
 
@@ -322,23 +327,61 @@ class LLMClient(_BaseLLMClient):
         if not _has_llm_config():
             return None
         try:
-            client = self._get_client()
-            prompt = (
-                'Извлеки основной текст новостной статьи из приведённого '
-                'HTML. Исключи меню, навигацию, рекламу, футер и «похожие '
-                'новости». Верни ТОЛЬКО текст статьи без пояснений.\n\n'
-                f'HTML:\n{content[: self._max_chunk_size]}'
-            )
-            response = await client.chat.completions.create(
-                model=self._model,
-                messages=[{'role': 'user', 'content': prompt}],
-                temperature=0.0,
-            )
-            text = response.choices[0].message.content
+            if len(content) <= self._max_chunk_size:
+                text = await self._llm_extract_single(content)
+            else:
+                text = await self._llm_extract_chunked(content)
             return (text or '').strip() or None
         except Exception as e:
             self._logger.warning('Ошибка LLM-извлечения статьи: %s', e)
             return None
+
+    async def _llm_extract_single(self, content: str) -> str | None:
+        """Один LLM-запрос: извлечь основной текст из фрагмента HTML."""
+        client = self._get_client()
+        prompt = (
+            'Извлеки основной текст новостной статьи из приведённого '
+            'HTML. Исключи меню, навигацию, рекламу, футер и «похожие '
+            'новости». Верни ТОЛЬКО текст статьи без пояснений.\n\n'
+            f'HTML:\n{content}'
+        )
+        response = await client.chat.completions.create(
+            model=self._model,
+            messages=[{'role': 'user', 'content': prompt}],
+            temperature=0.0,
+        )
+        text = response.choices[0].message.content
+        return (text or '').strip() or None
+
+    async def _llm_extract_chunked(self, content: str) -> str | None:
+        """Чанкированное извлечение текста для длинных статей.
+
+        Разбивает очищенный HTML на части ``StructuredChunker`` (до
+        ``_max_chunks`` штук), извлекает текст из каждой части параллельно
+        (семафор ``_parallel_workers``) и склеивает результаты.
+        """
+        cleaned: dict[str, Any] = {'content': content, 'blocks': []}
+        chunks = self._chunker.chunk(cleaned)[: self._max_chunks]
+        if not chunks:
+            return None
+
+        semaphore = asyncio.Semaphore(self._parallel_workers)
+
+        async def _limited(chunk: Chunk) -> str | None:
+            async with semaphore:
+                return await self._llm_extract_single(chunk.content)
+
+        results = await asyncio.gather(
+            *(_limited(c) for c in chunks), return_exceptions=True
+        )
+        parts: list[str] = []
+        for result in results:
+            if isinstance(result, Exception):
+                self._logger.warning('Ошибка LLM-извлечения чанка: %s', result)
+                continue
+            if isinstance(result, str) and result.strip():
+                parts.append(result)
+        return '\n\n'.join(parts) or None
 
     def __init__(
         self,

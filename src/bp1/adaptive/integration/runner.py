@@ -28,7 +28,7 @@ from ..core.quality import DataQualityGate
 from ..schemas import PipelineReport, PipelineStage, UnifiedConfig
 from ..strategies.classifier import SourceClassifier
 from .bridge import AdaptiveBridgeParser
-from .sources import build_search_url, extract_host
+from .sources import SearchParamResolver, build_search_url, extract_host
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,7 @@ class AdaptiveRunner:
         self._quality_gate = DataQualityGate()
         self._cache = UnifiedCache()
         self._classifier = SourceClassifier()
+        self._search_param_resolver = SearchParamResolver()
         self._logger = logging.getLogger(__name__)
 
     def _bind_redis(self, redis_client: Any) -> None:
@@ -214,10 +215,57 @@ class AdaptiveRunner:
             detail={'strategy': classification.recommended_strategy},
         )
 
-        # 3. Формируем URL и параметры.
-        search_param = competitor_inn or trigger or competitor
+        # 3. Определяем поисковый параметр с учётом типа источника.
+        #
+        #    Source-aware логика (SearchParamResolver): на сайтах госорганов
+        #    (SourceType.REGISTRY / SiteType.GOVERNMENT / известные госдомены)
+        #    поиск даёт положительный ответ по ИНН, на всех остальных — по
+        #    названию конкурента (competitor). Универсальный приоритет
+        #    ``ИНН -> trigger -> название`` не работает: многие сайты не
+        #    индексируют ИНН (напр. hh.ru возвращает 404 на поиск по ИНН).
+        resolver = self._search_param_resolver
+        search_param = resolver.resolve(
+            source_name,
+            competitor_inn=competitor_inn,
+            competitor=competitor,
+            trigger=trigger,
+            classification=classification,
+        )
         url = build_search_url(source_name, search_param)
         source_request_url = url
+
+        # 3.0. Пропуск гос. источника без ИНН.
+        #
+        #    Если источнику нужен поиск по ИНН, а у конкурента ИНН нет,
+        #    поиск не имеет смысла: госсайт не проиндексировал название
+        #    компании, поэтому запрос по названию вернёт пустой/мусорный
+        #    результат. Фиксируем error "not INN" вместо бесполезной работы.
+        if resolver.missing_inn(
+            source_name,
+            competitor_inn=competitor_inn,
+            trigger=trigger,
+            classification=classification,
+        ):
+            self._logger.info(
+                'Пропуск задачи %s: источник %s требует ИНН, '
+                'а у конкурента %s его нет (not INN)',
+                task_id,
+                source_name,
+                competitor,
+            )
+            service = RawDataService(session, redis_client)
+            raw_item_id = await service.persist_error(
+                search_task_id=task_id,
+                error_message='not INN',
+                source_request_url=source_request_url,
+            )
+            return {
+                'status': 'error',
+                'search_task_id': task_id,
+                'raw_item_id': raw_item_id,
+                'error': 'not INN',
+                'source': source_name,
+            }
 
         # 3.1. Circuit breaker: если источник временно заблокирован в Redis
         #     (все стратегии падали недавно), пропускаем задачу, не тратя

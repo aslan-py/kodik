@@ -83,6 +83,44 @@ class AdaptiveBridgeParser(BaseParser):
             for item in result.items
         ]
 
+        # Продвижение новостей (extra.news) в отдельные ParsedItem:
+        # каждая статья из списка новостей поисковой страницы становится
+        # самостоятельным событием с полным текстом (ex_text) в text.
+        # Это позволяет BP-2 обрабатывать каждую новость отдельно.
+        #
+        # Оригинальные items и extra.news сохраняются (обратная совместимость
+        # с потребителями, читающими extra['news']).
+        promoted: list[ParsedItem] = []
+        for base in items:
+            news = base.extra.get('news') or []
+            if news:
+                base.extra['search_page'] = True
+            for entry in news:
+                if not isinstance(entry, dict):
+                    continue
+                ex_url = entry.get('ex_url', '')
+                ex_title = entry.get('ex_title', '') or base.title
+                ex_text = entry.get('ex_text')
+                if not ex_url:
+                    continue
+                promoted.append(
+                    ParsedItem(
+                        url=ex_url,
+                        title=ex_title,
+                        text=ex_text,
+                        published_at=None,
+                        region=None,
+                        media_name=base.media_name,
+                        extra={
+                            'news_source': 'adaptive_news',
+                            # Parent (search) page.
+                            'search_page_url': base.url,
+                        },
+                    )
+                )
+
+        items = items + promoted
+
         meta: dict[str, Any] = {
             'search_task_id': kwargs.get('search_task_id'),
             # Источник = реальный источник задачи, а не 'adaptive'.

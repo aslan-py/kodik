@@ -259,6 +259,50 @@ async def test_llm_analyze_structure_chunked(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_llm_extract_article_text_single(monkeypatch):
+    """extract_article_text извлекает текст короткой статьи одним запросом."""
+    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    _install_fake_openai(
+        monkeypatch,
+        'Полный текст короткой статьи про конкурента.',
+    )
+
+    client = LLMClient()
+    text = await client.extract_article_text('<p>Короткая статья</p>')
+
+    assert text == 'Полный текст короткой статьи про конкурента.'
+    # Один запрос (без чанкирования).
+    last_kwargs = client._client.chat.completions.last_kwargs
+    assert last_kwargs['model'] == _default_model()
+    assert 'HTML' in last_kwargs['messages'][0]['content']
+
+
+@pytest.mark.asyncio
+async def test_llm_extract_article_text_chunked(monkeypatch):
+    """Длинная статья чанкируется: текст собирается из нескольких частей.
+
+    Каждый чанк обрабатывается отдельным запросом, результаты склеиваются.
+    """
+    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+
+    # Длинный контент, не помещающийся в один чанк (LLM_CHUNK_MAX_SIZE).
+    paragraph = '<p>Один и тот же абзац текста статьи.</p>'
+    big_content = paragraph * (LLM_ITEM_REPEAT + 2)
+    _install_fake_openai(monkeypatch, 'Текст из чанка N')
+
+    client = LLMClient(
+        max_chunk_size=LLM_CHUNK_MAX_SIZE, overlap_size=LLM_CHUNK_OVERLAP
+    )
+    text = await client.extract_article_text(big_content)
+
+    # Склейка нескольких чанков → результат содержит повторяющиеся куски.
+    assert text and 'Текст из чанка' in text
+    # Было несколько вызовов OpenAI (чанкирование сработало).
+    calls = client._client.chat.completions._content
+    assert calls == 'Текст из чанка N'
+
+
+@pytest.mark.asyncio
 async def test_llm_analyze_structure_heuristic_selectors(monkeypatch):
     """Эвристический fallback возвращает селектор url для ссылок."""
     # Очищаем ключи, чтобы гарантировать fallback (не зависеть от .env).

@@ -23,6 +23,9 @@ ADAPTER_TTL_SECONDS = 86400 * 7
 # TTL классификации источника по умолчанию — 7 дней (в секундах).
 CLASSIFICATION_TTL_SECONDS = 86400 * 7
 
+# TTL кэша полного текста статьи по умолчанию — 7 дней (в секундах).
+ARTICLE_TEXT_TTL_SECONDS = 86400 * 7
+
 
 def _canonical_source_name(source_name: str) -> str:
     """Приводит имя источника к каноническому hostname в нижнем регистре.
@@ -208,6 +211,48 @@ class UnifiedCache:
         """Сохранить HTML-снапшот."""
         path = self._snapshot_path(url)
         path.write_text(html, encoding='utf-8')
+
+    # ========================================================================
+    # Полный текст статьи по URL (диск)
+    #
+    # Кэширует извлечённый полный текст новости (ex_text) по абсолютному URL
+    # статьи, чтобы повторные запуски глубокого фетча не тратили LLM-токены и
+    # не скачивали страницу заново. Хранится на диске рядом со снапшотами.
+    # ========================================================================
+
+    def _article_text_path(self, url: str) -> Path:
+        digest = hashlib.md5(url.encode('utf-8')).hexdigest()
+        return self._snapshots_dir / f'article_{digest}.json'
+
+    async def get_article_text(self, url: str) -> dict | None:
+        """Получить кэшированный полный текст статьи (``{"text", "method"}``).
+
+        Возвращает ``None``, если кэш пуст или файл повреждён.
+        """
+        path = self._article_text_path(url)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding='utf-8'))
+        except Exception:
+            return None
+
+    async def set_article_text(
+        self,
+        url: str,
+        text: str,
+        method: str,
+        ttl: int = ARTICLE_TEXT_TTL_SECONDS,
+    ) -> None:
+        """Сохранить полный текст статьи в кэш по ``url``."""
+        path = self._article_text_path(url)
+        path.write_text(
+            json.dumps(
+                {'text': text, 'method': method},
+                ensure_ascii=False,
+            ),
+            encoding='utf-8',
+        )
 
     # ========================================================================
     # Circuit breaker источников (Redis)

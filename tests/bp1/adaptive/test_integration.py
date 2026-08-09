@@ -83,9 +83,51 @@ async def test_bridge_returns_parsed_response(monkeypatch):
     assert response.meta['source'] == EXAMPLE_SOURCE_NAME
     assert response.meta['search_task_id'] == SEARCH_TASK_ID
     assert len(response.items) >= 1
-    # DEFAULT_MAX_NEWS=1 — собирается первый элемент (сайт-заглушка),
-    # реальный заголовок новости уходит в extra['news'].
+    # Базовый элемент — поисковая страница; её real-новости уходят в
+    # отдельные ParsedItem (см. test_bridge_promotes_news), а также
+    # остаются в extra['news'] для обратной совместимости.
     assert response.items[0].title == EXAMPLE_SOURCE_NAME
+
+
+@pytest.mark.asyncio
+async def test_bridge_promotes_news(monkeypatch):
+    """Каждая новость из extra.news становится отдельным ParsedItem.
+
+    Пункт 12: BP-2 должен обрабатывать каждую статью как самостоятельное
+    событие с полным текстом (ex_text в text), а не только листинг.
+    """
+    monkeypatch.delenv('LLM_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    parser = AdaptiveBridgeParser(source_name=EXAMPLE_SOURCE_NAME)
+    parser._adaptive_parser._orchestrator = _FakeOrchestrator()
+
+    response = await parser.parse(
+        EXAMPLE_URL,
+        search_task_id=SEARCH_TASK_ID,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+
+    # Базовый элемент (поисковая страница) помечен и сохраняет extra.news.
+    base = response.items[0]
+    assert base.extra.get('search_page') is True
+    assert isinstance(base.extra.get('news'), list)
+
+    # Новости продвинуты в отдельные ParsedItem.
+    news_items = [
+        i
+        for i in response.items
+        if i.extra.get('news_source') == 'adaptive_news'
+    ]
+    assert news_items, 'новости должны быть продвинуты в ParsedItem'
+
+    news_entry = base.extra['news'][0]
+    promoted = news_items[0]
+    assert promoted.url == news_entry['ex_url']
+    assert promoted.title == news_entry['ex_title']
+    assert promoted.text == news_entry['ex_text']
+    assert promoted.media_name == EXAMPLE_SOURCE_NAME
+    assert promoted.extra.get('search_page_url') == base.url
 
 
 def test_bridge_metadata():
@@ -119,6 +161,19 @@ async def test_cache_profile_roundtrip(tmp_path):
     await cache.set_profile(EXAMPLE_SOURCE_NAME, {'cookies': {'a': 'b'}})
     profile = await cache.get_profile(EXAMPLE_SOURCE_NAME)
     assert profile == {'cookies': {'a': 'b'}}
+
+
+@pytest.mark.asyncio
+async def test_article_text_cache_roundtrip(tmp_path):
+    """Кэш полного текста статьи сохраняет и возвращает текст и метод."""
+    cache = UnifiedCache(cache_dir=str(tmp_path))
+    url = 'https://example.com/about/news/1'
+    await cache.set_article_text(url, 'Полный текст новости.', 'llm')
+    cached = await cache.get_article_text(url)
+    assert cached == {'text': 'Полный текст новости.', 'method': 'llm'}
+
+    # Несуществующий URL — None.
+    assert await cache.get_article_text('https://example.com/other') is None
 
 
 @pytest.mark.asyncio

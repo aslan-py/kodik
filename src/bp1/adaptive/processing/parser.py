@@ -43,7 +43,7 @@ from .llm import AIAgent, LLMClient
 logger = logging.getLogger(__name__)
 
 # Максимальное количество новостей, собираемых за один проход пагинации.
-DEFAULT_MAX_NEWS = 1
+DEFAULT_MAX_NEWS = 10
 
 # Минимальная длина текста, при которой результат извлечения считается
 # успешным (для каскада CSS → LLM → сниппет).

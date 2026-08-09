@@ -8,6 +8,7 @@ BP-1 — первый слой ETL-пайплайна системы конку�
 - **kad.arbitr.ru** — реализован RPA-парсер через Playwright (поиск дел по ИНН)
 - **Адаптивный движок (adaptive)** — полностью реализован: автоматическая классификация источников, иерархия стратегий обхода с деградацией (FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL), интеллектуальное извлечение через LLM, кэширование адаптеров, MCP-сервер и CLI
 - **Остальные источники** — обрабатываются универсальным `AdaptiveBridgeParser` (авто-детекция структуры сайта без ручной настройки)
+- **Адаптивный поиск (Adaptive Search)** — полностью реализован: source-aware выбор поискового параметра (ИНН для гос. источников, название конкурента для остальных), per-source шаблоны URL поиска (например, `hh.ru → /search/vacancy?text=`), пропуск задач по `is_active`, circuit breaker (авто-блокировка источника при сбоях)
 - **Raw Storage** — модуль хранения сырых данных (Bronze Layer) реализован и протестирован
 - **CI/CD** — 100% тестов проходят (pytest), линтер (ruff) чист
 
@@ -141,10 +142,11 @@ python -m src.bp1.cli clear-redis
 ### Адаптивный CLI (BP-1 Adaptive)
 
 ```bash
-# Запуск всех задач из БД
+# Запуск всех задач из БД (учитывает is_active SearchTask/Source/Competitor)
 python -m src.bp1.adaptive.cli run
 
-# Сбор по конкретному источнику + конкуренту (создаёт Source/Competitor/SearchTask)
+# Сбор по конкретному источнику + конкуренту (создаёт Source/Competitor/SearchTask
+# и запускает именно эту задачу — адаптивный поиск по паре)
 python -m src.bp1.adaptive.cli run --source lenta.ru --competitor "ООО АРХИТЕХ ИИ"
 
 # Гибридный режим с fallback
@@ -343,6 +345,119 @@ response = await parser.parse(
 - **Per-source шаблоны URL** — `SearchUrlTemplateRegistry` задаёт специфичные пути поиска (например, `hh.ru → /search/vacancy?text=`), с fallback на универсальный `/search?q=`.
 - **MCP-сервер** — [`MCPServer`](src/bp1/adaptive/integration/mcp_server.py:45) позволяет ИИ-агентам управлять сбором (классификация, парсинг, кэш, список стратегий).
 
+### Адаптивный поиск (Adaptive Search)
+
+Адаптивный поиск — это механизм формирования и выполнения поискового запроса
+для каждого источника. Он решает три задачи: **какой параметр** передать в
+поиск, **по какому URL-шаблону** искать, и **выполнять ли поиск вообще**.
+
+#### Как выбирается поисковый параметр
+
+[`SearchParamResolver`](src/bp1/adaptive/integration/sources.py:179) определяет,
+искать по ИНН или по названию конкурента:
+
+- **Гос. источники** (реестры: `fedresurs.ru`, `kad.arbitr.ru`, `zakupki.gov.ru`,
+  `nalog.ru`, `egrul.nalog.ru`, `fips.ru`; типы `SiteType.GOVERNMENT`/`LEGAL`)
+  → поиск по **ИНН**. Приоритет: `competitor_inn` → `trigger` (если это 10/12
+  цифр) → название конкурента.
+- **Все остальные** (новостные, job-board и т.д.) → поиск по **названию
+  конкурента** (`competitor.name`), т.к. на не-госсайтах ИНН не индексируется,
+  а триггер (ключевое слово) не является названием компании. Пример: поиск на
+  `hh.ru` по триггеру «Москва» не находит вакансии ООО «АРХИТЕХ ИИ» — поиск
+  идёт по названию компании.
+
+#### Как формируется URL поиска
+
+[`SearchUrlTemplateRegistry`](src/bp1/adaptive/integration/sources.py:92) выбирает
+per-source шаблон пути с fallback на универсальный `/search?q=`:
+
+```python
+from src.bp1.adaptive.integration.sources import (
+    SearchParamResolver,
+    SearchUrlTemplateRegistry,
+)
+
+# Источник предпочитает ИНН (гос. реестр)?
+resolver = SearchParamResolver()
+param = resolver.resolve(
+    'fedresurs.ru',
+    competitor_inn='9718283930',
+    competitor='ООО Кодик',
+    trigger=None,
+)
+print(param)  # '9718283930'  — ИНН для гос. источника
+
+# На не-гос. источнике поиск идёт по названию конкурента.
+param = resolver.resolve(
+    'hh.ru', competitor_inn=None, competitor='ООО АРХИТЕХ ИИ', trigger='Москва'
+)
+print(param)  # 'ООО АРХИТЕХ ИИ'
+
+# Построение URL с per-source шаблоном (hh.ru → /search/vacancy?text=).
+registry = SearchUrlTemplateRegistry()
+print(registry.build_url('hh.ru', 'ООО АРХИТЕХ ИИ'))
+```
+
+#### Когда поиск пропускается
+
+- **`is_active = False`** — если у `SearchTask`, `Source` или `Competitor`
+  выключен флаг активности, задача пропускается, в JSON фиксируется
+  `error: is_active=False`.
+- **Отсутствие ИНН у гос. источника** — `SearchParamResolver.missing_inn()`
+  определяет, что источнику нужен ИНН, а у конкурента его нет. Поиск не
+  выполняется, в JSON пишется `error: not INN` (избегает бесполезных запросов).
+- **Circuit breaker** — если источник временно заблокирован в Redis (все
+  стратегии падали недавно), задача пропускается со статусом
+  `source_unavailable`. После `source_disable_threshold` подряд отказов источник
+  автоматически отключается в БД (`is_active=False`).
+
+#### Использование в CLI
+
+```bash
+# Сбор по конкретному источнику + конкуренту: автоматически создаёт
+# Source/Competitor/SearchTask и запускает адаптивный поиск по этой паре.
+python -m src.bp1.adaptive.cli run --source hh.ru --competitor "ООО АРХИТЕХ ИИ"
+
+# Гибридный режим с fallback
+python -m src.bp1.adaptive.cli run --source lenta.ru --mode hybrid --fallback
+
+# Все активные задачи (учитывает is_active всех трёх уровней)
+python -m src.bp1.adaptive.cli run
+
+# Регистрация нового источника (классификация + БД + Redis) перед поиском
+python -m src.bp1.adaptive.cli add-source --url "https://hh.ru"
+```
+
+#### Использование в коде
+
+```python
+import asyncio
+from core.database import AsyncSessionLocal
+from core.redis_client import get_redis
+from src.bp1.adaptive import AdaptiveRunner
+
+async def main():
+    runner = AdaptiveRunner(mode='adaptive', headless=True, timeout=60000)
+    redis = await get_redis()
+    try:
+        async with AsyncSessionLocal() as session:
+            # 1) Все активные задачи из БД (с учётом is_active).
+            results = await runner.run_all(session, redis_client=redis)
+
+            # 2) По конкретной паре источник + конкурент (создаёт задачу).
+            res = await runner.run_source_competitor(
+                source='hh.ru',
+                competitor='ООО АРХИТЕХ ИИ',
+                session=session,
+                redis_client=redis,
+            )
+            print(res['status'], res.get('strategy'))
+    finally:
+        await redis.aclose()
+
+asyncio.run(main())
+```
+
 ### Адаптивный парсинг из кода
 
 ```python
@@ -483,6 +598,8 @@ BP-1 использует двухуровневую систему дедупл
 | `DataQualityGate` | 5 уровней контроля качества |
 | `HITLManager` / `ProfileManager` | Решение CAPTCHA человеком + профили браузера |
 | `SourceRegistrationService` | Регистрация источников по ссылке |
+| `SearchParamResolver` | Source-aware выбор поискового параметра (ИНН / название) |
+| `SearchUrlTemplateRegistry` | Per-source шаблоны URL поиска (fallback `/search?q=`) |
 | `MCPServer` / `run_mcp_server` | MCP-интерфейс для ИИ-агентов |
 
 ### `raw_storage/`

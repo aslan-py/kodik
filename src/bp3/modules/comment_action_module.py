@@ -10,11 +10,21 @@ PROMPT_PATH = (
 
 
 class CommentActionModule(LLMModule):
+    """LLM-шаг: комментарий и рекомендация по действию для каждой новости.
+
+    Использует уже собранные категорию/приоритет/срок/отдел/тональность как
+    контекст промпта.
+    """
+
     def __init__(self, llm):
+        """Обернуть LLM в structured output по схеме `CommentActionResponse`."""
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(CommentActionResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Собрать контекст по каждой новости и одним вызовом LLM получить
+        комментарий+действие на всю пачку; при сбое LLM — заглушка вместо
+        падения пайплайна."""
         categorized_news = ctx.category_news or []
         if not categorized_news:
             ctx.comments = []

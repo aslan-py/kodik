@@ -9,11 +9,22 @@ PROMPT_PATH = (
 
 
 class GenerationTaskModule(LLMModule):
+    """LLM-шаг: список из 1-3 конкретных задач по рекомендованному действию.
+
+    Заполняет `categorized_event.task` (см. capability
+    `bp3/categorized-event-tasks`).
+    """
+
     def __init__(self, llm):
+        """Обернуть LLM.
+
+        в structured output по схеме `GenerationTaskResponse`."""
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(GenerationTaskResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Для новостей без действия (`action=None`) — `tasks=None` без
+        обращения к LLM; для остальных — один вызов LLM на всю пачку."""
         actions = ctx.actions or []
         if not actions:
             ctx.tasks = []

@@ -156,6 +156,17 @@ class ShowcaseEvent(Base, Mixin):
             '«проверено, но не значимо»'
         ),
     )
+    action_items_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment=(
+            'Когда BP-6 перенёс задачи из categorized_event.task в '
+            'action_item — НЕЗАВИСИМО от результата (даже если задач не '
+            'было). Отбор BP-6: priority IN (П1, П2) AND '
+            'action_items_generated_at IS NULL — БЕЗ реакции на updated_at '
+            '(в отличие от alerted_at): повторная переразметка события не '
+            'должна задвоить/переписать уже заведённые вручную action_item'
+        ),
+    )
 
     # Связи нужны админке (FastAdmin показывает FK только через relationship).
     # Ленивые по умолчанию: сериализация читает *_id, объект не трогает.

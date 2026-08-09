@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     # ===== Сброс пароля =====
     password_reset_code_expire_minutes: int = 10
 
+    # ===== BP-3 (LLM-категоризация через OpenRouter, поиск источников Tavily)
+    openrouter_api_key: str
+    tavily_api_key: str
+    bp3_model: str = 'openai/gpt-4o'
+
     # ===== AI-ассистент (BP-6, генерация action_item) =====
     deepseek_token: str
     deepseek_base_url: str = 'https://api.deepseek.com'

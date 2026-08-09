@@ -9,25 +9,16 @@ AdaptiveRunner — единая точка входа для адаптивно�
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import shutil
 import time
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config import settings
-from src.bp1.tasks import (
-    calculate_content_hash,
-    get_search_task_config,
-    save_raw_item,
-    update_timestamp,
-)
+from src.bp1.storage import RawDataService
+from src.bp1.tasks import get_search_task_config
 
 from ..core.cache import UnifiedCache
 from ..core.quality import DataQualityGate
@@ -37,47 +28,6 @@ from .bridge import AdaptiveBridgeParser
 from .sources import build_search_url, extract_host
 
 logger = logging.getLogger(__name__)
-
-
-def _copy_file_safely(src: str, dst: str) -> str | None:
-    """
-    Копирует HTML-файл из временного расположения в целевой каталог.
-
-    На Windows источник может быть занят другим процессом (напр., ещё не
-    освобождён дескриптор браузера/краулера), из-за чего ``shutil.copy2``
-    бросает ``PermissionError`` и роняет весь пайплайн. Здесь копирование
-    обёрнуто в защиту: при ошибке пробуем прочитать содержимое и записать
-    вручную; если и это не удаётся — логируем и возвращаем ``None``, чтобы
-    не прерывать обработку задачи.
-
-    Возвращает путь назначения при успехе, иначе ``None``.
-    """
-    try:
-        shutil.copy2(src, dst)
-        return dst
-    except (PermissionError, OSError) as exc:
-        logger.warning(
-            'Не удалось скопировать файл %s -> %s напрямую (%s), '
-            'пробуем через чтение содержимого',
-            src,
-            dst,
-            exc,
-        )
-        try:
-            dst_dir = os.path.dirname(dst)
-            if dst_dir:
-                os.makedirs(dst_dir, exist_ok=True)
-            with open(src, 'rb') as f_in, open(dst, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-            return dst
-        except (PermissionError, OSError) as inner:
-            logger.error(
-                'Не удалось сохранить HTML %s -> %s: %s',
-                src,
-                dst,
-                inner,
-            )
-            return None
 
 
 class AdaptiveRunner:
@@ -224,6 +174,22 @@ class AdaptiveRunner:
         trigger = config['trigger']
         competitor_inn = config['competitor_inn']
 
+        # Адаптивный парсинг ведётся только по активным source и competitor.
+        # Флаг is_active у SearchTask может быть True, но если сам источник
+        # или конкурент выключены (is_active=False), задачу пропускаем.
+        if not config.get('source_is_active', True):
+            return {
+                'status': 'skipped',
+                'reason': 'source_inactive',
+                'search_task_id': task_id,
+            }
+        if not config.get('competitor_is_active', True):
+            return {
+                'status': 'skipped',
+                'reason': 'competitor_inactive',
+                'search_task_id': task_id,
+            }
+
         # 2. Классифицируем источник (с кэшированием в Redis).
         self._bind_redis(redis_client)
         self._parser.bind_redis(redis_client)
@@ -303,14 +269,11 @@ class AdaptiveRunner:
                 source_name,
                 e,
             )
-            raw_item_id = await save_raw_item(
-                session=session,
+            service = RawDataService(session, redis_client)
+            raw_item_id = await service.persist_error(
                 search_task_id=task_id,
-                data={},
-                content_hash='',
-                status='error',
-                source_request_url=source_request_url,
                 error_message=str(e),
+                source_request_url=source_request_url,
             )
             return {
                 'status': 'error',
@@ -319,68 +282,28 @@ class AdaptiveRunner:
                 'error': str(e),
             }
 
-        # 5. Сериализуем и вычисляем хэш.
+        # 5. Сохраняем результат через общий сервис персистентности
+        #    (хэширование, дедупликация по Redis, HTML/JSON на диск, RawItem).
+        service = RawDataService(session, redis_client)
         data_dict = response.model_dump()
-        for item in data_dict.get('items', []):
-            item.get('extra', {}).pop('file_path', None)
-
-        content_hash = calculate_content_hash(data_dict)
-
-        # 6. Сверяем через Redis.
-        redis_key = str(task_id)
-        old_hash = await redis_client.get(redis_key)
-
-        if old_hash == content_hash:
-            await update_timestamp(session, task_id)
-            return {
-                'status': 'unchanged',
-                'search_task_id': task_id,
-                'hash': content_hash,
-            }
-
-        status = 'new' if old_hash is None else 'changed'
-
-        # 7. Сохраняем HTML + JSON на диск.
-        html_file_path = None
+        html_source_path = None
         if response.items and response.items[0].extra.get('file_path'):
-            parser_file_path = response.items[0].extra['file_path']
-            if parser_file_path and os.path.exists(parser_file_path):
-                html_filename = os.path.basename(parser_file_path)
-                html_file_path = os.path.join(
-                    settings.bp1_html_dir, html_filename
-                )
-                html_file_path = _copy_file_safely(
-                    parser_file_path, html_file_path
-                )
+            html_source_path = response.items[0].extra['file_path']
 
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        raw_filename = f'raw_{task_id}_{ts}.json'
-        raw_file_path = os.path.join(settings.bp1_raw_dir, raw_filename)
-        Path(settings.bp1_raw_dir).mkdir(parents=True, exist_ok=True)
-        with open(raw_file_path, 'w', encoding='utf-8') as f:
-            json.dump(data_dict, f, ensure_ascii=False, indent=2, default=str)
-
-        # 8. Сохраняем в БД.
-        raw_item_id = await save_raw_item(
-            session=session,
+        persisted = await service.persist(
             search_task_id=task_id,
-            data=data_dict,
-            content_hash=content_hash,
-            status=status,
-            html_file_path=html_file_path,
+            response_data=data_dict,
             source_request_url=source_request_url,
+            html_source_path=html_source_path,
         )
 
-        # 9. Обновляем Redis.
-        await redis_client.set(redis_key, content_hash)
-
-        # 10. Финализируем отчёт пайплайна.
+        # 6. Финализируем отчёт пайплайна.
         _add_stage(
             'save',
             detail={
-                'raw_item_id': raw_item_id,
-                'status_type': status,
-                'hash': content_hash,
+                'raw_item_id': persisted.get('raw_item_id'),
+                'status_type': persisted.get('status_type'),
+                'hash': persisted.get('hash'),
             },
         )
         report.stages = stages
@@ -388,17 +311,9 @@ class AdaptiveRunner:
         report.total_duration_ms = int((time.monotonic() - report_start) * 1000)
         report.overall_status = 'ok'
 
-        return {
-            'status': 'saved',
-            'search_task_id': task_id,
-            'raw_item_id': raw_item_id,
-            'hash': content_hash,
-            'status_type': status,
-            'html_file_path': html_file_path,
-            'raw_file_path': raw_file_path,
-            'strategy': classification.recommended_strategy,
-            'pipeline_report': report.model_dump(mode='json'),
-        }
+        persisted['strategy'] = classification.recommended_strategy
+        persisted['pipeline_report'] = report.model_dump(mode='json')
+        return persisted
 
     async def run_all(
         self,
@@ -406,21 +321,55 @@ class AdaptiveRunner:
         redis_client: Any,
         task_ids: list[int] | None = None,
     ) -> list[dict[str, Any]]:
-        """Запустить все активные задачи."""
+        """Запустить все активные задачи.
+
+        Учитываются флаги активности трёх уровней: сама SearchTask, её
+        Source и Competitor. Если любой из них выключен (is_active=False),
+        задача пропускается — адаптивный поиск ведётся только по активным
+        источникам и конкурентам.
+        """
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
 
         from src.bp1.models import SearchTask
 
         if task_ids:
-            stmt = select(SearchTask).where(SearchTask.id.in_(task_ids))
+            stmt = (
+                select(SearchTask)
+                .where(SearchTask.id.in_(task_ids))
+                .options(
+                    selectinload(SearchTask.source),
+                    selectinload(SearchTask.competitor),
+                )
+            )
         else:
-            stmt = select(SearchTask).where(SearchTask.is_active.is_(True))
+            stmt = (
+                select(SearchTask)
+                .where(SearchTask.is_active.is_(True))
+                .options(
+                    selectinload(SearchTask.source),
+                    selectinload(SearchTask.competitor),
+                )
+            )
 
         result = await session.execute(stmt)
         tasks = result.scalars().all()
 
         results: list[dict[str, Any]] = []
         for task in tasks:
+            if not task.source.is_active or not task.competitor.is_active:
+                results.append(
+                    {
+                        'status': 'skipped',
+                        'search_task_id': task.id,
+                        'reason': (
+                            'source_inactive'
+                            if not task.source.is_active
+                            else 'competitor_inactive'
+                        ),
+                    }
+                )
+                continue
             results.append(await self.run_task(task.id, session, redis_client))
         return results
 
@@ -465,6 +414,13 @@ class AdaptiveRunner:
             )
         else:
             src_id = src.id
+            # Адаптивный поиск ведётся только по активным источникам.
+            if not src.is_active:
+                return {
+                    'status': 'skipped',
+                    'reason': 'source_inactive',
+                    'source': source_name,
+                }
 
         # 2. Конкурент: ищем по имени, иначе создаём.
         comp_stmt = select(Competitor).where(Competitor.name == competitor)
@@ -476,6 +432,14 @@ class AdaptiveRunner:
             self._logger.info(
                 'Конкурент %s создан (id=%s)', competitor, comp.id
             )
+        else:
+            # Адаптивный поиск ведётся только по активным конкурентам.
+            if not comp.is_active:
+                return {
+                    'status': 'skipped',
+                    'reason': 'competitor_inactive',
+                    'competitor': competitor,
+                }
 
         # 3. SearchTask: ищем существующую связку без триггера, иначе создаём.
         task_stmt = select(SearchTask).where(

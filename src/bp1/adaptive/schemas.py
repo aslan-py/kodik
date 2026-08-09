@@ -34,6 +34,111 @@ class SourceType(StrEnum):
     UNKNOWN = 'unknown'
 
 
+class SiteType(StrEnum):
+    """Детализированный тип сайта.
+
+    Расширяет ``SourceType`` более узкой классификацией контента сайта
+    (магазин, доска объявлений, агрегатор отзывов и т.д.). Используется
+    совместно с ``SourceType``: ``SourceType`` определяет способ обхода,
+    ``SiteType`` — бизнес-направление.
+    """
+
+    NEWS = 'news'
+    JOB_BOARD = 'job_board'
+    MARKETPLACE = 'marketplace'
+    CATALOG = 'catalog'
+    E_COMMERCE = 'e_commerce'
+    CLASSIFIEDS = 'classifieds'
+    REVIEW_AGGREGATOR = 'review_aggregator'
+    QUESTION_ANSWER = 'question_answer'
+    WIKI = 'wiki'
+    EDUCATION = 'education'
+    FINANCE = 'finance'
+    REAL_ESTATE = 'real_estate'
+    LEGAL = 'legal'
+    MEDIA = 'media'
+    FORUM = 'forum'
+    SOCIAL = 'social'
+    GOVERNMENT = 'government'
+    BLOG = 'blog'
+    DOCUMENTATION = 'documentation'
+    OTHER = 'other'
+
+
+class PageSubType(StrEnum):
+    """Подтип страницы внутри сайта."""
+
+    # Общие
+    HOME = 'home'
+    SEARCH = 'search'
+    LIST = 'list'
+    DETAIL = 'detail'
+    CATEGORY = 'category'
+    PROFILE = 'profile'
+    ARCHIVE = 'archive'
+    CART = 'cart'
+    CHECKOUT = 'checkout'
+    LOGIN = 'login'
+    REGISTER = 'register'
+    ABOUT = 'about'
+    CONTACT = 'contact'
+    OTHER = 'other'
+
+    # Новости
+    NEWS_MAIN = 'news_main'
+    NEWS_CATEGORY = 'news_category'
+    NEWS_ARTICLE = 'news_article'
+    NEWS_ARCHIVE = 'news_archive'
+    NEWS_SEARCH = 'news_search'
+
+    # Вакансии
+    JOB_MAIN = 'job_main'
+    JOB_VACANCY = 'job_vacancy'
+    JOB_SEARCH = 'job_search'
+    JOB_COMPANY = 'job_company'
+    JOB_RESUME = 'job_resume'
+
+    # Маркетплейсы
+    MARKETPLACE_MAIN = 'marketplace_main'
+    MARKETPLACE_CATEGORY = 'marketplace_category'
+    MARKETPLACE_PRODUCT = 'marketplace_product'
+    MARKETPLACE_SEARCH = 'marketplace_search'
+    MARKETPLACE_CART = 'marketplace_cart'
+
+    # Госреестры
+    REGISTRY_MAIN = 'registry_main'
+    REGISTRY_SEARCH = 'registry_search'
+    REGISTRY_RESULT = 'registry_result'
+    REGISTRY_DETAIL = 'registry_detail'
+
+
+class BusinessFeatures(BaseModel):
+    """Бизнес-характеристики сайта."""
+
+    has_payment: bool = False
+    has_delivery: bool = False
+    has_reviews: bool = False
+    has_rating: bool = False
+    has_user_accounts: bool = False
+    has_cart: bool = False
+    has_search: bool = False
+    has_filters: bool = False
+    has_pagination: bool = False
+    has_comments: bool = False
+    has_sharing: bool = False
+
+
+class TechnicalFeatures(BaseModel):
+    """Технические характеристики сайта."""
+
+    frameworks: list[str] = Field(default_factory=list)
+    css_frameworks: list[str] = Field(default_factory=list)
+    has_antibot: bool = False
+    has_captcha: bool = False
+    is_spa: bool = False
+    has_mobile_version: bool = False
+
+
 class SourceClassification(BaseModel):
     """Результат классификации источника."""
 
@@ -44,6 +149,46 @@ class SourceClassification(BaseModel):
     has_captcha: bool = False
     is_spa: bool = False
     recommended_strategy: str = 'FAST'
+
+
+class ExtendedSiteClassification(BaseModel):
+    """Расширенная классификация сайта.
+
+    Дополняет ``SourceClassification`` бизнес- и техническими характеристиками,
+    подтипом страницы и детализированным типом сайта. Используется
+    расширенной классификацией (``SourceClassifier.classify_extended``
+    и ``LLMClient.classify_with_llm``).
+    """
+
+    source_name: str
+    site_type: SiteType = SiteType.OTHER
+    page_subtype: PageSubType = PageSubType.OTHER
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    business_features: BusinessFeatures = Field(
+        default_factory=BusinessFeatures
+    )
+    technical_features: TechnicalFeatures = Field(
+        default_factory=TechnicalFeatures
+    )
+    complexity_score: float = Field(0.0, ge=0.0, le=1.0)
+    recommended_strategy: str = 'FAST'
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def to_source_classification(self) -> SourceClassification:
+        """Конвертирует в базовую ``SourceClassification``.
+
+        Обеспечивает обратную совместимость с кодом, работающим с
+        ``SourceClassification``.
+        """
+        return SourceClassification(
+            source_name=self.source_name,
+            source_type=SourceType.UNKNOWN,
+            complexity_score=self.complexity_score,
+            has_antibot=self.technical_features.has_antibot,
+            has_captcha=self.technical_features.has_captcha,
+            is_spa=self.technical_features.is_spa,
+            recommended_strategy=self.recommended_strategy,
+        )
 
 
 # ============================================================================

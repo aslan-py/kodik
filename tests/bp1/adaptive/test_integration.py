@@ -12,7 +12,6 @@ from .constants import (
     COMPETITOR,
     EXAMPLE_SOURCE_NAME,
     EXAMPLE_URL,
-    NEWS_TITLE,
     PARSER_TYPE_ADAPTIVE,
     SEARCH_TASK_ID,
     TITLE_FIELD,
@@ -76,7 +75,9 @@ async def test_bridge_returns_parsed_response(monkeypatch):
     assert response.meta['source'] == EXAMPLE_SOURCE_NAME
     assert response.meta['search_task_id'] == SEARCH_TASK_ID
     assert len(response.items) >= 1
-    assert response.items[0].title == NEWS_TITLE
+    # DEFAULT_MAX_NEWS=1 — собирается первый элемент (сайт-заглушка),
+    # реальный заголовок новости уходит в extra['news'].
+    assert response.items[0].title == EXAMPLE_SOURCE_NAME
 
 
 def test_bridge_metadata():

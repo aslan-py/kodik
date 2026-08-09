@@ -74,6 +74,63 @@ async def test_all_fail_returns_hitl():
     assert result.strategy == StrategyType.HITL
 
 
+class _TrackingStrategy(BaseStrategy):
+    """Стратегия, которая всегда падает и фиксирует порядок вызова."""
+
+    def __init__(self, strategy_type: StrategyType, order: list):
+        self.strategy_type = strategy_type
+        self._order = order
+
+    async def fetch(self, url: str, **kwargs) -> StrategyResult:
+        self._order.append(self.strategy_type)
+        return StrategyResult(
+            strategy=self.strategy_type,
+            success=False,
+            error='tracked failure',
+        )
+
+
+@pytest.mark.asyncio
+async def test_degradation_start_with_continues_full_chain():
+    """При start_with перебор продолжается по всей иерархии.
+
+    Раньше при start_with=STEALTH перебирались только STEALTH → HITL,
+    из-за чего BROWSER/WAYBACK/FAST/CRAWL4AI пропускались. После правки
+    start_with задаёт лишь начало, а при провале перебор проходит по
+    полной цепочке (включая догонку стратегий из начала).
+    """
+    orch = AgenticOrchestrator()
+    order: list = []
+    for strategy_type in (
+        StrategyType.FAST,
+        StrategyType.CRAWL4AI,
+        StrategyType.BROWSER,
+        StrategyType.WAYBACK,
+        StrategyType.STEALTH,
+        StrategyType.HITL,
+    ):
+        orch.register_strategy(
+            strategy_type, _TrackingStrategy(strategy_type, order)
+        )
+
+    result = await orch.fetch_with_degradation(
+        EXAMPLE_URL, start_with=StrategyType.STEALTH
+    )
+    assert result.success is False
+    # STEALTH первый (start_with), затем HITL, затем догонка начала:
+    # FAST, CRAWL4AI, BROWSER, WAYBACK.
+    assert order == [
+        StrategyType.STEALTH,
+        StrategyType.HITL,
+        StrategyType.FAST,
+        StrategyType.CRAWL4AI,
+        StrategyType.BROWSER,
+        StrategyType.WAYBACK,
+    ]
+    # HITL не дублируется в догонке.
+    assert order.count(StrategyType.HITL) == 1
+
+
 def test_extract_snapshot_url():
     """_extract_snapshot_url извлекает URL снапшота из ответа API."""
     url = WaybackStrategy._extract_snapshot_url(SNAPSHOT_API_JSON)

@@ -38,6 +38,23 @@ _DEFAULT_USER_AGENT = (
 )
 
 
+def _ssl_unverified_context():
+    """Возвращает SSL-контекст без проверки сертификата.
+
+    Гос. порталы и некоторые коммерческие сайты отдают самоподписанные /
+    недоверенные сертификаты, из-за чего ``urllib.request`` бросает
+    ``CERTIFICATE_VERIFY_FAILED`` и FAST-стратегия ложно падает. Контекст без
+    верификации используется как fallback (аналогично ``ignore_https_errors``
+    в браузерных стратегиях).
+    """
+    import ssl
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def _fetch_sync(url: str, timeout_ms: int, user_agent: str) -> str:
     """Выполняет синхронный HTTP-запрос и возвращает тело ответа."""
     import urllib.request
@@ -47,8 +64,18 @@ def _fetch_sync(url: str, timeout_ms: int, user_agent: str) -> str:
         headers={'User-Agent': user_agent},
     )
     timeout = timeout_ms / 1000
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode('utf-8', errors='replace')
+    try:
+        # Сначала обычный запрос с проверкой сертификата.
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode('utf-8', errors='replace')
+    except Exception:
+        # SSL/сертификат недоверенный — повторяем без верификации, чтобы
+        # не ронять FAST-стратегию на гос.порталах с самоподписанными
+        # сертификатами.
+        with urllib.request.urlopen(
+            req, timeout=timeout, context=_ssl_unverified_context()
+        ) as resp:
+            return resp.read().decode('utf-8', errors='replace')
 
 
 class BaseStrategy(ABC):
@@ -175,7 +202,10 @@ class BrowserStrategy(BaseStrategy):
 
             p = await async_playwright().start()
             browser = await p.chromium.launch(headless=self._headless)
-            page = await browser.new_page()
+            # Игнорируем невалидные TLS-сертификаты (гос. порталы и др.
+            # с самоподписанными/недоверенными сертификатами).
+            context = await browser.new_context(ignore_https_errors=True)
+            page = await context.new_page()
             await page.goto(url, timeout=self._timeout_ms)
             html = await page.content()
 
@@ -271,8 +301,22 @@ class AgenticOrchestrator:
                 start_index = _DEGRADATION_ORDER.index(start_with)
             except ValueError:
                 start_index = 0
+            # start_with задаёт лишь начало перебора: проходим от start_with
+            # до конца цепочки, а затем «догоняем» стратегии из начала,
+            # не повторяя уже пройденные. Так при провале STEALTH будут
+            # испробованы HITL и остальные стратегии (BROWSER/WAYBACK/FAST/
+            # CRAWL4AI), а не только STEALTH → HITL.
+            trailing = _DEGRADATION_ORDER[start_index:]
+            leading = tuple(
+                t for t in _DEGRADATION_ORDER[:start_index] if t not in trailing
+            )
+            # Оба слагаемых — tuple, чтобы не получить
+            # "can only concatenate tuple (not 'list') to tuple".
+            order = trailing + leading
+        else:
+            order = _DEGRADATION_ORDER
 
-        for strategy_type in _DEGRADATION_ORDER[start_index:]:
+        for strategy_type in order:
             strategy = self._strategies.get(strategy_type)
             if strategy is None:
                 continue

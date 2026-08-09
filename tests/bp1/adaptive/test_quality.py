@@ -122,6 +122,51 @@ class TestConsistencyGate:
         assert report.passed is False
         assert any('duplicate' in e for e in report.errors)
 
+    def test_duplicate_with_hhtmfrom_noise_normalized(self):
+        """URL с мусорным параметром hhtmFrom нормализуется до базового."""
+        gate = DataQualityGate()
+        items = [
+            {'url': '/article/cookie_policy?hhtmFrom=not_found', 'title': 'a'},
+            {'url': '/article/cookie_policy', 'title': 'b'},
+        ]
+        report = gate.validate_consistency(items)
+        assert report.passed is False
+        assert any('duplicate' in e for e in report.errors)
+
+    def test_url_with_fragment_duplicates(self):
+        """URL с якорем и без него — это один и тот же ключ."""
+        gate = DataQualityGate()
+        items = [
+            {'url': 'https://example.com/article#part2', 'title': 'a'},
+            {'url': 'https://example.com/article', 'title': 'b'},
+        ]
+        report = gate.validate_consistency(items)
+        assert report.passed is False
+        assert any('duplicate' in e for e in report.errors)
+
+    def test_url_trailing_slash_duplicates(self):
+        """URL с завершающим слэшем и без него — это один ключ."""
+        gate = DataQualityGate()
+        items = [
+            {'url': 'https://example.com/news/', 'title': 'a'},
+            {'url': 'https://example.com/news', 'title': 'b'},
+        ]
+        report = gate.validate_consistency(items)
+        assert report.passed is False
+
+    def test_junk_root_urls_not_flagged_as_duplicates(self):
+        """Корневые/пустые URL не участвуют в дедупликации."""
+        gate = DataQualityGate()
+        items = [
+            {'url': '/', 'title': 'a'},
+            {'url': '/', 'title': 'b'},
+            {'url': '', 'title': 'c'},
+            {'url': None, 'title': 'd'},
+        ]
+        report = gate.validate_consistency(items)
+        assert report.passed is True
+        assert report.errors == []
+
 
 class TestValidateAll:
     """Агрегация всех уровней."""

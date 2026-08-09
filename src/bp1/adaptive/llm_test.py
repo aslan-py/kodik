@@ -28,6 +28,7 @@
 
 # from __future__ import annotations
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -50,11 +51,12 @@ HTML_DIR = PROJECT_ROOT / 'src' / 'bp1' / 'data' / 'html_pages'
 COMPETITOR = 'ООО "Архитект ИИ"'
 EXPECTED_FIELDS: list[str] = []  # expected_fields = ''
 
-# --- Константы LLM (пока прописаны вручную для тестов) ---
-# TODO: заменить на реальный ключ
-LLM_API_KEY = 'sk-f94d32860e504e6caf47625080ca0c78'
-LLM_MODEL = 'deepseek-v4-flash'
-LLM_BASE_URL = 'https://api.deepseek.com'
+# --- Константы LLM (берутся из переменных окружения, см. .env) ---
+# Ключ задаётся через LLM_API_KEY (или OPENAI_API_KEY) в .env / окружении.
+# Хардкод секретов в исходниках недопустим — не коммитьте реальные ключи.
+LLM_API_KEY = os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY') or ''
+LLM_MODEL = os.getenv('LLM_MODEL', 'deepseek-v4-flash')
+LLM_BASE_URL = os.getenv('LLM_BASE_URL', 'https://api.deepseek.com')
 LLM_TEMPERATURE = 0.0
 LLM_MAX_TOKENS = 4096
 
@@ -261,9 +263,10 @@ async def main() -> None:
     print(f'Модель: {LLM_MODEL}')
     print('-' * 60)
 
-    if not LLM_API_KEY or LLM_API_KEY.startswith('sk-...'):
+    if not LLM_API_KEY or LLM_API_KEY.startswith(('sk-...', 'sk-добавить')):
         print('ОШИБКА: не задан LLM_API_KEY.')
-        print('Пропишите реальный ключ в константе LLM_API_KEY в начале файла.')
+        print('Задайте переменную окружения LLM_API_KEY (или OPENAI_API_KEY)')
+        print('в .env / окружении и перезапустите тест.')
         sys.exit(1)
 
     client = LLMClient(

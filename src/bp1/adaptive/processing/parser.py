@@ -16,12 +16,17 @@ AdaptiveParser — интеллектуальный парсинг с анали
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
+
+from core.config import settings
 
 from ..core.cache import UnifiedCache
 from ..core.quality import DataQualityGate
@@ -32,9 +37,94 @@ from ..schemas import (
     StrategyType,
 )
 from ..strategies.orchestrator import AgenticOrchestrator
+from .html_cleaner import HtmlCleaner
 from .llm import AIAgent, LLMClient
 
 logger = logging.getLogger(__name__)
+
+# Максимальное количество новостей, собираемых за один проход пагинации.
+DEFAULT_MAX_NEWS = 1
+
+# Минимальная длина текста, при которой результат извлечения считается
+# успешным (для каскада CSS → LLM → сниппет).
+MIN_ARTICLE_TEXT_LENGTH = 100
+
+# Максимальное количество одновременно докачиваемых статей (глубокий фетч).
+MAX_CONCURRENT_FETCHES = 5
+
+# Служебные пути URL, которые не являются элементами данных и должны быть
+# отброшены при извлечении (логин, регистрация, cookie-политика и т.п.).
+# Проверяются по подстроке пути — работают независимо от того, в каком теге
+# живёт ссылка на странице (nav, div, span и т.д.).
+_NOISE_URL_PATTERNS: tuple[str, ...] = (
+    '/account/',
+    '/login',
+    '/signup',
+    '/register',
+    '/logout',
+    '/recover',
+    '/reset',
+    '/article/cookie_policy',
+    '/cookie_policy',
+    '/privacy',
+    '/favicon',
+)
+
+
+def _is_noise_url(url: str) -> bool:
+    """Возвращает True, если URL является служебным и его нужно отбросить.
+
+    Проверяет по подстроке пути из ``_NOISE_URL_PATTERNS``. Логин, cookie-
+    политика и подобные служебные ссылки не являются элементами данных: они
+    дублируются на странице и порождают ложные ``duplicate key`` на уровне
+    CONSISTENCY-карантина.
+
+    Не отбрасываются: пустые/корневые ссылки и обычные навигационные пункты
+    (например ``/#forburger`` или ``mailto:``) — они не служебные и должны
+    сохраняться.
+    """
+    if not url or not isinstance(url, str):
+        return False
+
+    path = url.split('?', 1)[0].split('#', 1)[0]
+    return any(pattern in path for pattern in _NOISE_URL_PATTERNS)
+
+
+def _to_absolute(url: str, base_url: str) -> str:
+    """Превращает относительный путь в полный абсолютный URL.
+
+    Схема/домен берутся из ``base_url`` (URL страницы результата поиска).
+    Уже абсолютные ссылки (``http://``, ``https://``, ``mailto:``) возвращаются
+    без изменений, чтобы не ломать другие типы ссылок.
+
+    Args:
+        url: Ссылка, извлечённая из заголовка новости (может быть
+            относительной, например ``/about/news/...``).
+        base_url: Базовый URL страницы, на которой найдена ссылка.
+
+    Returns:
+        Полный абсолютный URL.
+    """
+    if not url or not isinstance(url, str):
+        return ''
+    if '://' in url:
+        return url
+    return urljoin(base_url, url)
+
+
+def _is_fetchable_url(url: str) -> bool:
+    """Возвращает True, если по URL можно выполнить HTTP-запрос.
+
+    Отфильтровывает ``mailto:``, ``tel:``, ``javascript:`` и прочие схемы, не
+    являющиеся ``http``/``https``. Такие ссылки не скачиваются стратегиями
+    обхода (FAST/CRAWL4AI/BROWSER падают на них с ошибкой URL scheme), поэтому
+    на уровне глубокого фетча они пропускаются, а элемент остаётся со
+    сниппетом-заголовком.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    scheme = url.split(':', 1)[0].lower()
+    return scheme in ('http', 'https')
 
 
 class _LinkCollector(HTMLParser):
@@ -177,6 +267,10 @@ class AdaptiveParser:
         # 2. Получение HTML через оркестратор.
         #    Если классификация источника уже сохранена — начинаем с
         #    рекомендованной стратегии, чтобы не сканировать все подряд.
+        #    Дополнительно стратегию уточняет LLM-агент
+        #    (AIAgent.choose_strategy), что позволяет в ряде стратегий/случаев
+        #    обращаться к LLM. При недоступности LLM или невалидном ответе
+        #    агент возвращает эвристику.
         start_with: StrategyType | None = None
         classification = await self._cache.get_classification(source_name)
         if classification is not None:
@@ -184,6 +278,28 @@ class AdaptiveParser:
                 start_with = StrategyType(classification.recommended_strategy)
             except ValueError:
                 start_with = None
+        # LLM-агент уточняет стратегию обхода по классификации (fallback —
+        # эвристика при недоступности LLM). Это ключевая точка, где реально
+        # вызывается LLM в боевом конвейере. Если классификация ещё не
+        # рассчитана (нет в кэше) — агент не вызываем и используем дефолт.
+        if classification is not None:
+            try:
+                agent_strategy = await self._agent.choose_strategy(
+                    classification
+                )
+                if agent_strategy is not None:
+                    start_with = agent_strategy
+                    self._logger.info(
+                        'Агент выбрал стратегию %s для %s (LLM-решение)',
+                        agent_strategy.value,
+                        source_name,
+                    )
+            except Exception as exc:  # pragma: no cover - зависит от LLM
+                self._logger.warning(
+                    'Ошибка выбора стратегии агентом для %s: %s',
+                    source_name,
+                    exc,
+                )
 
         strategy_result = await self._orchestrator.fetch_with_degradation(
             url,
@@ -218,16 +334,50 @@ class AdaptiveParser:
             )
             await self._cache.set_adapter(source_name, adapter)
 
-        # 4. Парсинг HTML в элементы (с применением селекторов адаптера).
-        items = _parse_items(
-            html,
-            source_name,
-            competitor,
-            trigger,
-            selectors=adapter.selectors,
-        )
+        # 4. Сохраняем скачанную HTML-страницу результата поиска на диск.
+        #    Копируем в bp1_html_dir (settings.bp1_data_root/html_pages) и
+        #    кладём путь в extra.file_path, откуда его забирает runner.py
+        #    при сохранении html_file_path в RawItem. Доступность файла
+        #    возвращается через extra.file_saved, чтобы не ломать hashing
+        #    (file_path вычищается перед расчётом хэша).
+        file_path, file_saved = self._save_html(html, source_name=source_name)
 
-        # 5. Валидация качества.
+        # 5. Элемент — сама страница результата поиска, а НЕ первая новость.
+        #    url = страница поиска (с поисковым запросом), title = собственный
+        #    <title> этой страницы. Реальные новости/статьи, найденные на
+        #    странице, попадают в extra.news (поля ex_title/ex_url/ex_text).
+        #    Поэтому items.title НЕ равен extra.news[].ex_title — разные
+        #    страницы.
+        items = [
+            _make_search_page_item(
+                source_name=source_name,
+                url=url,
+                title=_extract_title(html) or source_name,
+            )
+        ]
+
+        # 6. Глубокий фетч: докачиваем полный текст статей (пагинация +
+        #    полные url) в extra.news. Ключи внутри каждого элемента имеют
+        #    префикс ex_ (ex_title/ex_url/ex_text), чтобы не конфликтовать
+        #    с обязательными полями item. Выполняется только для новостных
+        #    источников (заголовки-ссылки на статьи).
+        base_url = url
+        news = await self._collect_news_with_pagination(
+            base_url=base_url,
+            source_name=source_name,
+            competitor=competitor,
+            trigger=trigger,
+            selectors=adapter.selectors,
+            max_news=DEFAULT_MAX_NEWS,
+            initial_html=html,
+        )
+        for item in items:
+            item.setdefault('extra', {})['news'] = news
+            if file_path:
+                item['extra']['file_path'] = file_path
+            item['extra']['file_saved'] = file_saved
+
+        # 7. Валидация качества.
         reports = self._quality_gate.validate_all(items)
         quality_ok = self._quality_gate.is_all_passed(reports)
 
@@ -244,6 +394,324 @@ class AdaptiveParser:
             trace_id=trace_id,
         )
 
+    # ------------------------------------------------------------------
+    # Сохранение HTML на диск
+    # ------------------------------------------------------------------
+
+    def _save_html(
+        self, html: str, source_name: str
+    ) -> tuple[str | None, bool]:
+        """Сохраняет скачанную HTML-страницу на диск в ``bp1_html_dir``.
+
+        Файл записывается непосредственно в целевую директорию
+        (``settings.bp1_data_root/html_pages``), а не во временную папку
+        парсера, как это делают специализированные RPA-адаптеры. Возвращает
+        кортеж ``(file_path, saved)``: путь к сохранённому файлу и флаг,
+        удалось ли его записать. Путь попадает в ``extra.file_path`` и далее
+        используется runner.py для проставления ``html_file_path`` в RawItem.
+
+        Args:
+            html: Содержимое HTML-страницы.
+            source_name: Имя источника (для уникального имени файла).
+
+        Returns:
+            ``(str | None, bool)`` — путь и признак успешного сохранения.
+        """
+        try:
+            target_dir = Path(settings.bp1_html_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            safe = (
+                ''.join(
+                    c if c.isalnum() or c in '._-' else '_' for c in source_name
+                )
+                or 'adaptive'
+            )
+            ts = time.strftime('%Y%m%d_%H%M%S')
+            filename = f'{safe}_{ts}.html'
+            file_path = target_dir / filename
+
+            file_path.write_text(html or '', encoding='utf-8')
+            self._logger.info('HTML сохранён на диск: %s', file_path)
+            return str(file_path), True
+        except (OSError, PermissionError) as exc:
+            self._logger.error(
+                'Не удалось сохранить HTML на диск (%s): %s',
+                settings.bp1_html_dir,
+                exc,
+            )
+            return None, False
+
+    # ------------------------------------------------------------------
+    # Пагинация и глубокий фетч
+    # ------------------------------------------------------------------
+
+    async def _collect_news_with_pagination(
+        self,
+        base_url: str,
+        source_name: str,
+        competitor: str,
+        trigger: str,
+        selectors: dict[str, str],
+        max_news: int = DEFAULT_MAX_NEWS,
+        initial_html: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Собирает новости со страниц пагинации до лимита ``max_news``.
+
+        Каждая страница обрабатывается через ``_page_items`` (извлечение
+        заголовков-ссылок), затем по накопленным ссылкам запускается глубокий
+        фетч полного текста (каскад CSS → LLM → сниппет).
+
+        Args:
+            base_url: URL первой страницы результата поиска.
+            source_name: Имя источника.
+            competitor: Конкурент.
+            trigger: Тема поиска.
+            selectors: CSS-селекторы адаптера.
+            max_news: Максимальное количество новостей (по умолчанию 50).
+            initial_html: HTML первой страницы (уже скачан).
+
+        Returns:
+            Список словарей ``{"title", "url", "text"}``.
+        """
+        candidates: list[tuple[str, str, str]] = []  # (title, url_abs, url_rel)
+        seen: set[str] = set()
+        page = 1
+        html = initial_html
+
+        while len(candidates) < max_news:
+            if html is None:
+                result = await self._orchestrator.fetch_with_degradation(
+                    _pagination_url(base_url, page),
+                    source_name=source_name,
+                )
+                if not result.success or not result.data:
+                    break
+                html = result.data
+
+            page_items = _page_items(
+                html,
+                source_name,
+                competitor,
+                trigger,
+                selectors=selectors,
+                base_url=base_url,
+            )
+            added = 0
+            for title, url_abs, url_rel in page_items:
+                if len(candidates) >= max_news:
+                    break
+                if url_abs in seen or not url_abs:
+                    continue
+                seen.add(url_abs)
+                candidates.append((title, url_abs, url_rel))
+                added += 1
+
+            # Защита от зацикливания: на странице нет новых новостей или
+            # больше нет страниц пагинации.
+            if added == 0 or page >= self._max_pages(selectors):
+                break
+            page += 1
+            html = None
+
+        # Глубокий фетч полного текста по накопленным ссылкам.
+        news = await self._deep_fetch(candidates, source_name, selectors)
+        return news
+
+    def _max_pages(self, selectors: dict[str, str]) -> int:
+        """Ограничение числа страниц из конфигурации (если есть)."""
+        # По умолчанию пагинация не ограничена (регулируется лимитом новостей).
+        return 10000
+
+    async def _deep_fetch(
+        self,
+        candidates: list[tuple[str, str, str]],
+        source_name: str,
+        selectors: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        """Докачивает полный текст для списка новостей (каскад CSS → LLM).
+
+        Каждая статья обрабатывается с ограничением конкурентности
+        (``MAX_CONCURRENT_FETCHES``). При сбое всех способов извлечения
+        используется сниппет (заголовок), чтобы не терять новость.
+
+        Args:
+            candidates: Список ``(title, url_abs, url_rel)``.
+            source_name: Имя источника.
+            selectors: CSS-селекторы адаптера.
+
+        Returns:
+            Список ``{"title", "url", "text"}`` (url — полная ссылка).
+        """
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
+
+        async def _one(cand: tuple[str, str, str]) -> dict[str, Any]:
+            title, url_abs, _url_rel = cand
+            async with semaphore:
+                text, _method = await self._extract_article_text(
+                    url_abs, source_name, selectors
+                )
+            if not text:
+                text = title  # сниппет-фолбэк: не теряем новость
+            # Ключи в extra имеют префикс ex_, чтобы не конфликтовать с
+            # обязательными полями item (title/url/text) на уровне BP-2.
+            return {'ex_title': title, 'ex_url': url_abs, 'ex_text': text}
+
+        return await asyncio.gather(*(_one(c) for c in candidates))
+
+    async def _extract_article_text(
+        self,
+        url: str,
+        source_name: str,
+        selectors: dict[str, str],
+    ) -> tuple[str | None, str]:
+        """Извлекает полный текст статьи по URL (каскад CSS → LLM → сниппет).
+
+        Возвращает кортеж ``(text, method)``, где method — способ получения:
+        ``css``, ``llm`` или ``snippet``.
+
+        Не-HTTP(S) ссылки (``mailto:``, ``tel:``, ``javascript:``) не
+        скачиваются — ни один движок обхода их не обрабатывает, поэтому сразу
+        возвращается сниппет, чтобы не тратить время на бесполезные попытки.
+        """
+        if not _is_fetchable_url(url):
+            return None, 'snippet'
+        result = await self._orchestrator.fetch_with_degradation(
+            url, source_name=source_name
+        )
+        if not result.success or not result.data:
+            return None, 'snippet'
+        html = result.data
+
+        # Этап A: структурное извлечение по CSS-селектору `text`.
+        text_selector = (selectors or {}).get('text')
+        if text_selector:
+            soup = BeautifulSoup(html, 'html.parser')
+            node = soup.select_one(text_selector)
+            if node is not None:
+                text = node.get_text(' ', strip=True)
+                if len(text) >= MIN_ARTICLE_TEXT_LENGTH:
+                    return text, 'css'
+
+        # Этап B: LLM-извлечение (fallback при сбое CSS).
+        llm_text = await self._llm_extract_text(html)
+        if llm_text and len(llm_text) >= MIN_ARTICLE_TEXT_LENGTH:
+            return llm_text, 'llm'
+
+        # Этап C: сниппет из очищенного контента.
+        snippet = _plain_text(html)
+        if snippet:
+            return snippet, 'snippet'
+        return None, 'snippet'
+
+    async def _llm_extract_text(self, html: str) -> str | None:
+        """Извлекает основной текст статьи через LLM (если настроен)."""
+        try:
+            cleaner = HtmlCleaner()
+            cleaned = cleaner.clean(html, extract_metadata=False)
+            content = cleaned.get('content', '')
+            return await self._llm_client.extract_article_text(content)
+        except Exception as e:  # pragma: no cover - зависит от LLM
+            self._logger.warning('Ошибка LLM-извлечения текста: %s', e)
+            return None
+
+
+def _plain_text(html: str) -> str:
+    """Возвращает плоский текст из HTML (убирает разметку и шум)."""
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        for tag in soup(
+            ['script', 'style', 'nav', 'footer', 'header', 'aside', 'noscript']
+        ):
+            tag.decompose()
+        return soup.get_text(' ', strip=True)
+    except Exception:
+        return ''
+
+
+def _pagination_url(base_url: str, page: int) -> str:
+    """Возвращает URL страницы пагинации с подставленным номером.
+
+    Если в базовом URL уже есть query-параметр, номер страницы добавляется
+    как ``&page=N``, иначе — как ``?page=N``.
+    """
+    if page <= 1:
+        return base_url
+    sep = '&' if '?' in base_url else '?'
+    return f'{base_url}{sep}page={page}'
+
+
+def _page_items(
+    html: str,
+    source_name: str,
+    competitor: str,
+    trigger: str,
+    selectors: dict[str, str],
+    base_url: str,
+) -> list[tuple[str, str, str]]:
+    """Извлекает пары ``(title, url_abs, url_rel)`` из страницы результатов.
+
+    Использует селектор ``container``/``url``/``title`` адаптера, если задан,
+    иначе — эвристический сбор ссылок. ``url_abs`` — полный абсолютный URL.
+    """
+    selectors = selectors or {}
+    pairs: list[tuple[str, str]] = []
+
+    if selectors.get('container'):
+        for raw in _extract_by_selectors(html, selectors)[:DEFAULT_MAX_NEWS]:
+            url_rel = raw.get('url', '')
+            title = raw.get('title', '')
+            if _is_noise_url(url_rel) or not title:
+                continue
+            pairs.append((title, url_rel))
+    else:
+        collector = _LinkCollector()
+        collector.feed(html)
+        for title, href in collector.links[:DEFAULT_MAX_NEWS]:
+            if _is_noise_url(href):
+                continue
+            pairs.append((title, href))
+
+    return [
+        (title, _to_absolute(url_rel, base_url), url_rel)
+        for title, url_rel in pairs
+    ]
+
+
+def _extract_title(html: str) -> str | None:
+    """Возвращает текст из тега ``<title>`` HTML-страницы (или None)."""
+    try:
+        soup = BeautifulSoup(html or '', 'html.parser')
+        if soup.title and soup.title.string:
+            return soup.title.string.strip()
+    except Exception:
+        return None
+    return None
+
+
+def _make_search_page_item(
+    source_name: str,
+    url: str,
+    title: str,
+) -> dict[str, Any]:
+    """Формирует элемент для самой страницы результата поиска.
+
+    Первая страница — это страница поиска, а не первая новость. Поэтому
+    ``url`` = страница поиска (с поисковым запросом), ``title`` = собственный
+    ``<title>`` этой страницы. Найденные новости попадают в ``extra.news``
+    (поля ex_title/ex_url/ex_text), т.е. ``items.title`` НЕ равен
+    ``extra.news[].ex_title`` — это разные страницы.
+    """
+    return {
+        'url': url,
+        'title': title,
+        'text': None,
+        'published_at': None,
+        'region': None,
+        'media_name': source_name,
+        'extra': {},
+    }
+
 
 def _make_item(
     source_name: str,
@@ -255,19 +723,23 @@ def _make_item(
     published_at: str | None = None,
     region: str | None = None,
     media_name: str | None = None,
+    base_url: str | None = None,
 ) -> dict[str, Any]:
-    """Формирует элемент данных из извлечённых полей."""
+    """Формирует элемент данных из извлечённых полей.
+
+    ``competitor``/``trigger`` НЕ попадают в ``extra`` — это поля уровня
+    ``meta`` (переносятся в ParsedResponse.meta в bridge.py). URL нормализуется
+    до полного абсолютного (``base_url`` = URL страницы результата поиска),
+    т.к. относительные ссылки ломают dedup_key и media_domain в BP-2.
+    """
     return {
-        'url': url,
+        'url': _to_absolute(url, base_url or ''),
         'title': title,
         'text': text,
         'published_at': published_at,
         'region': region,
         'media_name': media_name or source_name,
-        'extra': {
-            'competitor': competitor,
-            'trigger': trigger,
-        },
+        'extra': {},
     }
 
 
@@ -277,6 +749,7 @@ def _parse_items(
     competitor: str,
     trigger: str,
     selectors: dict[str, str] | None = None,
+    base_url: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Извлекает элементы из HTML.
@@ -284,7 +757,8 @@ def _parse_items(
     Если задан селектор ``container`` — извлекает элементы по селекторам
     адаптера (title, text, url, published_at, region) через BeautifulSoup.
     Иначе использует эвристический парсер ссылок: каждая ссылка с текстом
-    становится кандидатом в элемент.
+    становится кандидатом в элемент. ``base_url`` (URL страницы результата
+    поиска) используется для нормализации относительных ссылок в полные.
     """
     selectors = selectors or {}
 
@@ -300,8 +774,10 @@ def _parse_items(
                 published_at=raw.get('published_at'),
                 region=raw.get('region'),
                 media_name=raw.get('media_name'),
+                base_url=base_url,
             )
-            for raw in _extract_by_selectors(html, selectors)[:50]
+            for raw in _extract_by_selectors(html, selectors)[:DEFAULT_MAX_NEWS]
+            if not _is_noise_url(raw.get('url'))
         ]
 
     collector = _LinkCollector()
@@ -314,6 +790,8 @@ def _parse_items(
             trigger=trigger,
             url=href,
             title=title,
+            base_url=base_url,
         )
-        for title, href in collector.links[:50]
+        for title, href in collector.links[:DEFAULT_MAX_NEWS]
+        if not _is_noise_url(href)
     ]

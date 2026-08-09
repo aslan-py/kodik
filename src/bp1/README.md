@@ -5,7 +5,9 @@ BP-1 — первый слой ETL-пайплайна системы конку�
 ## Статус: ✅ РАБОТАЕТ
 
 - **fedresurs.ru** — полностью реализован RPA-парсер с обходом QRATOR антибот-защиты
-- **Остальные источники** — адаптеры-заглушки (интеграция готова, логика парсинга в разработке)
+- **kad.arbitr.ru** — реализован RPA-парсер через Playwright (поиск дел по ИНН)
+- **Адаптивный движок (adaptive)** — полностью реализован: автоматическая классификация источников, иерархия стратегий обхода с деградацией (FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL), интеллектуальное извлечение через LLM, кэширование адаптеров, MCP-сервер и CLI
+- **Остальные источники** — обрабатываются универсальным `AdaptiveBridgeParser` (авто-детекция структуры сайта без ручной настройки)
 - **Raw Storage** — модуль хранения сырых данных (Bronze Layer) реализован и протестирован
 - **CI/CD** — 100% тестов проходят (pytest), линтер (ruff) чист
 
@@ -14,44 +16,41 @@ BP-1 — первый слой ETL-пайплайна системы конку�
 ```
 src/bp1/
 ├── __init__.py              # Публичный API, реэкспорт моделей и парсеров
-├── base_parser.py           # Базовый класс парсера + ParserFactory
+├── base_parser.py           # Базовый класс парсера + ParserFactory + ParsedItem/ParsedResponse
 ├── models.py                # SQLAlchemy модели (Trigger, Competitor, Source, SearchTask, RawItem)
 ├── constants.py             # Константы (таймауты, статусы, режимы запуска)
+├── storage.py               # ✅ RawDataService — единая персистентность (хэш, Redis, HTML/JSON, RawItem)
 ├── runner.py                # Оркестратор BPRunner (direct / celery режимы)
-├── tasks.py                 # Основная логика: run_parser_async, хэширование, сохранение
+├── tasks.py                 # Основная логика: run_parser_async, получение конфигурации задачи
 ├── celery_tasks.py          # Celery-обёртка для production-запуска
 ├── cli.py                   # CLI-интерфейс (запуск, список задач, очистка Redis)
 ├── test_parser.py           # Интеграционный тест с реальной БД и Redis
 │
 ├── parsers/                 # Адаптеры парсеров (реализуют BaseParser)
-│   ├── __init__.py          # Регистрация всех адаптеров в ParserFactory
+│   ├── __init__.py          # Регистрация адаптеров в ParserFactory
 │   ├── fedresurs_adapter.py # ✅ fedresurs.ru (RPA, QRATOR bypass)
-│   ├── kad_arbitr_adapter.py# ⏳ kad.arbitr.ru (заглушка)
-│   ├── hh_adapter.py        # ⏳ hh.ru (заглушка)
-│   ├── fips_adapter.py      # ⏳ fips.ru (заглушка)
-│   ├── google_news_adapter.py# ⏳ Google News (заглушка)
-│   ├── kodik_forum_adapter.py# ⏳ kodik.ru/forum (заглушка)
-│   ├── nic_ru_adapter.py    # ⏳ nic.ru (заглушка)
-│   ├── vk_adapter.py        # ⏳ VK API (заглушка)
-│   └── zakupki_adapter.py   # ⏳ zakupki.gov.ru (заглушка)
+│   └── ...                  # Остальные источники — через универсальный AdaptiveBridgeParser
+│
+├── adaptive/                # ✅ Адаптивный сбор данных (интеллектуальный парсинг)
+│   ├── schemas.py           # Pydantic-схемы (классификация, стратегии, HITL, отчёты)
+│   ├── cli.py               # CLI: run / classify / add-source / cache / profile / quality
+│   ├── core/                # UnifiedCache (Redis+диск), DataQualityGate (5 уровней)
+│   ├── processing/          # AdaptiveParser, HtmlCleaner, StructuredChunker, ResultMerger, LLM
+│   ├── strategies/          # SourceClassifier, AgenticOrchestrator, Crawl4AI/Stealth/HITL, engines
+│   └── integration/         # AdaptiveBridgeParser, AdaptiveRunner, SourceRegistrationService, MCPServer
 │
 ├── collectors/              # Движки парсинга (реализация сбора данных)
 │   ├── fedresurs_rpa/       # ✅ RPA-парсер fedresurs.ru
-│   ├── kad_arbitr_rpa/      # 🚧 RPA-парсер kad.arbitr.ru (в разработке)
+│   ├── kad_arbitr_rpa/      # ✅ RPA-парсер kad.arbitr.ru (поиск дел по ИНН)
 │   ├── stealth/             # ✅ Модуль антиобнаружения (QRATOR bypass, JS evasions)
-│   ├── hh_api/              # 🚧 API-парсер hh.ru
-│   ├── fips_rpa/            # 🚧 RPA-парсер fips.ru
-│   ├── google_news_rpa/     # 🚧 RPA-парсер Google News
-│   ├── kodik_forum_rpa/     # 🚧 RPA-парсер kodik.ru/forum
-│   ├── nic_ru_rpa/          # 🚧 RPA-парсер nic.ru
-│   ├── vk_api/              # 🚧 API-парсер VK
-│   └── zakupki_rpa/         # 🚧 RPA-парсер zakupki.gov.ru
+│   └── ...                  # Заготовки под остальные движки (hh_api, fips_rpa, ...)
 │
 └── raw_storage/             # ✅ Модуль хранения сырых данных (Bronze Layer)
     ├── core/models.py       # Pydantic модели (RawDataFile, MetaInfo, RawDataItem)
     ├── core/interfaces.py   # Абстрактные интерфейсы (BaseStorage, BaseDeduplicator)
     ├── backends/disk_backend.py  # DiskBackend — JSONB на диске
-    ├── services/repository.py    # RawDataRepository
+    ├── services/repository.py    # RawDataRepository (CRUD + дедупликация)
+    ├── factory.py           # StorageFactory — фабрика бэкендов
     └── utils/               # Хэширование, генерация путей
 ```
 
@@ -84,11 +83,11 @@ src/bp1/
 SearchTask (БД)
     │
     ▼
-BPRunner / Celery
+BPRunner / AdaptiveRunner / Celery
     │
-    ├─ 1. Получить конфигурацию задачи (competitor, source, trigger)
-    ├─ 2. Создать парсер через ParserFactory
-    ├─ 3. Выполнить парсинг (BaseParser.parse())
+    ├─ 1. Получить конфигурацию задачи (competitor, source, trigger, is_active)
+    ├─ 2. Создать парсер через ParserFactory / SourceClassifier
+    ├─ 3. Выполнить парсинг (BaseParser.parse() или адаптивный парсинг)
     ├─ 4. Вычислить хэш содержимого (MD5 от items)
     ├─ 5. Сверить с Redis (предыдущий хэш)
     │
@@ -139,13 +138,42 @@ python -m src.bp1.cli list
 python -m src.bp1.cli clear-redis
 ```
 
+### Адаптивный CLI (BP-1 Adaptive)
+
+```bash
+# Запуск всех задач из БД
+python -m src.bp1.adaptive.cli run
+
+# Сбор по конкретному источнику + конкуренту (создаёт Source/Competitor/SearchTask)
+python -m src.bp1.adaptive.cli run --source lenta.ru --competitor "ООО АРХИТЕХ ИИ"
+
+# Гибридный режим с fallback
+python -m src.bp1.adaptive.cli run --source lenta.ru --mode hybrid --fallback
+
+# Классификация источника
+python -m src.bp1.adaptive.cli classify --source lenta.ru
+
+# Регистрация нового источника (нормализация + классификация + БД + Redis)
+python -m src.bp1.adaptive.cli add-source --url "https://www.lenta.ru/news"
+
+# Управление кэшем адаптеров (источник в любом виде: lenta.ru / https://lenta.ru/)
+python -m src.bp1.adaptive.cli cache --show --source lenta.ru
+python -m src.bp1.adaptive.cli cache --clear --source lenta.ru
+
+# Управление профилями браузеров (HITL)
+python -m src.bp1.adaptive.cli profile --show --source lenta.ru
+
+# Отчёт качества по задаче
+python -m src.bp1.adaptive.cli quality --report --task-id 26
+```
+
 ## Программный запуск
 
 ```python
 import asyncio
 from src.bp1 import run_pipeline, RunMode
 
-# Асинхронный запуск
+# Асинхронный запуск (direct — классический BP-1 пайплайн)
 results = asyncio.run(
     run_pipeline(
         mode=RunMode.DIRECT,
@@ -160,6 +188,44 @@ from src.bp1 import run_pipeline_sync
 results = run_pipeline_sync(mode=RunMode.DIRECT)
 ```
 
+### Программный запуск AdaptiveRunner
+
+```python
+import asyncio
+from core.database import AsyncSessionLocal
+from core.redis_client import get_redis
+from src.bp1.adaptive import AdaptiveRunner
+
+async def main():
+    redis = await get_redis()
+    async with AsyncSessionLocal() as session:
+        runner = AdaptiveRunner(
+            mode='adaptive',        # 'adaptive' | 'hybrid' | 'fallback'
+            headless=True,
+            timeout=60000,
+        )
+        # 1) Одна задача по ID
+        result = await runner.run_task(task_id=26, session=session, redis_client=redis)
+        print(result['status'], result.get('strategy'))
+
+        # 2) Все активные задачи (учитывает is_active для SearchTask/Source/Competitor)
+        results = await runner.run_all(session, redis_client=redis)
+        for r in results:
+            print(r['status'], r['search_task_id'])
+
+        # 3) Сбор по конкретной паре источник + конкурент
+        res = await runner.run_source_competitor(
+            source='lenta.ru',
+            competitor='ООО АРХИТЕХ ИИ',
+            session=session,
+            redis_client=redis,
+        )
+        print(res['status'])
+    await redis.aclose()
+
+asyncio.run(main())
+```
+
 ## Парсеры
 
 ### Единый контракт
@@ -170,29 +236,34 @@ results = run_pipeline_sync(mode=RunMode.DIRECT)
 class BaseParser(ABC):
     async def parse(self, url: str, **kwargs) -> ParsedResponse: ...
     def get_source_name(self) -> str: ...
-    def get_parser_type(self) -> str: ...  # 'api' или 'rpa'
+    def get_parser_type(self) -> str: ...  # 'api' | 'rpa' | 'adaptive'
+    def get_parser_info(self) -> dict: ... # source, type, class
 ```
+
+**Ключевые атрибуты/методы:**
+- `required_kwargs` — кортеж обязательных kwargs для `parse()`. Позволяет провалидировать предусловия до запуска браузера (например, `FedresursAdapter.required_kwargs = ('inn',)` — без ИНН RPA-сценарий не запускается).
+- `get_parser_info()` — возвращает `{source, type, class}`.
 
 ### Выходной формат
 
 ```python
 class ParsedResponse(BaseModel):
-    meta: dict      # search_task_id, source, competitor, trigger, fetched_at
+    meta: dict      # search_task_id, source, competitor, trigger, source_request_url, fetched_at
     items: list[ParsedItem]  # массив результатов
 
 class ParsedItem(BaseModel):
-    url: str              # ссылка на событие
-    title: str            # заголовок
+    url: str              # ссылка на событие (обязательна)
+    title: str            # заголовок (обязателен)
     text: str | None      # тело/описание
     published_at: str | None  # сырая дата
     region: str | None    # регион
     media_name: str | None    # СМИ/публикатор
-    extra: dict           # источник-специфичные поля
+    extra: dict           # источник-специфичные поля (file_path и др.)
 ```
 
 ### ✅ FedresursAdapter (fedresurs.ru)
 
-Единственный полностью реализованный парсер. Использует RPA (Playwright) с обходом QRATOR антибот-защиты.
+Полностью реализованный парсер. Использует RPA (Playwright) с обходом QRATOR антибот-защиты.
 
 **Возможности:**
 - Поиск компании по ИНН на fedresurs.ru
@@ -208,30 +279,110 @@ class ParsedItem(BaseModel):
 ```python
 from src.bp1.parsers import FedresursAdapter
 
-parser = FedresursAdapter(headless=True)
+parser = FedresursAdapter(headless=True, timeout=60000)
 result = await parser.parse(
     url="https://fedresurs.ru",
     inn="7712345678",
     name='ООО "Ромашка"',
     search_task_id=1,
+    competitor='ООО "Ромашка"',
 )
 ```
 
-### ⏳ Адаптеры-заглушки
+### ✅ KadArbitrParser (kad.arbitr.ru)
 
-Остальные адаптеры зарегистрированы в [`ParserFactory`](src/bp1/parsers/__init__.py:18) и готовы к интеграции, но возвращают заглушечные данные:
+RPA-парсер картотеки арбитражных дел через Playwright. Ищет дела по ИНН участника.
 
-| Адаптер | Источник | Тип | Статус |
-|---------|----------|-----|--------|
-| `FedresursAdapter` | fedresurs.ru | RPA | ✅ |
-| `KadArbitrAdapter` | kad.arbitr.ru | RPA | ⏳ заглушка |
-| `HHAdapter` | api.hh.ru | API | ⏳ заглушка |
-| `FipsAdapter` | fips.ru | RPA | ⏳ заглушка |
-| `GoogleNewsAdapter` | news.google.com | RPA | ⏳ заглушка |
-| `KodikForumAdapter` | kodik.ru/forum | RPA | ⏳ заглушка |
-| `NicRuAdapter` | nic.ru | RPA | ⏳ заглушка |
-| `VKAdapter` | dev.vk.com | API | ⏳ заглушка |
-| `ZakupkiAdapter` | zakupki.gov.ru | RPA | ⏳ заглушка |
+**Использование:**
+```python
+from src.bp1.collectors.kad_arbitr_rpa import KadArbitrParser, ParsingRequest, validate_inn
+
+parser = KadArbitrParser()
+request = ParsingRequest(
+    inn="7712345678",       # валидируется через validate_inn()
+    output_dir="./out",
+    headless=True,
+    retry_count=3,
+    use_stealth=True,       # подключает модуль stealth для антиобнаружения
+)
+result = await parser.search_by_inn(request)
+print(result.success, result.file_path, result.error)
+```
+
+### ✅ AdaptiveBridgeParser (универсальный)
+
+Мост между адаптивной подсистемой и `BaseParser`. Автоматически классифицирует источник, выбирает стратегию и извлекает данные без ручной настройки.
+
+```python
+from src.bp1.adaptive import AdaptiveBridgeParser
+
+parser = AdaptiveBridgeParser(headless=True, timeout=60000)
+response = await parser.parse(
+    "https://lenta.ru/",
+    source_name="lenta.ru",     # реальное имя источника для кэша классификации
+    search_task_id=1,
+    competitor="ООО АРХИТЕХ ИИ",
+    trigger="Архитектура",
+)
+```
+
+## Adaptive — адаптивный сбор данных
+
+Подробное описание в [adaptive/README.md](src/bp1/adaptive/README.md).
+
+### Ключевые возможности
+
+- **Классификация источников** — [`SourceClassifier`](src/bp1/adaptive/strategies/classifier.py:168) определяет тип сайта (новостной, реестр, API, SPA), антибот-защиту (Cloudflare, DataDome, QRATOR, Akamai, Incapsula), CAPTCHA (reCAPTCHA, hCaptcha), SPA-фреймворки (React, Vue, Nuxt, Next.js, Angular) и рекомендует стратегию.
+- **Иерархия стратегий с деградацией** — [`AgenticOrchestrator`](src/bp1/adaptive/strategies/orchestrator.py:245) пробует стратегии по порядку `FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL`. При ошибке или контенте < 300 символов переходит к следующей.
+- **Интеллектуальный парсинг** — [`AdaptiveParser`](src/bp1/adaptive/processing/parser.py:206) извлекает реальные CSS-селекторы и схему данных через LLM, кэширует адаптеры в Redis (TTL 7 дней).
+- **Чанкирование больших страниц** — `HtmlCleaner → StructuredChunker → параллельное извлечение → ResultMerger` для HTML, не помещающегося в контекст LLM.
+- **5 уровней контроля качества** — [`DataQualityGate`](src/bp1/adaptive/core/quality.py): SCHEMA, TYPES, BUSINESS, VOLUME, CONSISTENCY с Quarantine-паттерном.
+- **HITL для CAPTCHA** — [`HITLManager`](src/bp1/adaptive/strategies/hitl.py) запускает видимый браузер, детектирует момент решения CAPTCHA и кэширует cookies в профиль.
+- **Регистрация источников** — [`SourceRegistrationService`](src/bp1/adaptive/integration/sources.py:302) по ссылке нормализует адрес, классифицирует сайт, добавляет `Source` в БД и кэширует классификацию.
+- **Source-aware выбор поискового параметра** — для гос. источников (реестры) поиск по ИНН, для остальных — по названию конкурента.
+- **Per-source шаблоны URL** — `SearchUrlTemplateRegistry` задаёт специфичные пути поиска (например, `hh.ru → /search/vacancy?text=`), с fallback на универсальный `/search?q=`.
+- **MCP-сервер** — [`MCPServer`](src/bp1/adaptive/integration/mcp_server.py:45) позволяет ИИ-агентам управлять сбором (классификация, парсинг, кэш, список стратегий).
+
+### Адаптивный парсинг из кода
+
+```python
+import asyncio
+from src.bp1.adaptive import AdaptiveParser
+
+async def main():
+    parser = AdaptiveParser(headless=True, timeout=60000)
+    result = await parser.parse(
+        url="https://lenta.ru/",
+        source_name="lenta.ru",
+        competitor="ООО АРХИТЕХ ИИ",
+        trigger="Архитектура",
+    )
+    print(result.status, result.items, result.strategy_used)
+
+asyncio.run(main())
+```
+
+### Регистрация собственной стратегии
+
+```python
+from src.bp1.adaptive import AgenticOrchestrator, StrategyType
+from src.bp1.adaptive.strategies.orchestrator import BaseStrategy
+from src.bp1.adaptive.schemas import StrategyResult
+
+class MyStrategy(BaseStrategy):
+    strategy_type = StrategyType.CRAWL4AI
+
+    async def fetch(self, url: str, **kwargs) -> StrategyResult:
+        return StrategyResult(
+            strategy=self.strategy_type,
+            success=True,
+            data='<html>...</html>',
+            content_length=1000,
+        )
+
+orch = AgenticOrchestrator()
+orch.register_strategy(MyStrategy.strategy_type, MyStrategy())
+```
 
 ## Stealth — модуль антиобнаружения
 
@@ -247,38 +398,100 @@ result = await parser.parse(
 
 Модуль хранения сырых данных в JSONB-формате. Подробнее в [raw_storage/README.md](src/bp1/raw_storage/README.md).
 
-**Структура JSONB-файла:**
-```json
-{
-  "meta": {
-    "search_task_id": 1,
-    "source": "fedresurs.ru",
-    "competitor": "ООО СИТИГРАД",
-    "trigger": "6318034066",
-    "source_request_url": "https://fedresurs.ru/...",
-    "fetched_at": "2026-07-25T23:42:59+05:00",
-    "status": "pending"
-  },
-  "items": [
-    {
-      "url": "https://fedresurs.ru/company/...",
-      "title": "Недостоверность сведений",
-      "text": "<!DOCTYPE html><html>...</html>",
-      "published_at": "07.07.2026",
-      "region": null,
-      "media_name": null,
-      "extra": {}
-    }
-  ]
-}
+### Ключевые компоненты
+
+- **`RawDataRepository`** — репозиторий для CRUD-операций: `save()`, `find_by_id()`, `find_by_trigger()`, `find_pending()`, `update_status()`, `find_by_prefix()`, `delete()`. Поддерживает дедупликацию через `BaseDeduplicator`.
+- **`StorageFactory`** — фабрика бэкендов: `create(backend_type)` и `register(name, backend_class)`. Доступен бэкенд `disk`.
+- **`DiskBackend`** — JSONB-файлы на диске.
+
+```python
+import asyncio
+from src.bp1.raw_storage import RawDataRepository, RawDataFile, StorageFactory
+
+async def main():
+    storage = StorageFactory.create('disk', base_dir='./data/raw')
+    repo = RawDataRepository(storage_backend=storage)
+
+    file = RawDataFile(...)  # модель с meta + items
+    path = await repo.save(file)
+    print('Saved:', path)
+
+    pending = await repo.find_pending()
+    for f in pending:
+        await repo.update_status(f.raw_id, 'processed')
+
+asyncio.run(main())
 ```
 
 ## Хэширование и дедупликация
 
 BP-1 использует двухуровневую систему дедупликации:
 
-1. **Redis** — хранит последний хэш для каждой `search_task_id`. При совпадении хэша строка RawItem не создаётся.
-2. **MD5 от items** — хэш считается только от содержимого `items` (без `meta` и `file_path`), что позволяет детектировать смысловые изменения данных.
+1. **Redis** — хранит последний хэш для каждой `search_task_id`. При совпадении хэша строка RawItem не создаётся, обновляется только `updated_at`.
+2. **MD5 от items** — [`calculate_content_hash()`](src/bp1/tasks.py:28) считает хэш только от содержимого `items` (без `meta` и `file_path`), что позволяет детектировать смысловые изменения данных. Из `items` исключается поле `extra.file_path`.
+
+## Функции и методы пакета (справочник)
+
+### `storage.py`
+
+| Класс / функция | Назначение |
+|-----------------|-----------|
+| [`RawDataService`](src/bp1/storage.py) | Единая персистентность: `persist()`, `persist_error()`, `save_raw_item()`, `update_timestamp()` |
+| [`calculate_content_hash()`](src/bp1/storage.py:46) | MD5-хэш от канонического JSON `items` (без `meta` и `file_path`) |
+| [`copy_html_file()`](src/bp1/storage.py) | Копирование HTML с retry (Windows PermissionError fallback) |
+| [`save_raw_json()`](src/bp1/storage.py) | Сохранение raw JSON на диск |
+| [`ensure_directories()`](src/bp1/storage.py:144) | Создание директорий для хранения данных |
+
+### `tasks.py`
+
+| Функция | Назначение |
+|---------|-----------|
+| [`get_search_task_config()`](src/bp1/tasks.py) | Получение конфигурации задачи из БД (competitor, source, trigger, is_active) |
+| [`get_parser_for_source()`](src/bp1/tasks.py) | Получение парсера из `ParserFactory` |
+| [`_build_parse_kwargs()`](src/bp1/tasks.py) | Формирование URL поиска и kwargs для `parse()` по конфигурации |
+| [`run_parser_async()`](src/bp1/tasks.py) | Основная асинхронная задача парсинга |
+
+### `runner.py`
+
+| Класс / функция | Назначение |
+|-----------------|-----------|
+| [`BPRunner`](src/bp1/runner.py:37) | Оркестратор: `run_all()`, `_get_active_tasks()`, `_get_tasks_by_ids()`, `_run_single_task()` |
+| [`RunMode`](src/bp1/runner.py:173) | Константы режимов `DIRECT` / `CELERY` |
+| [`run_pipeline()`](src/bp1/runner.py:180) | Асинхронная точка входа пайплайна |
+| [`run_pipeline_sync()`](src/bp1/runner.py:275) | Синхронная обёртка |
+
+### `base_parser.py`
+
+| Класс / функция | Назначение |
+|-----------------|-----------|
+| [`ParsedItem`](src/bp1/base_parser.py:18) | Одна единица информации |
+| [`ParsedResponse`](src/bp1/base_parser.py:64) | Результат одного похода на URL |
+| [`BaseParser`](src/bp1/base_parser.py:115) | Абстрактный контракт парсера |
+| [`ParserFactory`](src/bp1/base_parser.py:193) | Фабрика: `register()`, `get_parser()`, `list_sources()` |
+
+### `adaptive/`
+
+| Класс | Назначение |
+|-------|-----------|
+| `AdaptiveRunner` | Единая точка входа: `run_task()`, `run_all()`, `run_source_competitor()` |
+| `AdaptiveBridgeParser` | Мост между Adaptive и `BaseParser` |
+| `AdaptiveParser` | Интеллектуальный парсинг (LLM + селекторы + кэш) |
+| `SourceClassifier` | Классификация источников и выбор стратегии |
+| `AgenticOrchestrator` | Оркестрация стратегий с деградацией |
+| `LLMClient` / `AIAgent` | Работа с LLM |
+| `UnifiedCache` | Единый кэш (адаптеры — Redis, профили/HTML — диск) |
+| `DataQualityGate` | 5 уровней контроля качества |
+| `HITLManager` / `ProfileManager` | Решение CAPTCHA человеком + профили браузера |
+| `SourceRegistrationService` | Регистрация источников по ссылке |
+| `MCPServer` / `run_mcp_server` | MCP-интерфейс для ИИ-агентов |
+
+### `raw_storage/`
+
+| Класс | Назначение |
+|-------|-----------|
+| `RawDataRepository` | Репозиторий JSONB-файлов (CRUD + дедупликация) |
+| `StorageFactory` | Фабрика бэкендов (`create`, `register`) |
+| `DiskBackend` | JSONB-хранение на диске |
 
 ## Тестирование
 
@@ -290,6 +503,9 @@ pytest kodik/tests/bp1/ -v
 
 # Только fedresurs
 pytest kodik/tests/bp1/fedresurs/ -v
+
+# Только adaptive
+pytest kodik/tests/bp1/adaptive/ -v
 
 # С coverage
 pytest kodik/tests/bp1/ --cov=src.bp1 -v
@@ -306,6 +522,23 @@ pytest kodik/tests/bp1/ --cov=src.bp1 -v
 | `schemas.py` | [`test_schemas.py`](kodik/tests/bp1/fedresurs/test_schemas.py) | SearchRequest, SearchResult, ProxyConfig |
 | `utils.py` | [`test_utils.py`](kodik/tests/bp1/fedresurs/test_utils.py) | validate_inn, format_proxy_string, generate_filename |
 | `exceptions.py` | [`test_exceptions.py`](kodik/tests/bp1/fedresurs/test_exceptions.py) | Иерархия исключений |
+
+### Покрытие тестами (adaptive)
+
+| Файл тестов | Что тестируется |
+|-------------|-----------------|
+| [`test_classifier.py`](kodik/tests/bp1/adaptive/test_classifier.py) | SourceClassifier — детекция типов, антибот, CAPTCHA, стратегии |
+| [`test_orchestrator.py`](kodik/tests/bp1/adaptive/test_orchestrator.py) | AgenticOrchestrator — деградация стратегий |
+| [`test_engines.py`](kodik/tests/bp1/adaptive/test_engines.py) | Crawl4AIStrategy, StealthStrategy, HITLStrategy |
+| [`test_hitl.py`](kodik/tests/bp1/adaptive/test_hitl.py) | HITLManager, ProfileManager |
+| [`test_parser.py`](kodik/tests/bp1/adaptive/test_parser.py) | AdaptiveParser — извлечение, селекторы, кэш |
+| [`test_chunking.py`](kodik/tests/bp1/adaptive/test_chunking.py) | StructuredChunker, HtmlCleaner, ResultMerger |
+| [`test_quality.py`](kodik/tests/bp1/adaptive/test_quality.py) | DataQualityGate — уровни качества, Quarantine |
+| [`test_llm.py`](kodik/tests/bp1/adaptive/test_llm.py) | LLMClient, AIAgent |
+| [`test_llm_smoke.py`](kodik/tests/bp1/adaptive/test_llm_smoke.py) | Smoke-тест LLM-модуля |
+| [`test_mcp.py`](kodik/tests/bp1/adaptive/test_mcp.py) | MCPServer — JSON-RPC инструменты |
+| [`test_integration.py`](kodik/tests/bp1/adaptive/test_integration.py) | AdaptiveRunner, AdaptiveBridgeParser |
+| [`test_source_registration.py`](kodik/tests/bp1/adaptive/test_source_registration.py) | SourceRegistrationService, нормализация URL |
 
 ### Интеграционный тест
 
@@ -330,6 +563,9 @@ REDIS_URL=redis://localhost:6379/0
 # Директории для хранения данных
 BP1_HTML_DIR=src/bp1/data/html_pages
 BP1_RAW_DIR=src/bp1/data/raw
+
+# LLM (для адаптивного извлечения)
+# OPENAI_API_KEY=sk-...
 ```
 
 ### Инициализация данных
@@ -352,13 +588,12 @@ python -m core.scripts.stages.bp1
 - **Pydantic 2.x** — модели данных
 - **SQLAlchemy 2.x** (asyncio) — ORM
 - **aiofiles** — асинхронная работа с файлами
+- **BeautifulSoup4** — парсинг HTML (адаптивный движок)
+- **crawl4ai** (опционально) — AI-краулинг для `CRAWL4AI`-стратегии
+- **LLM-провайдер** (опционально) — для интеллектуального извлечения селекторов и данных
 
 ## План развития
 
-- [ ] Реализовать RPA-парсер для kad.arbitr.ru (в процессе)
-- [ ] Реализовать API-парсер для hh.ru
-- [ ] Реализовать RPA-парсер для fips.ru
-- [ ] Реализовать парсер для Google News
-- [ ] Реализовать парсер для VK API
-- [ ] Реализовать S3-бэкенд для raw_storage
-- [ ] Добавить интеграционные тесты для всех адаптеров
+- [x] Реализовать RPA-парсер для kad.arbitr.ru
+- [x] Реализовать адаптивный движок (классификация, стратегии, LLM, HITL, MCP)
+- [x] Интегрировать адаптивный движок с BP-1 пайплайном

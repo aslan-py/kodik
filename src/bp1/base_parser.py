@@ -121,6 +121,12 @@ class BaseParser(ABC):
     - get_parser_type(): тип парсера (api/rpa)
     """
 
+    # Параметры kwargs, обязательные для parse(). Специализированные
+    # RPA-парсеры (например, fedresurs) переопределяют этот атрибут, чтобы
+    # вызвавший код мог провалидировать предусловия до запуска браузера,
+    # не допуская провалов вроде Frame.fill() без value из-за отсутствия ИНН.
+    required_kwargs: ClassVar[tuple[str, ...]] = ()
+
     @abstractmethod
     async def parse(self, url: str, **kwargs) -> ParsedResponse:
         """

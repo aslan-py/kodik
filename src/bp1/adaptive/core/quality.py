@@ -29,6 +29,59 @@ logger = logging.getLogger(__name__)
 # Обязательные поля для элемента данных.
 _REQUIRED_FIELDS = ('url', 'title')
 
+# Query-параметры, которые считаются мусорными и отбрасываются при
+# нормализации URL (см. _normalize_url_key). Обычно это трекеры, служебные
+# параметры навигации (hh.ru hhtmFrom и т.п.), не влияющие на уникальность.
+_NOISE_QUERY_PARAMS = frozenset(
+    {
+        'hhtmFrom',
+        'hhtmSource',
+        'utm_source',
+        'utm_medium',
+        'utm_campaign',
+        'utm_term',
+        'utm_content',
+    }
+)
+
+
+def _normalize_url_key(value: str) -> str | None:
+    """Нормализует URL до стабильного ключа для дедупликации.
+
+    Убирает:
+    - фрагмент ``#...`` (якорь);
+    - мусорные query-параметры (``hhtmFrom``, ``utm_*`` и др.);
+    - завершающий слэш.
+
+    Возвращает ``None`` для «мусорных» ключей (пустых или корневых ``/``),
+    которые не должны участвовать в проверке дубликатов.
+    """
+    if not value or not isinstance(value, str):
+        return None
+
+    # Отбрасываем фрагмент (якорь).
+    url = value.split('#', 1)[0]
+
+    # Убираем мусорные query-параметры, сохраняя остальные.
+    if '?' in url:
+        base, _, query = url.partition('?')
+        kept = [
+            part
+            for part in query.split('&')
+            if part and part.split('=', 1)[0] not in _NOISE_QUERY_PARAMS
+        ]
+        query = '&'.join(kept)
+        url = base if not query else f'{base}?{query}'
+
+    # Убираем завершающий слэш (кроме корня).
+    url = url.rstrip('/')
+
+    # Мусор: пусто или корень.
+    if not url or url == '/':
+        return None
+
+    return url
+
 
 class DataQualityGate:
     """
@@ -209,12 +262,18 @@ class DataQualityGate:
         items: list[dict[str, Any]],
         key_field: str = 'url',
     ) -> QualityGateReport:
-        """Уровень 5: Проверка на дубликаты."""
+        """Уровень 5: Проверка на дубликаты.
+
+        URL нормализуется перед сравнением (``_normalize_url_key``):
+        отбрасываются якоря, мусорные query-параметры (``hhtmFrom`` и т.п.)
+        и завершающий слэш. Пустые/корневые URL (``/``) в дедупликации
+        не участвуют.
+        """
         seen: set[str] = set()
         duplicates: list[str] = []
 
         for idx, item in enumerate(items):
-            key = item.get(key_field)
+            key = _normalize_url_key(item.get(key_field))
             if key is None:
                 continue
             if key in seen:

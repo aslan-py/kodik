@@ -61,6 +61,73 @@ CLASSIFIER_SPA_HTML = '<html><body><div id="app"></div></body></html>'
 
 CLASSIFIER_COMPLEXITY_THRESHOLD = 0.5
 
+# HTML с schema.org разметкой товара (e-commerce).
+CLASSIFIER_E_COMMERCE_HTML = (
+    '<html><head>'
+    '<meta property="og:type" content="product">'
+    '</head><body>'
+    '<div itemscope itemtype="https://schema.org/Product">'
+    '<span class="price">1000</span>'
+    '</div>'
+    '</body></html>'
+)
+
+# HTML с schema.org разметкой вакансии.
+CLASSIFIER_JOB_HTML = (
+    '<html><body>'
+    '<div itemscope itemtype="https://schema.org/JobPosting">'
+    '<span class="title">Вакансия</span>'
+    '</div>'
+    '</body></html>'
+)
+
+# HTML с корзиной (e-commerce по CSS).
+CLASSIFIER_CART_HTML = (
+    '<html><body><div class="shopping-cart">Корзина</div></body></html>'
+)
+
+# HTML с React-маркерами.
+CLASSIFIER_REACT_HTML = (
+    '<html><body><div data-reactroot><div id="app"></div></div></body></html>'
+)
+
+# HTML с Vue-маркерами.
+CLASSIFIER_VUE_HTML = (
+    '<html><body><div data-v-12345 v-if="ok"></div></body></html>'
+)
+
+# HTML с Angular-маркерами.
+CLASSIFIER_ANGULAR_HTML = '<html><body><div ng-app="app"></div></body></html>'
+
+# HTML с Bootstrap CSS.
+CLASSIFIER_BOOTSTRAP_HTML = (
+    '<html><head><link href="bootstrap.min.css"></head><body>'
+    '<button class="btn-primary">Go</button></body></html>'
+)
+
+# HTML с Tailwind CSS.
+CLASSIFIER_TAILWIND_HTML = (
+    '<html><head><link href="tailwindcss"></head>'
+    '<body><div class="hover:bg-red"></div></body></html>'
+)
+
+# HTML с Яндекс.Метрикой.
+CLASSIFIER_METRIKA_HTML = (
+    '<html><head><script>(function(m,t,e,r,s){yandex_metrika}'
+    ')</script></head></html>'
+)
+
+# HTML-страница с вакансиями для extended-классификации.
+CLASSIFIER_JOB_PAGE_HTML = (
+    '<html><body>'
+    '<div class="vacancy">'
+    '<h2 class="title">Разработчик</h2>'
+    '<span class="salary">200000</span>'
+    '</div>'
+    '<div class="pagination"><a href="?page=2">Далее</a></div>'
+    '</body></html>'
+)
+
 # ---------------------------------------------------------------------------
 # test_engines
 # ---------------------------------------------------------------------------
@@ -150,8 +217,25 @@ SRC_INVALID_REF = 'не ссылка'
 SRC_EMPTY = ''
 SRC_WHITESPACE = '   '
 SEARCH_QUERY = 'ИИ'
-SEARCH_URL = 'https://lenta.ru/search?q=ИИ'
+# Кодированный URL поиска: query-параметр percent-кодируется (quote_plus),
+# кириллица ИИ -> %D0%98%D0%98.
+SEARCH_URL = 'https://lenta.ru/search?q=%D0%98%D0%98'
 REDIS_CLASSIFICATION_KEY = 'bp1:classification:lenta.ru'
+
+# --- test_source_registration: SearchParamResolver / URL-шаблоны ---
+# ИНН конкурента (10 цифр — юридическое лицо).
+COMPETITOR_INN = '9718283930'
+# Название конкурента для не-госсайтов (поиск по competitor.name).
+SEARCH_URL_HH_QUERY = 'ООО АРХИТЕХ ИИ'
+# hh.ru ищет по названию без кавычек: text=ООО АРХИТЕХ ИИ.
+# quote_plus кодирует пробелы как '+'.
+SEARCH_URL_HH = (
+    'https://hh.ru/search/vacancy?text=%D0%9E%D0%9E%D0%9E+'
+    '%D0%90%D0%A0%D0%A5%D0%98%D0%A2%D0%95%D0%A5+%D0%98%D0%98'
+)
+SEARCH_URL_FEDRESURS_INN = 'https://fedresurs.ru/search?q=9718283930'
+SRC_HH_HOST = 'hh.ru'
+SRC_ZH = 'zakupki.gov.ru'
 
 # ---------------------------------------------------------------------------
 # test_mcp

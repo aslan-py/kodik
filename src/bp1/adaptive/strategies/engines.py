@@ -117,9 +117,12 @@ class StealthStrategy(BaseStrategy):
                     headless=self._headless,
                     args=get_launch_args(headless=self._headless),
                 )
-                context = await browser.new_context(
-                    **get_context_config(),
-                )
+                context_config = get_context_config()
+                # Игнорируем невалидные/самоподписанные TLS-сертификаты
+                # (zakupki.gov.ru и др. гос. порталы отдают
+                # ERR_CERT_AUTHORITY_INVALID).
+                context_config.setdefault('ignore_https_errors', True)
+                context = await browser.new_context(**context_config)
                 await apply_stealth(context)
                 page = await context.new_page()
                 response = await page.goto(url, timeout=self._timeout_ms)
@@ -190,6 +193,20 @@ class HITLStrategy(BaseStrategy):
                 # После решения CAPTCHA передаём HTML страницы дальше
                 # в пайплайн (раньше возвращался пустой data).
                 html = response.html or ''
+                if len(html) < MIN_CONTENT_LENGTH:
+                    # Профиль найден, но страница не загрузилась (например,
+                    # TLS-ошибка при использовании закэшированных cookies).
+                    # Возвращаем осмысленную ошибку, а не ложный успех.
+                    return StrategyResult(
+                        strategy=self.strategy_type,
+                        success=False,
+                        error=(
+                            'HITL profile found but page returned empty '
+                            'content (likely TLS/network issue)'
+                        ),
+                        content_length=len(html),
+                        elapsed_ms=elapsed,
+                    )
                 return StrategyResult(
                     strategy=self.strategy_type,
                     success=len(html) >= MIN_CONTENT_LENGTH,

@@ -7,6 +7,7 @@ import pytest
 
 from src.bp1.adaptive.processing.llm import AIAgent, LLMClient, _default_model
 from src.bp1.adaptive.schemas import (
+    SiteType,
     SourceClassification,
     SourceType,
     StrategyType,
@@ -365,3 +366,45 @@ async def test_agent_analyze_result_real_path(monkeypatch):
 
     assert result['recommendation'] == RECOMMENDATION_IMPROVE
     assert result['confidence'] == LLM_CONFIDENCE_HIGH
+
+
+@pytest.mark.asyncio
+async def test_classify_with_llm_heuristic_fallback():
+    """LLMClient без конфигурации использует эвристический fallback."""
+    client = LLMClient()
+    result = await client.classify_with_llm(HTML_EMPTY, EXAMPLE_SOURCE_NAME)
+
+    assert result.source_name == EXAMPLE_SOURCE_NAME
+    assert result.site_type in SiteType
+    assert result.complexity_score >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_classify_with_llm_real_path(monkeypatch):
+    """LLMClient с ключом API возвращает классификацию из ответа LLM."""
+    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    _install_fake_openai(
+        monkeypatch,
+        '{'
+        '"site_type": "e_commerce", '
+        '"page_subtype": "detail", '
+        '"confidence": 0.9, '
+        '"business_features": {"has_payment": true, "has_cart": true}, '
+        '"technical_features": {"is_spa": true, "frameworks": ["react"]}, '
+        '"complexity_score": 0.6, '
+        '"recommended_strategy": "BROWSER"'
+        '}',
+    )
+
+    client = LLMClient()
+    result = await client.classify_with_llm(
+        '<html><body>магазин</body></html>', 'https://shop.example'
+    )
+
+    assert result.site_type == SiteType.E_COMMERCE
+    assert result.page_subtype.value == 'detail'
+    assert result.technical_features.is_spa is True
+    assert result.technical_features.frameworks == ['react']
+    assert result.business_features.has_payment is True
+    assert result.complexity_score == 0.6
+    assert result.recommended_strategy == 'BROWSER'

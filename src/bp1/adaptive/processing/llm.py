@@ -27,10 +27,22 @@ import asyncio
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
-from ..schemas import AdapterConfig, SourceClassification, StrategyType
+from bs4 import BeautifulSoup
+
+from ..schemas import (
+    AdapterConfig,
+    BusinessFeatures,
+    ExtendedSiteClassification,
+    PageSubType,
+    SiteType,
+    SourceClassification,
+    StrategyType,
+    TechnicalFeatures,
+)
 from .chunker import Chunk, StructuredChunker
 from .html_cleaner import HtmlCleaner
 from .merger import ResultMerger
@@ -56,6 +68,159 @@ _DEFAULT_MAX_CHUNK_SIZE = 8000
 _DEFAULT_OVERLAP_SIZE = 500
 _DEFAULT_MAX_CHUNKS = 10
 _DEFAULT_PARALLEL_WORKERS = 5
+
+
+# Промпт для детальной классификации сайта (расширенный).
+SITE_CLASSIFICATION_PROMPT_V2 = """
+Ты — эксперт по анализу веб-страниц с 10-летним опытом.
+
+## Входные данные:
+- URL: {url}
+- Заголовок страницы: {title}
+- Мета-описание: {description}
+- HTML (очищенный, первые 12000 символов): {html}
+
+## Задачи:
+
+### 1. Определи основной тип сайта (выбери ОДИН):
+- `news`: новостной портал
+- `job_board`: доска вакансий (hh.ru, superjob)
+- `marketplace`: маркетплейс (множество продавцов)
+- `catalog`: каталог товаров
+- `e_commerce`: интернет-магазин (товары, корзина, заказ)
+- `classifieds`: доска объявлений (Avito, Youla)
+- `review_aggregator`: агрегатор отзывов
+- `question_answer`: вопросы-ответы
+- `wiki`: вики-энциклопедия
+- `education`: образовательная платформа
+- `finance`: финансовый портал
+- `real_estate`: недвижимость
+- `legal`: правовая система
+- `media`: медиа-портал (видео, подкасты)
+- `forum`: форум
+- `social`: социальная сеть
+- `government`: государственный реестр
+- `blog`: блог
+- `documentation`: документация
+- `other`: другой
+
+### 2. Определи подтип страницы (выбери ОДИН):
+`home`, `search`, `list`, `detail`, `category`, `profile`, `archive`,
+`cart`, `checkout`, `login`, `register`, `about`, `contact`, `other`
+
+### 3. Определи бизнес-характеристики (true/false):
+`has_payment`, `has_delivery`, `has_reviews`, `has_rating`,
+`has_user_accounts`, `has_cart`, `has_search`, `has_filters`,
+`has_pagination`, `has_comments`, `has_sharing`
+
+### 4. Определи технические характеристики:
+- `frameworks`: react, vue, angular, nextjs, nuxt
+- `css_frameworks`: bootstrap, tailwind, material, semantic_ui
+- `has_antibot`: cloudflare, datadome, qrator, akamai
+- `has_captcha`: reCAPTCHA, hCaptcha
+- `is_spa`: одностраничное приложение
+- `has_mobile_version`: мобильная версия
+
+### 5. Оцени сложность парсинга (0.0-1.0):
+- 0.0-0.3: простой статический сайт
+- 0.3-0.6: динамический сайт с JS
+- 0.6-0.8: SPA с антибот-защитой
+- 0.8-1.0: сложный SPA с CAPTCHA и сильной защитой
+
+## Ответь ТОЛЬКО в формате JSON:
+
+{{
+    "site_type": "news|e_commerce|...",
+    "page_subtype": "home|search|list|...",
+    "confidence": 0.95,
+    "business_features": {{
+        "has_payment": true,
+        "has_delivery": false,
+        "has_reviews": true,
+        "has_rating": true,
+        "has_user_accounts": true,
+        "has_cart": false,
+        "has_search": true,
+        "has_filters": false,
+        "has_pagination": true,
+        "has_comments": false,
+        "has_sharing": true
+    }},
+    "technical_features": {{
+        "frameworks": ["react", "vue"],
+        "css_frameworks": ["tailwind"],
+        "has_antibot": false,
+        "has_captcha": false,
+        "is_spa": true,
+        "has_mobile_version": true
+    }},
+    "complexity_score": 0.0,
+    "recommended_strategy": "FAST|BROWSER|STEALTH|HITL"
+}}
+"""
+
+# Промпт для извлечения селекторов (расширенный).
+SELECTOR_EXTRACTION_PROMPT_V2 = """
+Ты — эксперт по извлечению данных из HTML с 8-летним опытом.
+
+## Контекст:
+- URL: {url}
+- Тип сайта: {site_type}
+- Конкурент: {competitor}
+- Ожидаемые поля: {expected_fields}
+
+## HTML (первые 12000 символов):
+{html}
+
+## Задача:
+Найди CSS-селекторы для извлечения данных из HTML-страницы.
+
+### 1. Найди контейнер элементов
+- Определи, в каком контейнере находятся элементы (новости, вакансии, товары)
+- Укажи селектор, который выбирает ВСЕ элементы на странице
+- Если несколько типов элементов — укажи все возможные селекторы
+
+### 2. Для каждого поля найди селектор
+- Приоритет: data-атрибуты > id > class > tag
+- Указывай несколько вариантов через запятую
+- Если поле не найдено — оставь пустую строку
+
+### 3. Найди пагинацию
+- Селектор кнопки "Далее" или "Следующая"
+- Паттерн URL для подстановки номера страницы
+
+## Ответь ТОЛЬКО в формате JSON:
+
+{{
+    "selectors": {{
+        "container": "",
+        "title": "",
+        "text": "",
+        "published_at": "",
+        "region": "",
+        "media_name": "",
+        "url": "a[href]"
+    }},
+    "schema": {{}},
+    "pagination": {{
+        "enabled": false,
+        "selector": "",
+        "url_pattern": "",
+        "max_pages": 1
+    }},
+    "confidence": 0.85,
+    "metadata": {{
+        "items_per_page": 0,
+        "has_infinite_scroll": false,
+        "load_more_selector": ""
+    }}
+}}
+
+## Правила:
+1. Селекторы должны быть специфичными и устойчивыми к изменениям
+2. Используй data-атрибуты, если они есть (более стабильны)
+3. Confidence — уверенность в извлечении (0.0-1.0)
+"""
 
 
 def _default_model() -> str:
@@ -140,6 +305,41 @@ class LLMClient(_BaseLLMClient):
     работал без внешних сервисов.
     """
 
+    async def extract_article_text(self, content: str) -> str | None:
+        """Извлекает основной текст статьи из очищенного HTML через LLM.
+
+        Используется глубоким фетчем (каскад CSS → LLM → сниппет) для
+        получения полного текста новости со страницы статьи. Если LLM не
+        настроен или запрос не удался — возвращает ``None`` (передаёт
+        управление следующему способу извлечения).
+
+        Args:
+            content: Очищенный HTML статьи (см. ``HtmlCleaner.clean``).
+
+        Returns:
+            Полный текст статьи или ``None`` при недоступности LLM.
+        """
+        if not _has_llm_config():
+            return None
+        try:
+            client = self._get_client()
+            prompt = (
+                'Извлеки основной текст новостной статьи из приведённого '
+                'HTML. Исключи меню, навигацию, рекламу, футер и «похожие '
+                'новости». Верни ТОЛЬКО текст статьи без пояснений.\n\n'
+                f'HTML:\n{content[: self._max_chunk_size]}'
+            )
+            response = await client.chat.completions.create(
+                model=self._model,
+                messages=[{'role': 'user', 'content': prompt}],
+                temperature=0.0,
+            )
+            text = response.choices[0].message.content
+            return (text or '').strip() or None
+        except Exception as e:
+            self._logger.warning('Ошибка LLM-извлечения статьи: %s', e)
+            return None
+
     def __init__(
         self,
         model: str | None = None,
@@ -206,6 +406,178 @@ class LLMClient(_BaseLLMClient):
         except Exception as e:
             self._logger.warning('Ошибка LLM-анализа структуры: %s', e)
             return self._heuristic_analyze(html, expected_fields)
+
+    async def classify_with_llm(
+        self,
+        html: str,
+        url: str,
+        headers: dict[str, Any] | None = None,
+    ) -> ExtendedSiteClassification:
+        """Расширенная классификация сайта через LLM.
+
+        Определяет ``SiteType``, подтип страницы, бизнес- и технические
+        характеристики. Если LLM не настроен или произошла ошибка —
+        использует эвристический fallback.
+        """
+        if not _has_llm_config():
+            return self._heuristic_classify(html, url)
+
+        try:
+            # Очистка HTML перед передачей в LLM.
+            cleaned = self._cleaner.clean(html)
+            content = cleaned.get('content', '') or html
+
+            # Извлечение заголовка и описания.
+            soup = BeautifulSoup(content, 'html.parser')
+            title_node = soup.find('title')
+            title = title_node.get_text(strip=True) if title_node else ''
+            meta_desc = soup.find('meta', attrs={'name': 'description'})
+            description = meta_desc.get('content', '') if meta_desc else ''
+
+            prompt = self._build_classification_prompt(
+                url, title, description, content
+            )
+
+            client = self._get_client()
+            response = await client.chat.completions.create(
+                model=self._model,
+                messages=[{'role': 'user', 'content': prompt}],
+                temperature=0.0,
+                max_tokens=2048,
+            )
+            raw = response.choices[0].message.content
+            data = self._parse_json(raw)
+            return self._to_extended_classification(
+                data, html, url, headers or {}
+            )
+        except Exception as e:
+            self._logger.warning('Ошибка LLM-классификации: %s', e)
+            return self._heuristic_classify(html, url)
+
+    def _build_classification_prompt(
+        self,
+        url: str,
+        title: str,
+        description: str,
+        html: str,
+    ) -> str:
+        """Строит промпт детальной классификации сайта."""
+        return SITE_CLASSIFICATION_PROMPT_V2.format(
+            url=url,
+            title=title,
+            description=description,
+            html=html[:12000],
+        )
+
+    def _to_extended_classification(
+        self,
+        data: dict[str, Any],
+        html: str,
+        url: str,
+        headers: dict[str, Any],
+    ) -> ExtendedSiteClassification:
+        """Формирует ``ExtendedSiteClassification`` из JSON-ответа LLM."""
+        site_type_raw = (data.get('site_type') or 'other').lower()
+        try:
+            site_type = SiteType(site_type_raw)
+        except ValueError:
+            site_type = SiteType.OTHER
+
+        page_raw = (data.get('page_subtype') or 'other').lower()
+        try:
+            page_subtype = PageSubType(page_raw)
+        except ValueError:
+            page_subtype = PageSubType.OTHER
+
+        business_data = data.get('business_features') or {}
+        technical_data = data.get('technical_features') or {}
+
+        technical = TechnicalFeatures(
+            frameworks=technical_data.get('frameworks') or [],
+            css_frameworks=technical_data.get('css_frameworks') or [],
+            has_antibot=bool(technical_data.get('has_antibot', False)),
+            has_captcha=bool(technical_data.get('has_captcha', False)),
+            is_spa=bool(technical_data.get('is_spa', False)),
+            has_mobile_version=bool(
+                technical_data.get('has_mobile_version', False)
+            ),
+        )
+
+        complexity = data.get('complexity_score', 0.0)
+        if not isinstance(complexity, int | float):
+            complexity = 0.0
+        complexity = max(0.0, min(1.0, float(complexity)))
+
+        confidence = data.get('confidence', 0.5)
+        if not isinstance(confidence, int | float):
+            confidence = 0.5
+        confidence = max(0.0, min(1.0, float(confidence)))
+
+        strategy = (data.get('recommended_strategy') or 'FAST').upper()
+
+        return ExtendedSiteClassification(
+            source_name=url,
+            site_type=site_type,
+            page_subtype=page_subtype,
+            confidence=confidence,
+            business_features=BusinessFeatures(
+                **{
+                    k: bool(v)
+                    for k, v in (business_data or {}).items()
+                    if k in BusinessFeatures.model_fields
+                }
+            ),
+            technical_features=technical,
+            complexity_score=complexity,
+            recommended_strategy=strategy,
+            metadata={
+                'title': data.get('metadata', {}).get('title', '')
+                if isinstance(data.get('metadata'), dict)
+                else '',
+                'url': url,
+                'headers_detected': bool(headers),
+            },
+        )
+
+    def _heuristic_classify(
+        self,
+        html: str,
+        url: str,
+    ) -> ExtendedSiteClassification:
+        """Эвристическая классификация (fallback без LLM)."""
+        soup = BeautifulSoup(html, 'html.parser')
+
+        site_type = SiteType.OTHER
+        for item in soup.find_all(
+            attrs={'itemtype': re.compile(r'schema\.org')}
+        ):
+            item_str = str(item).lower()
+            if 'product' in item_str:
+                site_type = SiteType.E_COMMERCE
+            elif 'jobposting' in item_str:
+                site_type = SiteType.JOB_BOARD
+            elif 'article' in item_str:
+                site_type = SiteType.NEWS
+                break
+
+        if site_type == SiteType.OTHER and any(
+            soup.select_one(sel)
+            for sel in ('.cart', '#cart', '.basket', '.shopping-cart')
+        ):
+            site_type = SiteType.E_COMMERCE
+
+        technical = TechnicalFeatures(
+            is_spa='id="app"' in html or 'id="root"' in html,
+            has_antibot='cloudflare' in html.lower(),
+        )
+
+        return ExtendedSiteClassification(
+            source_name=url,
+            site_type=site_type,
+            confidence=0.7 if site_type != SiteType.OTHER else 0.4,
+            technical_features=technical,
+            metadata={'url': url, 'heuristic': True},
+        )
 
     async def analyze_structure_chunked(
         self,

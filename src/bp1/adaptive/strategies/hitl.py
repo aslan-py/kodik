@@ -253,7 +253,8 @@ class HITLManager:
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=False)
-                context = await browser.new_context()
+                # Игнорируем невалидные TLS-сертификаты (гос. порталы).
+                context = await browser.new_context(ignore_https_errors=True)
                 page = await context.new_page()
                 await page.goto(url, timeout=timeout_s * 1000)
 

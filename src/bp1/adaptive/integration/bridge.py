@@ -7,6 +7,7 @@ AdaptiveBridgeParser — мост между Adaptive и BP-1 BaseParser.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from src.bp1.base_parser import BaseParser, ParsedItem, ParsedResponse
@@ -66,12 +67,17 @@ class AdaptiveBridgeParser(BaseParser):
 
         items = [
             ParsedItem(
+                # Полный абсолютный URL события (иначе не работает dedup_key
+                # и media_domain в BP-2). Если ссылка относительная, она уже
+                # превращена в абсолютную при извлечении.
                 url=item.get('url', ''),
-                title=item.get('title', ''),
+                title=item.get('title', '') or item.get('text', ''),
                 text=item.get('text'),
                 published_at=item.get('published_at'),
                 region=item.get('region'),
                 media_name=item.get('media_name'),
+                # Поле trigger/competitor (для meta) не должно попадать в
+                # items — они переносятся в meta (см. ниже).
                 extra=item.get('extra', {}),
             )
             for item in result.items
@@ -79,12 +85,14 @@ class AdaptiveBridgeParser(BaseParser):
 
         meta: dict[str, Any] = {
             'search_task_id': kwargs.get('search_task_id'),
-            'source': self._source_name,
+            # Источник = реальный источник задачи, а не 'adaptive'.
+            'source': source_name,
             'competitor': competitor,
-            'trigger': trigger,
-            'source_request_url': kwargs.get('source_request_url', url),
-            'strategy_used': result.strategy_used.value,
-            'trace_id': result.trace_id,
+            'trigger': trigger or None,
+            # Ссылка на НАШ поисковый запрос (одна на всю выгрузку).
+            'source_request_url': kwargs.get('source_request_url') or url,
+            # Время съёма; в хэш НЕ включается, иначе всегда 'changed'.
+            'fetched_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
         }
 
         return ParsedResponse(meta=meta, items=items)

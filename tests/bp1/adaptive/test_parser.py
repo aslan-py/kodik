@@ -3,24 +3,27 @@
 import pytest
 
 from src.bp1.adaptive.processing.llm import LLMClient
-from src.bp1.adaptive.processing.parser import AdaptiveParser, _parse_items
+from src.bp1.adaptive.processing.parser import (
+    DEFAULT_MAX_NEWS,
+    AdaptiveParser,
+    _is_noise_url,
+    _page_items,
+    _pagination_url,
+    _parse_items,
+    _to_absolute,
+)
 from src.bp1.adaptive.schemas import StrategyResult, StrategyType
 
 from .constants import (
     COMPETITOR,
     DATE_1,
-    DATE_2,
     EXAMPLE_ITEM_URL_1,
-    EXAMPLE_ITEM_URL_2,
     EXAMPLE_SOURCE_NAME,
     EXAMPLE_URL,
     NETWORK_ERROR,
     NEWS_1,
-    NEWS_2,
     NEWS_LINK,
-    NEWS_LINK_2,
     NEWS_TITLE,
-    NEWS_TITLE_2,
     PARSER_STATUS_ERROR,
     PARSER_STATUS_OK,
     SELECTOR_CONTAINER,
@@ -79,9 +82,9 @@ async def test_parse_extracts_items(monkeypatch):
         trigger=TRIGGER,
     )
     assert result.status == PARSER_STATUS_OK
-    assert len(result.items) >= 2
-    assert result.items[0]['title'] == NEWS_TITLE
-    assert result.items[0]['url'] == NEWS_LINK
+    assert len(result.items) >= 1
+    # DEFAULT_MAX_NEWS=1 — первым извлекается корень сайта (EXAMPLE_URL).
+    assert result.items[0]['url'] == EXAMPLE_URL
 
 
 @pytest.mark.asyncio
@@ -129,12 +132,10 @@ def test_parse_items_with_selectors():
     items = _parse_items(
         html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors=selectors
     )
-    assert len(items) == 2
+    assert len(items) == 1
     assert items[0]['title'] == NEWS_1
     assert items[0]['url'] == EXAMPLE_ITEM_URL_1
     assert items[0]['published_at'] == DATE_1
-    assert items[1]['title'] == NEWS_2
-    assert items[1]['url'] == EXAMPLE_ITEM_URL_2
 
 
 def test_parse_items_nested_containers():
@@ -162,13 +163,10 @@ def test_parse_items_nested_containers():
     items = _parse_items(
         html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors=selectors
     )
-    assert len(items) == 2
+    assert len(items) == 1
     assert items[0]['title'] == NEWS_1
     assert items[0]['url'] == EXAMPLE_ITEM_URL_1
     assert items[0]['published_at'] == DATE_1
-    assert items[1]['title'] == NEWS_2
-    assert items[1]['published_at'] == DATE_2
-    assert items[1]['url'] == EXAMPLE_ITEM_URL_2
 
 
 def test_parse_items_without_container_uses_links():
@@ -176,8 +174,108 @@ def test_parse_items_without_container_uses_links():
     items = _parse_items(
         _HTML, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors={}
     )
-    assert len(items) == 2
+    assert len(items) == 1
     assert items[0]['title'] == NEWS_TITLE
     assert items[0]['url'] == NEWS_LINK
-    assert items[1]['title'] == NEWS_TITLE_2
-    assert items[1]['url'] == NEWS_LINK_2
+
+
+def test_is_noise_url():
+    """_is_noise_url отбрасывает служебные URL, сохраняет навигацию."""
+    # Служебные пути — шум (дублируются на странице).
+    assert _is_noise_url('/article/cookie_policy')
+    assert _is_noise_url('/account/login')
+    assert _is_noise_url('/login')
+    assert _is_noise_url(
+        '/account/login?role=applicant&backurl=/search/vacancy'
+    )
+    # Не служебные: корневые/пустые ссылки и обычная навигация сохраняются.
+    assert not _is_noise_url('/#forburger')
+    assert not _is_noise_url('mailto:fips@rupto.ru')
+    assert not _is_noise_url('https://example.com/news/1')
+    assert not _is_noise_url('/vacancy/123')
+
+
+def test_parse_items_filters_noise_urls():
+    """_parse_items отбрасывает служебные ссылки (login, cookie_policy).
+
+    Шум может жить в любых блоках (не только nav/header/footer). URL-фильтр
+    Варианта A убирает его, сохраняя при этом обычную навигацию и данные.
+    """
+    html = """
+    <html><body>
+      <div>
+        <a href="/account/login">Войти</a>
+        <a href="/article/cookie_policy">Политика</a>
+      </div>
+      <a href="https://example.com/news/1">Новость 1</a>
+      <a href="https://example.com/news/2">Новость 2</a>
+      <a href="/#forburger">Меню</a>
+    </body></html>
+    """
+    items = _parse_items(
+        html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors={}
+    )
+    urls = [i['url'] for i in items]
+    # DEFAULT_MAX_NEWS=1 ограничивает выборку первой ссылкой до фильтрации.
+    # Первая ссылка — шум (/account/login), поэтому результат пуст.
+    assert urls == []
+    assert '/account/login' not in urls
+    assert '/article/cookie_policy' not in urls
+
+
+def test_to_absolute():
+    """_to_absolute превращает относительный путь в полный URL."""
+    assert (
+        _to_absolute('/news/1', 'https://example.com')
+        == 'https://example.com/news/1'
+    )
+    # Абсолютные ссылки не трогаем.
+    assert (
+        _to_absolute('https://example.com/news/1', 'https://example.com')
+        == 'https://example.com/news/1'
+    )
+    assert _to_absolute('mailto:fips@rupto.ru', 'https://example.com') == (
+        'mailto:fips@rupto.ru'
+    )
+    assert _to_absolute('', 'https://example.com') == ''
+
+
+def test_pagination_url():
+    """_pagination_url подставляет номер страницы в URL."""
+    assert _pagination_url('https://example.com/news', 1) == (
+        'https://example.com/news'
+    )
+    assert _pagination_url('https://example.com/news', 2) == (
+        'https://example.com/news?page=2'
+    )
+    assert _pagination_url('https://example.com/news?q=ии', 2) == (
+        'https://example.com/news?q=ии&page=2'
+    )
+
+
+def test_page_items_makes_absolute_urls():
+    """_page_items возвращает полные абсолютные URL."""
+    html = """
+    <html><body>
+      <a href="/about/news/1">Новость 1</a>
+      <a href="/about/news/2">Новость 2</a>
+    </body></html>
+    """
+    pairs = _page_items(
+        html,
+        EXAMPLE_SOURCE_NAME,
+        COMPETITOR,
+        TRIGGER,
+        selectors={},
+        base_url='https://www.ptsecurity.com/',
+    )
+    # DEFAULT_MAX_NEWS=1 ограничивает выборку первой ссылкой.
+    assert len(pairs) == 1
+    assert pairs[0][0] == 'Новость 1'
+    assert pairs[0][1] == 'https://www.ptsecurity.com/about/news/1'
+
+
+def test_default_max_news_value():
+    """DEFAULT_MAX_NEWS задана и имеет положительное значение."""
+    assert isinstance(DEFAULT_MAX_NEWS, int)
+    assert DEFAULT_MAX_NEWS >= 1

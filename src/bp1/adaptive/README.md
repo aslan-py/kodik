@@ -20,7 +20,7 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt   # pytest, ruff и т.д.
 
 # 2. Бинарники браузера (~150 МБ) для BROWSER/STEALTH/HITL-стратегий
-python -m playwright install chromium
+python -m playwright install
 
 # 3. Окружение (Postgres, Redis, LLM)
 cp .env.example .env
@@ -59,6 +59,21 @@ docker compose up -d
   кэширует классификацию в Redis для повторного использования.
 - **MCP-сервер** — позволяет ИИ-агентам управлять сбором данных через
   Model Context Protocol.
+- **Source-aware выбор поискового параметра** — для гос. источников
+  (`SourceType.REGISTRY` / `SiteType.GOVERNMENT` / известные госдомены) поиск
+  ведётся по ИНН, для всех остальных — **по названию конкурента**
+  (`competitor.name`), т.к. на не-госсайтах ИНН не индексируется и триггер не
+  является названием компании.
+- **Per-source шаблоны URL поиска** — вместо жёсткого `/search?q=` каждый
+  источник может иметь собственный шаблон (напр. `hh.ru ->
+  /search/vacancy?text=…` — поиск по названию компании), с fallback на
+  универсальный.
+- **Пропуск гос. источника без ИНН** — если у конкурента нет ИНН, а источник
+  ищет по ИНН, поиск не выполняется: в JSON пишется `error: not INN`. Это
+  позволяет избежать бесполезной работы и некорректных данных в БД.
+- **Пропуск по активности (`is_active`)** — если у конкурента или источника
+  флаг `is_active = False`, поиск по задаче не выполняется, в JSON пишется
+  `error: is_active=False`.
 
 ---
 
@@ -398,6 +413,56 @@ asyncio.run(main())
 > пакет автоматически переключается на эвристический анализ HTML по тегам и
 > выбор стратегии по классификации. Пакет остаётся полностью работоспособным
 > без внешних LLM-сервисов.
+
+---
+
+## Source-aware поисковый параметр и шаблоны URL
+
+Для каждого источника адаптивный сбор выбирает **правильный поисковый параметр**
+и **шаблон URL поиска**:
+
+- [`SearchParamResolver`](integration/sources.py) определяет, искать ли по **ИНН**
+  или по **названию конкурента**. Гос. источники (`SourceType.REGISTRY`,
+  `SiteType.GOVERNMENT`, известные госдомены) → ИНН; остальные → **название
+  конкурента** (`competitor.name`), т.к. на не-госсайтах ИНН не индексируется и
+  триггер не является названием компании (напр. поиск по "Москва" не находит
+  вакансии ООО "АРХИТЕХ ИИ").
+- [`SearchUrlTemplateRegistry`](integration/sources.py) выбирает per-source шаблон
+  URL (напр. `hh.ru -> /search/vacancy?text=…` — поиск по названию компании),
+  с fallback на универсальный `/search?q=`.
+- **Пропуск гос. источника без ИНН** — метод `SearchParamResolver.missing_inn()`
+  определяет, что источнику нужен ИНН, а у конкурента его нет. В этом случае
+  поиск не выполняется: в JSON фиксируется `error: not INN`, избегая лишней
+  работы и попадания некорректных данных в БД.
+
+```python
+from src.bp1.adaptive.integration.sources import (
+    SearchParamResolver,
+    SearchUrlTemplateRegistry,
+)
+
+# Источник предпочитает ИНН (гос. реестр)?
+resolver = SearchParamResolver()
+param = resolver.resolve(
+    'fedresurs.ru',
+    competitor_inn='9718283930',
+    competitor='ООО Кодик',
+    trigger=None,
+)
+print(param)  # '9718283930'  — ИНН для гос. источника
+
+# На не-гос. источнике поиск идёт по названию конкурента (competitor.name),
+# а не по триггеру.
+param = resolver.resolve(
+    'hh.ru', competitor_inn=None, competitor='ООО АРХИТЕХ ИИ', trigger='Москва'
+)
+print(param)  # 'ООО АРХИТЕХ ИИ'
+
+# Построение URL с per-source шаблоном (название без кавычек).
+registry = SearchUrlTemplateRegistry()
+print(registry.build_url('hh.ru', 'ООО АРХИТЕХ ИИ'))
+# https://hh.ru/search/vacancy?text=%D0%9E%D0%9E%D0%9E+%D0%90%D0%A0%D0%A5%D0%98%D0%A2%D0%95%D0%A5+%D0%98%D0%98
+```
 
 ---
 

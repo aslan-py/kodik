@@ -91,6 +91,13 @@ def copy_html_file(parser_file_path: str, dest_dir: str) -> str | None:
         try:
             shutil.copy2(parser_file_path, dest_path)
             return dest_path
+        except shutil.SameFileError:
+            # Источник и назначение — один и тот же файл (HTML уже лежит в
+            # целевом каталоге). Копировать не нужно, возвращаем путь.
+            logger.info(
+                'HTML already at destination, skipping copy: %s', dest_path
+            )
+            return dest_path
         except PermissionError as e:
             if attempt < _COPY_MAX_RETRIES:
                 delay = _COPY_BASE_DELAY * attempt

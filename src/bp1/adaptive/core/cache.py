@@ -208,3 +208,63 @@ class UnifiedCache:
         """Сохранить HTML-снапшот."""
         path = self._snapshot_path(url)
         path.write_text(html, encoding='utf-8')
+
+    # ========================================================================
+    # Circuit breaker источников (Redis)
+    #
+    # Двухуровневая защита от недоступных источников:
+    # 1. ``source_blocked:<src>`` — временная блокировка на TTL (circuit
+    #    breaker). Пока ключ существует, источник не пробуют парсить.
+    # 2. ``source_fail_count:<src>`` — счётчик подряд идущих полных отказов.
+    #    При достижении порога источник отключается в БД (is_active=False).
+    # ========================================================================
+
+    def _blocked_key(self, source_name: str) -> str:
+        return f'bp1:source_blocked:{_canonical_source_name(source_name)}'
+
+    def _fail_count_key(self, source_name: str) -> str:
+        return f'bp1:source_fail_count:{_canonical_source_name(source_name)}'
+
+    async def is_source_blocked(self, source_name: str) -> bool:
+        """Проверить, временно ли заблокирован источник в Redis."""
+        if self.redis is None:
+            return False
+        return bool(await self.redis.exists(self._blocked_key(source_name)))
+
+    async def block_source(
+        self,
+        source_name: str,
+        ttl: int = 86400,
+    ) -> None:
+        """Временно заблокировать источник в Redis на ``ttl`` секунд."""
+        if self.redis is None:
+            return
+        await self.redis.set(self._blocked_key(source_name), '1', ex=ttl)
+
+    async def unblock_source(self, source_name: str) -> None:
+        """Снять временную блокировку источника (при успешном парсинге)."""
+        if self.redis is None:
+            return
+        await self.redis.delete(self._blocked_key(source_name))
+
+    async def increment_fail_count(self, source_name: str) -> int:
+        """Инкрементировать счётчик отказов. Возвращает новое значение."""
+        if self.redis is None:
+            return 0
+        return int(await self.redis.incr(self._fail_count_key(source_name)))
+
+    async def get_fail_count(self, source_name: str) -> int:
+        """Текущее значение счётчика отказов (без инкремента)."""
+        if self.redis is None:
+            return 0
+        raw = await self.redis.get(self._fail_count_key(source_name))
+        try:
+            return int(raw) if raw else 0
+        except (TypeError, ValueError):
+            return 0
+
+    async def reset_fail_count(self, source_name: str) -> None:
+        """Сбросить счётчик отказов (при успешном парсинге)."""
+        if self.redis is None:
+            return
+        await self.redis.delete(self._fail_count_key(source_name))

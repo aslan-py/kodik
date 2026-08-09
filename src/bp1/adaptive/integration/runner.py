@@ -15,8 +15,11 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
+from src.bp1.models import Source
 from src.bp1.storage import RawDataService
 from src.bp1.tasks import get_search_task_config
 
@@ -216,6 +219,23 @@ class AdaptiveRunner:
         url = build_search_url(source_name, search_param)
         source_request_url = url
 
+        # 3.1. Circuit breaker: если источник временно заблокирован в Redis
+        #     (все стратегии падали недавно), пропускаем задачу, не тратя
+        #     ресурсы на парсинг.
+        if await self._cache.is_source_blocked(source_name):
+            self._logger.info(
+                'Источник %s временно заблокирован (circuit breaker), '
+                'задача %s пропущена',
+                source_name,
+                task_id,
+            )
+            return {
+                'status': 'source_unavailable',
+                'search_task_id': task_id,
+                'source': source_name,
+                'reason': 'circuit_open',
+            }
+
         parse_kwargs = {
             'search_task_id': task_id,
             'competitor': competitor,
@@ -262,6 +282,10 @@ class AdaptiveRunner:
                     'strategy': getattr(response, 'strategy_used', None),
                 },
             )
+            # Источник успешно спарсен — снимаем временную блокировку и
+            # сбрасываем счётчик подряд идущих отказов.
+            await self._cache.unblock_source(source_name)
+            await self._cache.reset_fail_count(source_name)
         except Exception as e:
             self._logger.error(
                 'Ошибка адаптивного парсинга (task_id=%s, source=%s): %s',
@@ -269,6 +293,7 @@ class AdaptiveRunner:
                 source_name,
                 e,
             )
+            await self._record_source_failure(source_name, session)
             service = RawDataService(session, redis_client)
             raw_item_id = await service.persist_error(
                 search_task_id=task_id,
@@ -314,6 +339,49 @@ class AdaptiveRunner:
         persisted['strategy'] = classification.recommended_strategy
         persisted['pipeline_report'] = report.model_dump(mode='json')
         return persisted
+
+    async def _record_source_failure(
+        self,
+        source_name: str,
+        session: AsyncSession,
+    ) -> None:
+        """Зафиксировать полный отказ источника (all strategies failed).
+
+        Двухуровневая логика (фича 1+2 circuit breaker):
+
+        1. Блокируем источник в Redis на TTL circuit breaker (временная
+           блокировка, чтобы не тратить ресурсы на повторные попытки).
+        2. Инкрементируем счётчик подряд идущих отказов. Если он достиг
+           ``settings.source_disable_threshold`` — отключаем ``Source``
+           в БД (``is_active=False``) и сбрасываем счётчик.
+        """
+        ttl = settings.source_circuit_ttl_seconds
+        threshold = settings.source_disable_threshold
+
+        await self._cache.block_source(source_name, ttl=ttl)
+
+        fail_count = await self._cache.increment_fail_count(source_name)
+        self._logger.warning(
+            'Источник %s недоступен, попытка отказа %d/%d (blocked %ss)',
+            source_name,
+            fail_count,
+            threshold,
+            ttl,
+        )
+
+        if fail_count >= threshold:
+            stmt = select(Source).where(Source.name == source_name)
+            source = (await session.execute(stmt)).scalar_one_or_none()
+            if source is not None and source.is_active:
+                source.is_active = False
+                await session.commit()
+                self._logger.warning(
+                    'Источник %s отключён в БД (is_active=False) после '
+                    '%d подряд отказов',
+                    source_name,
+                    fail_count,
+                )
+            await self._cache.reset_fail_count(source_name)
 
     async def run_all(
         self,
@@ -390,8 +458,6 @@ class AdaptiveRunner:
         3. Находит или создаёт SearchTask (связку без триггера).
         4. Запускает run_task для этой задачи.
         """
-        from sqlalchemy import select
-
         from src.bp1.models import Competitor, SearchTask, Source
 
         from .sources import SourceRegistrationService, normalize_source_url

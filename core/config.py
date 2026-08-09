@@ -120,5 +120,13 @@ class Settings(BaseSettings):
     deepseek_base_url: str = 'https://api.deepseek.com'
     deepseek_model: str = 'deepseek-chat'
 
+    # ===== Circuit breaker для источников (BP-1 Adaptive) =====
+    # Время временной блокировки источника в Redis после полного отказа
+    # (all strategies failed), в секундах. По умолчанию 24 часа.
+    source_circuit_ttl_seconds: int = 86400
+    # Число подряд идущих полных отказов (с промежутком в circuit TTL каждый),
+    # после которого источник отключается в БД (is_active=False).
+    source_disable_threshold: int = 3
+
 
 settings = Settings()

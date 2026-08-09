@@ -55,6 +55,14 @@ class _FakeRedis:
     async def delete(self, key: str):
         self._store.pop(key, None)
 
+    async def exists(self, key: str):
+        return key in self._store
+
+    async def incr(self, key: str):
+        new_value = int(self._store.get(key, 0)) + 1
+        self._store[key] = str(new_value)
+        return new_value
+
 
 @pytest.mark.asyncio
 async def test_bridge_returns_parsed_response(monkeypatch):
@@ -111,6 +119,27 @@ async def test_cache_profile_roundtrip(tmp_path):
     await cache.set_profile(EXAMPLE_SOURCE_NAME, {'cookies': {'a': 'b'}})
     profile = await cache.get_profile(EXAMPLE_SOURCE_NAME)
     assert profile == {'cookies': {'a': 'b'}}
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_block_and_unblock(tmp_path):
+    """Circuit breaker: блокировка/разблокировка и счётчик отказов."""
+    cache = UnifiedCache(redis_client=_FakeRedis(), cache_dir=str(tmp_path))
+
+    assert await cache.is_source_blocked(EXAMPLE_SOURCE_NAME) is False
+    await cache.block_source(EXAMPLE_SOURCE_NAME, ttl=3600)
+    assert await cache.is_source_blocked(EXAMPLE_SOURCE_NAME) is True
+
+    await cache.unblock_source(EXAMPLE_SOURCE_NAME)
+    assert await cache.is_source_blocked(EXAMPLE_SOURCE_NAME) is False
+
+    # Счётчик подряд идущих отказов.
+    assert await cache.get_fail_count(EXAMPLE_SOURCE_NAME) == 0
+    assert await cache.increment_fail_count(EXAMPLE_SOURCE_NAME) == 1
+    assert await cache.increment_fail_count(EXAMPLE_SOURCE_NAME) == 2
+    assert await cache.get_fail_count(EXAMPLE_SOURCE_NAME) == 2
+    await cache.reset_fail_count(EXAMPLE_SOURCE_NAME)
+    assert await cache.get_fail_count(EXAMPLE_SOURCE_NAME) == 0
 
 
 @pytest.mark.asyncio

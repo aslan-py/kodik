@@ -1,23 +1,28 @@
-import os
 import time
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
 from tavily import TavilyClient
 
+from core.config import settings
 from src.bp3.models_llm import BaseModule, ProjectContext
 
-load_dotenv()
-
-tavily_api_key = os.getenv('TAVILY_API_KEY')
-if not tavily_api_key:
-    raise ValueError('TAVILY_API_KEY не задан')
-
-client = TavilyClient(api_key=tavily_api_key)
+client = TavilyClient(api_key=settings.tavily_api_key)
 
 
 class SourceFinderModule(BaseModule):
+    """Ищет новые домены-источники по КАЖДОМУ конкуренту через Tavily.
+
+    Не зависит от текущей пачки новостей (`ctx.news`) — перебирает всех
+    конкурентов из справочника (`ctx.competitors`), независимо от того,
+    сколько новостей обработано в этом прогоне. Найденные домены попадают
+    в `ctx.domains_to_add` (`{competitor_id: {'sources': [...]}}`) —
+    дальше `SaveResultsModule` кладёт их в `source_candidate` (BP-7).
+    """
+
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """На каждого конкурента — один поиск Tavily, исключая уже
+        известные домены (`ctx.domains`); сбой по одному конкуренту не
+        прерывает остальных."""
         exclude_domains = ctx.domains or []
         companies = ctx.competitors or []
 
@@ -32,7 +37,7 @@ class SourceFinderModule(BaseModule):
                 response = client.search(
                     query=f'Найди новые источники новостей о компании {name}',
                     topic='news',
-                    max_results=1,
+                    max_results=2,
                     search_depth='basic',
                     time_range='week',
                     exclude_domains=exclude_domains,

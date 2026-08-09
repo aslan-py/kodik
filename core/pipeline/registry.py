@@ -18,9 +18,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import AsyncSessionLocal
-from core.scripts.stages import bp1 as bp1_stage
-from core.scripts.stages import bp6 as bp6_stage
-from core.scripts.stages import bp7 as bp7_stage
+from core.scripts.stages import bp1_stub
 from src.bp1.models import RawItem
 from src.bp2.models import NormalizedItem
 from src.bp2.pipeline import run_bp2
@@ -29,6 +27,7 @@ from src.bp3.pipeline import run_bp3
 from src.bp4.models import ShowcaseEvent
 from src.bp4.pipeline import run_bp4
 from src.bp5.pipeline import run_bp5
+from src.bp6.pipeline import run_bp6
 from src.bp7.pipeline import run_bp7_promotion
 
 
@@ -69,31 +68,15 @@ async def _run_stub(
     return {'stage': title, 'cleared': deleted, 'added': added}
 
 
-async def _run_bp7_stage() -> dict:
-    """Составной этап BP-7: сначала наполнение `source_candidate`
-    (заглушка), потом перенос в `source` (реальная логика).
-
-    Один номер этапа (7), а не два — по числу BP, а не по числу внутренних
-    шагов. Наполнение и перенос физически остаются разными функциями
-    (`bp7_stage.seed`/`clear` и `run_bp7_promotion`) — здесь только
-    последовательный вызов, без дублирования их кода.
-    """
-    filled = await _run_stub(
-        'BP-7 (заглушка source_candidate)', bp7_stage.clear, bp7_stage.seed
-    )
-    promotion = await run_bp7_promotion()
-    return {'candidates': filled, 'promotion': promotion}
-
-
 STAGES: dict[int, StageDescriptor] = {
     1: StageDescriptor(
         number=1,
         title='Сбор (BP-1)',
         run=functools.partial(
             _run_stub,
-            'BP-1 (заглушка raw_item)',
-            bp1_stage.clear,
-            bp1_stage.seed,
+            'BP-1 (минимальная заглушка raw_item)',
+            bp1_stub.clear,
+            bp1_stub.seed,
         ),
         requires=None,  # вход в цепочку, предусловий нет
         is_stub=True,
@@ -130,23 +113,20 @@ STAGES: dict[int, StageDescriptor] = {
     6: StageDescriptor(
         number=6,
         title='План действий (BP-6)',
-        run=functools.partial(
-            _run_stub,
-            'BP-6 (заглушка action_item)',
-            bp6_stage.clear,
-            bp6_stage.seed,
-        ),
+        run=run_bp6,
         requires=ShowcaseEvent,
-        is_stub=True,
+        is_stub=False,
     ),
     7: StageDescriptor(
         number=7,
-        title='Источники: наполнение + перенос (BP-7)',
-        run=_run_bp7_stage,
+        title='Источники: перенос кандидатов (BP-7)',
+        run=run_bp7_promotion,
+        # Наполнение source_candidate теперь реальное — делает
+        # SourceFinderModule на этапе 3 (не отдельный подэтап здесь).
         # Своя, независимая цепочка (source_candidate), не часть
         # PIPELINE_ORDER; пустая очередь кандидатов — не ошибка (см.
         # design.md, Decisions), поэтому предусловий нет.
         requires=None,
-        is_stub=True,  # наполнение всё ещё заглушка, перенос — реальный
+        is_stub=False,
     ),
 }

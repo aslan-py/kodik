@@ -9,11 +9,20 @@ PROMPT_PATH = (
 
 
 class ExpectedResultModule(LLMModule):
+    """LLM-шаг: ожидаемый результат по событию (комментарий+действие+задачи).
+
+    Заполняет `categorized_event.expected_result` (см. capability
+    `bp3/categorized-event-expected-result`).
+    """
+
     def __init__(self, llm):
+        """Обернуть LLM в structured output по схеме `ExpectedResultResponse`."""  # noqa
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(ExpectedResultResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Для новостей без задач (`tasks` пуст/None) — `expected_result=None`
+        без обращения к LLM; для остальных — один вызов LLM на всю пачку."""
         # Берём все новости из category_news
         all_news = ctx.category_news or []
         if not all_news:

@@ -29,7 +29,16 @@ UNKNOWN_CATEGORY_RULE = (
 
 
 class ActionPlanningModule(BaseModule):
+    """Правило-based назначение приоритета/срока/отдела по категории события.
+
+    Без LLM — чистый словарь `ACTION_RULES`, категория → (приоритет, срок,
+    отдел). Неизвестная или отсутствующая категория берёт
+    `UNKNOWN_CATEGORY_RULE`.
+    """
+
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Для каждой категоризированной новости заполнить
+        priority/deadline/department."""
         categorized_news = ctx.category_news or []
 
         priority_list = []

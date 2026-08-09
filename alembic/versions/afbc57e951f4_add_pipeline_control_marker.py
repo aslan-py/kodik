@@ -1,7 +1,7 @@
 """add pipeline control marker
 
 Revision ID: afbc57e951f4
-Revises: f09a7c801061
+Revises: 52e13722df84
 Create Date: 2026-08-07 23:28:25.531463
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'afbc57e951f4'
-down_revision: Union[str, Sequence[str], None] = 'f09a7c801061'
+down_revision: Union[str, Sequence[str], None] = '52e13722df84'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

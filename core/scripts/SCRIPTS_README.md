@@ -16,12 +16,15 @@
 | Команда | Заполняет |
 |---------|-----------|
 | `python -m core.scripts.stages.dictionaries` | Все справочники + регионы из `scripts_data/cities.json` |
-| `python -m core.scripts.stages.bp1` | `search_task`, `raw_item` |
+| `python -m core.scripts.stages.simple_dictionaries` | Узкий набор справочников (1 конкурент, 1 источник, фильтры, маршрутизация) под 6-новостной тестовый сценарий `bp1_stub` |
+| `python -m core.scripts.stages.bp1` | `search_task`, `raw_item` (полный демо-датасет) |
+| `python -m core.scripts.stages.bp1_stub` | `search_task`, `raw_item` — минимальная заглушка из 6 синтетических новостей для дешёвой сквозной проверки (требует `simple_dictionaries`) |
 | `python -m core.scripts.stages.bp2` | `normalized_item` |
 | `python -m core.scripts.stages.bp3` | `categorized_event` |
 | `python -m core.scripts.stages.bp4` | `showcase_event` (собирает конвейером, не подделывает) |
 | `python -m core.scripts.stages.bp5` | `alert` (собирает конвейером, не подделывает) |
 | `python -m core.scripts.stages.bp6` | `action_item` |
+| `python -m core.scripts.stages.bp7` | `source_candidate` (демо-заглушка очереди кандидатов) |
 
 Каждый скрипт чистит свой слой и всё, что ниже по потоку, затем заливает заново.
 Предыдущие слои он не заполняет — их нужно залить самому, в порядке таблицы.

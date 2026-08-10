@@ -5,8 +5,7 @@ BP-1 — первый слой ETL-пайплайна системы конку�
 ## Статус: ✅ РАБОТАЕТ
 
 - **fedresurs.ru** — полностью реализован RPA-парсер с обходом QRATOR антибот-защиты
-- **kad.arbitr.ru** — реализован RPA-парсер через Playwright (поиск дел по ИНН)
-- **Адаптивный движок (adaptive)** — полностью реализован: автоматическая классификация источников, иерархия стратегий обхода с деградацией (FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL), интеллектуальное извлечение через LLM, кэширование адаптеров, MCP-сервер и CLI
+- **Адаптивный движок (adaptive)** — полностью реализован: автоматическая классификация источников, иерархия стратегий обхода с деградацией (FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL), интеллектуальное извлечение через LLM, кэширование адаптеров и CLI
 - **Остальные источники** — обрабатываются универсальным `AdaptiveBridgeParser` (авто-детекция структуры сайта без ручной настройки)
 - **Адаптивный поиск (Adaptive Search)** — полностью реализован: source-aware выбор поискового параметра (ИНН для гос. источников, название конкурента для остальных), per-source шаблоны URL поиска (например, `hh.ru → /search/vacancy?text=`), пропуск задач по `is_active`, circuit breaker (авто-блокировка источника при сбоях)
 - **Raw Storage** — модуль хранения сырых данных (Bronze Layer) реализован и протестирован
@@ -38,13 +37,11 @@ src/bp1/
 │   ├── core/                # UnifiedCache (Redis+диск), DataQualityGate (5 уровней)
 │   ├── processing/          # AdaptiveParser, HtmlCleaner, StructuredChunker, ResultMerger, LLM
 │   ├── strategies/          # SourceClassifier, AgenticOrchestrator, Crawl4AI/Stealth/HITL, engines
-│   └── integration/         # AdaptiveBridgeParser, AdaptiveRunner, SourceRegistrationService, MCPServer
+│   └── integration/         # AdaptiveBridgeParser, AdaptiveRunner, SourceRegistrationService
 │
 ├── collectors/              # Движки парсинга (реализация сбора данных)
 │   ├── fedresurs_rpa/       # ✅ RPA-парсер fedresurs.ru
-│   ├── kad_arbitr_rpa/      # ✅ RPA-парсер kad.arbitr.ru (поиск дел по ИНН)
-│   ├── stealth/             # ✅ Модуль антиобнаружения (QRATOR bypass, JS evasions)
-│   └── ...                  # Заготовки под остальные движки (hh_api, fips_rpa, ...)
+│   └── stealth/             # ✅ Модуль антиобнаружения (QRATOR bypass, JS evasions)
 │
 └── raw_storage/             # ✅ Модуль хранения сырых данных (Bronze Layer)
     ├── core/models.py       # Pydantic модели (RawDataFile, MetaInfo, RawDataItem)
@@ -98,6 +95,32 @@ BPRunner / AdaptiveRunner / Celery
 ```
 
 ## Режимы запуска
+
+### Через реестр конвейера (рекомендуемый способ)
+
+`src/bp1/pipeline.py::run_bp1()` — точка входа этапа 1 конвейера, по
+тому же контракту, что `run_bp2`…`run_bp7`: без аргументов, сама
+открывает сессию БД и Redis-клиент, вызывает `AdaptiveRunner.run_all()`
+по всем активным задачам сбора (`search_task`), сворачивает результат в
+сводку прогона. Через неё этап 1 запускается кнопкой в админке,
+`core/pipeline/cli.py` и по расписанию Celery — как и остальные шесть
+этапов (см. `core/pipeline/registry.py`).
+
+```bash
+python -m core.pipeline.cli 1          # этап 1 (реализация — по TRUE_PARSING)
+python -m core.pipeline.cli 1 real     # разово настоящий сбор
+python -m core.pipeline.cli 1 stub     # разово заглушка
+python -m core.pipeline.cli all        # весь конвейер 1..7
+```
+
+Рядом с этой точкой входа у этапа 1 есть вторая реализация — заглушка
+(`core/scripts/stages/bp1_stub.py`, шесть синтетических новостей, без
+сети и LLM), нужная для дешёвой сквозной проверки этапов 2-7. Какая из
+двух выполняется по умолчанию — решает настройка `TRUE_PARSING` в
+`.env` (см. `core/scripts/SCRIPTS_README.md`, «Три способа наполнить
+этап 1»); режимы ниже (Direct/Celery/адаптивный CLI) — более низкий
+уровень, `run_bp1()` их не заменяет, а вызывает `AdaptiveRunner` тем же
+способом, что и `AdaptiveRunner.run_all()` из адаптивного CLI.
 
 ### Direct (тестовый)
 
@@ -291,26 +314,6 @@ result = await parser.parse(
 )
 ```
 
-### ✅ KadArbitrParser (kad.arbitr.ru)
-
-RPA-парсер картотеки арбитражных дел через Playwright. Ищет дела по ИНН участника.
-
-**Использование:**
-```python
-from src.bp1.collectors.kad_arbitr_rpa import KadArbitrParser, ParsingRequest, validate_inn
-
-parser = KadArbitrParser()
-request = ParsingRequest(
-    inn="7712345678",       # валидируется через validate_inn()
-    output_dir="./out",
-    headless=True,
-    retry_count=3,
-    use_stealth=True,       # подключает модуль stealth для антиобнаружения
-)
-result = await parser.search_by_inn(request)
-print(result.success, result.file_path, result.error)
-```
-
 ### ✅ AdaptiveBridgeParser (универсальный)
 
 Мост между адаптивной подсистемой и `BaseParser`. Автоматически классифицирует источник, выбирает стратегию и извлекает данные без ручной настройки.
@@ -343,7 +346,6 @@ response = await parser.parse(
 - **Регистрация источников** — [`SourceRegistrationService`](src/bp1/adaptive/integration/sources.py:302) по ссылке нормализует адрес, классифицирует сайт, добавляет `Source` в БД и кэширует классификацию.
 - **Source-aware выбор поискового параметра** — для гос. источников (реестры) поиск по ИНН, для остальных — по названию конкурента.
 - **Per-source шаблоны URL** — `SearchUrlTemplateRegistry` задаёт специфичные пути поиска (например, `hh.ru → /search/vacancy?text=`), с fallback на универсальный `/search?q=`.
-- **MCP-сервер** — [`MCPServer`](src/bp1/adaptive/integration/mcp_server.py:45) позволяет ИИ-агентам управлять сбором (классификация, парсинг, кэш, список стратегий).
 
 ### Адаптивный поиск (Adaptive Search)
 
@@ -600,7 +602,6 @@ BP-1 использует двухуровневую систему дедупл
 | `SourceRegistrationService` | Регистрация источников по ссылке |
 | `SearchParamResolver` | Source-aware выбор поискового параметра (ИНН / название) |
 | `SearchUrlTemplateRegistry` | Per-source шаблоны URL поиска (fallback `/search?q=`) |
-| `MCPServer` / `run_mcp_server` | MCP-интерфейс для ИИ-агентов |
 
 ### `raw_storage/`
 
@@ -653,7 +654,6 @@ pytest kodik/tests/bp1/ --cov=src.bp1 -v
 | [`test_quality.py`](kodik/tests/bp1/adaptive/test_quality.py) | DataQualityGate — уровни качества, Quarantine |
 | [`test_llm.py`](kodik/tests/bp1/adaptive/test_llm.py) | LLMClient, AIAgent |
 | [`test_llm_smoke.py`](kodik/tests/bp1/adaptive/test_llm_smoke.py) | Smoke-тест LLM-модуля |
-| [`test_mcp.py`](kodik/tests/bp1/adaptive/test_mcp.py) | MCPServer — JSON-RPC инструменты |
 | [`test_integration.py`](kodik/tests/bp1/adaptive/test_integration.py) | AdaptiveRunner, AdaptiveBridgeParser |
 | [`test_source_registration.py`](kodik/tests/bp1/adaptive/test_source_registration.py) | SourceRegistrationService, нормализация URL |
 
@@ -711,6 +711,5 @@ python -m core.scripts.stages.bp1
 
 ## План развития
 
-- [x] Реализовать RPA-парсер для kad.arbitr.ru
-- [x] Реализовать адаптивный движок (классификация, стратегии, LLM, HITL, MCP)
+- [x] Реализовать адаптивный движок (классификация, стратегии, LLM, HITL)
 - [x] Интегрировать адаптивный движок с BP-1 пайплайном

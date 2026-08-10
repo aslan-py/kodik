@@ -238,25 +238,8 @@ SRC_HH_HOST = 'hh.ru'
 SRC_ZH = 'zakupki.gov.ru'
 
 # ---------------------------------------------------------------------------
-# test_mcp
-# ---------------------------------------------------------------------------
-MCP_JSONRPC = '2.0'
-MCP_PROTOCOL_VERSION = '2024-11-05'
-MCP_SERVER_NAME = 'bp1-adaptive'
-MCP_METHOD_INITIALIZE = 'initialize'
-MCP_METHOD_TOOLS_LIST = 'tools/list'
-MCP_METHOD_TOOLS_CALL = 'tools/call'
-MCP_TOOL_CLASSIFY_SOURCE = 'classify_source'
-MCP_TOOL_RUN_PARSE = 'run_adaptive_parse'
-MCP_TOOL_LIST_STRATEGIES = 'list_strategies'
-MCP_ERROR_METHOD_NOT_FOUND = -32601
-MCP_ERROR_INTERNAL = -32603
-
-# ---------------------------------------------------------------------------
 # test_llm / test_llm_smoke
 # ---------------------------------------------------------------------------
-ENV_LLM_API_KEY = 'LLM_API_KEY'
-ENV_OPENAI_API_KEY = 'OPENAI_API_KEY'
 TEST_API_KEY = 'sk-test'
 MODULE_OPENAI = 'openai'
 LLM_CHUNK_MAX_SIZE = 2000

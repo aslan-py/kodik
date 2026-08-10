@@ -26,6 +26,7 @@ from fastadmin import (
 )
 
 from api.admin.base import MENU_PIPELINE_CONTROL, ReadOnlyModelAdmin
+from core.config import settings
 from core.database import AsyncSessionLocal
 from core.pipeline.models import PipelineControlMarker
 from core.pipeline.registry import STAGES
@@ -42,6 +43,7 @@ def _format_result(result: StageResult) -> dict[str, Any]:
 
 
 REPARSE_FIELD = 'пересобрать'
+TRUE_PARSING_FIELD = 'реальный сбор'
 
 
 def _reparse_requested(payload: WidgetActionInputSchema) -> bool:
@@ -55,12 +57,33 @@ def _reparse_requested(payload: WidgetActionInputSchema) -> bool:
     return False
 
 
+def _true_parsing_requested(
+    payload: WidgetActionInputSchema,
+) -> bool | None:
+    """Значение переключателя «реальный сбор», если он есть у кнопки.
+
+    `None` — у кнопки нет такого аргумента (все этапы, кроме первого):
+    `run_stage()` тогда берёт `settings.true_parsing`, поведение как из
+    CLI/Celery без явного переопределения. Если аргумент есть — значение
+    из payload явно приводится к `bool` (тот же приём, что и у
+    `_reparse_requested`: FastAdmin/Antd Switch иначе кладёт в payload не
+    примитив, см. комментарий у `stage_1`).
+    """
+    for item in payload.query:
+        if item.field_name == TRUE_PARSING_FIELD:
+            return bool(item.value)
+    return None
+
+
 async def _run_stage_widget(
     number: int, payload: WidgetActionInputSchema
 ) -> WidgetActionResponseSchema:
     reparse = _reparse_requested(payload)
+    true_parsing = _true_parsing_requested(payload)
     try:
-        result = await run_stage(number, reparse=reparse)
+        result = await run_stage(
+            number, reparse=reparse, true_parsing=true_parsing
+        )
     except Exception as exc:  # неизвестный номер / preflight / сбой этапа
         descriptor = STAGES.get(number)
         result = StageResult(
@@ -94,6 +117,24 @@ class PipelineControlAdmin(ReadOnlyModelAdmin):
         tab=MENU_PIPELINE_CONTROL,
         title=f'Этап 1 — {STAGES[1].title}',
         widget_action_type=WidgetActionType.Action,
+        # Переключатель реализации: выключен -> заглушка, включён ->
+        # настоящий адаптивный сбор. Начальное положение отражает
+        # settings.true_parsing, чтобы нажатие кнопки БЕЗ прикосновения к
+        # переключателю давало то же поведение, что запуск из CLI/Celery
+        # без явного переопределения.
+        #
+        # WidgetType.Switch, а не Checkbox — та же ловушка FastAdmin 0.10.0,
+        # что и у переключателя «пересобрать» этапа 2 (см. комментарий там):
+        # Checkbox кладёт в состояние событие onChange, а не bool.
+        widget_action_props=WidgetActionProps(
+            arguments=[
+                WidgetActionArgumentProps(
+                    name=TRUE_PARSING_FIELD,
+                    widget_type=WidgetType.Switch,
+                    widget_props={'defaultChecked': settings.true_parsing},
+                ),
+            ],
+        ),
     )
     async def stage_1(
         self, payload: WidgetActionInputSchema

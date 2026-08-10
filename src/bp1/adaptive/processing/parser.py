@@ -43,29 +43,29 @@ from .llm import AIAgent, LLMClient
 logger = logging.getLogger(__name__)
 
 # Максимальное количество новостей, собираемых за один проход пагинации.
-DEFAULT_MAX_NEWS = 5
+DEFAULT_MAX_NEWS = settings.bp1_max_news_per_source
 
 # Минимальная длина текста, при которой результат извлечения считается
 # успешным (для каскада CSS → LLM → сниппет).
-MIN_ARTICLE_TEXT_LENGTH = 100
+MIN_ARTICLE_TEXT_LENGTH = settings.bp1_min_article_text_length
 
 # Максимальное количество одновременно докачиваемых статей (глубокий фетч).
-MAX_CONCURRENT_FETCHES = 5
+MAX_CONCURRENT_FETCHES = settings.bp1_max_concurrent_fetches
 
 # Таймаут (в секундах) на извлечение полного текста одной статьи. Защищает
 # глубокий фетч от зависания на проблемной странице, чтобы медленная статья
 # не занимала слот конкурентности и не лишала остальные новости полного
 # текста (раньше первые 1-2 статьи «съедали» все ресурсы, а остальные падали
 # в сниппет-фолбэк).
-ARTICLE_FETCH_TIMEOUT_SECONDS = 20.0
+ARTICLE_FETCH_TIMEOUT_SECONDS = settings.bp1_article_fetch_timeout_seconds
 
 # Минимальное количество символов, при котором извлечённый LLM/CSS текст
 # считается полным. Если текст короче — вероятна обрезка, и нужна докачка
 # хвоста.
-MIN_FULL_ARTICLE_TEXT_LENGTH = 300
+MIN_FULL_ARTICLE_TEXT_LENGTH = settings.bp1_min_full_article_text_length
 
 # Максимальное количество итераций докачки обрезанного хвоста статьи.
-MAX_TAIL_FETCH_ATTEMPTS = 3
+MAX_TAIL_FETCH_ATTEMPTS = settings.bp1_max_tail_fetch_attempts
 
 # Максимальное количество байт исходного HTML, отдаваемых LLM в одном запросе
 # докачки хвоста (смещение по оффсету в конец документа).

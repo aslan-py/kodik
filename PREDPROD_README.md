@@ -89,7 +89,7 @@ pip install -r requirements.txt
 
 `pip install` ставит библиотеку `playwright`, но НЕ сам браузер: это бинарники
 (~150 МБ), они качаются отдельной командой и в requirements.txt их положить
-нельзя. Без неё RPA-сборщики (`kad_arbitr`, `fedresurs`) и `src/run_pipeline.py`
+нельзя. Без неё RPA-сборщик (`fedresurs`) и `src/run_pipeline.py`
 падают при старте браузера.
 
 ```bash

@@ -121,6 +121,13 @@ class Settings(BaseSettings):
     true_alerting: bool = False
     test_email: str
 
+    # ===== Сбор данных (BP-1) =====
+    # Флаг реализации этапа 1, НЕ флаг включения/выключения сбора — по
+    # тому же принципу, что и true_alerting. False -> заглушка
+    # (core/scripts/stages/bp1_stub.py, синтетические новости, без сети и
+    # LLM); True -> настоящий адаптивный сбор (src/bp1/pipeline.py).
+    true_parsing: bool = True
+
     # ===== FASTAPI SETTINGS =====
     app_title: str = 'Конкурентная разведка'
     description: str = 'API управлния проектом конкурентная разведка'
@@ -155,6 +162,46 @@ class Settings(BaseSettings):
     deepseek_token: str
     deepseek_base_url: str = 'https://api.deepseek.com'
     deepseek_model: str = 'deepseek-chat'
+
+    # ===== BP-1 Adaptive (LLM-анализ HTML: селекторы, стратегии обхода) =====
+    # Ключ и адрес — отдельные поля, не переиспользуют openrouter_api_key/
+    # deepseek_token: у проекта три независимых LLM-доступа под разные
+    # провайдеры. Опциональны: без ключа адаптивный парсер работает на
+    # эвристическом fallback (см. adaptive/processing/llm.py).
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str = 'gpt-4o-mini'
+
+    # ===== BP-1 Adaptive (объём и глубина сбора) =====
+    # Эксплуатационные ручки: меняются при работе с конкретными источниками,
+    # без правки кода. Значения по умолчанию равны прежним константам
+    # (adaptive/processing/parser.py, adaptive/strategies/orchestrator.py).
+    bp1_max_news_per_source: int = 3
+    bp1_min_article_text_length: int = 100
+    bp1_min_full_article_text_length: int = 300
+    bp1_max_tail_fetch_attempts: int = 3
+    bp1_min_content_length: int = 300
+
+    # ===== BP-1 Adaptive (сетевые ограничения) =====
+    # parse_timeout_ms / max_concurrent_tasks — общие для классического
+    # BP-1 (src/bp1/constants.py) и AdaptiveRunner: один параметр эксплуатации
+    # управляет обоими потребителями одного и того же смысла.
+    bp1_parse_timeout_ms: int = 60000
+    bp1_max_concurrent_tasks: int = 5
+    bp1_article_fetch_timeout_seconds: float = 20.0
+    bp1_max_concurrent_fetches: int = 5
+
+    # ===== BP-1 Adaptive (время жизни кэшей) =====
+    # Три отдельных поля, не одно общее: кэшируются разные вещи с разной
+    # ценой промаха (профиль адаптера дорогой, текст статьи дешёвый) — см.
+    # design.md изменения centralize-parsing-settings, Decisions.
+    bp1_adapter_ttl_seconds: int = 86400 * 7
+    bp1_classification_ttl_seconds: int = 86400 * 7
+    bp1_article_text_ttl_seconds: int = 86400 * 7
+
+    # ===== BP-1 Adaptive (режим прогона AdaptiveRunner) =====
+    bp1_adaptive_mode: str = 'adaptive'
+    bp1_headless: bool = True
 
     # ===== Circuit breaker для источников (BP-1 Adaptive) =====
     # Время временной блокировки источника в Redis после полного отказа

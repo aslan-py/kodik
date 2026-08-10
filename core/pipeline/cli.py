@@ -3,6 +3,9 @@
 Использование:
     python -m core.pipeline.cli <номер>          — запустить этап (1..7)
     python -m core.pipeline.cli <номер> reparse  — с пересборкой (если есть)
+    python -m core.pipeline.cli <номер> stub     — заглушкой (если есть)
+    python -m core.pipeline.cli <номер> real     — настоящей реализацией
+                                                    (если есть заглушка)
     python -m core.pipeline.cli all               — весь конвейер
 """
 
@@ -43,14 +46,23 @@ async def _main(argv: list[str]) -> int:
         return 1
 
     reparse = False
+    true_parsing: bool | None = None
     if len(argv) == 2:
-        if argv[1] != 'reparse':
+        mode = argv[1]
+        if mode == 'reparse':
+            reparse = True
+        elif mode == 'stub':
+            true_parsing = False
+        elif mode == 'real':
+            true_parsing = True
+        else:
             print(__doc__)
             return 1
-        reparse = True
 
     try:
-        result = await run_stage(number, reparse=reparse)
+        result = await run_stage(
+            number, reparse=reparse, true_parsing=true_parsing
+        )
     except Exception as exc:  # неизвестный номер / preflight / сбой этапа
         print(f'Ошибка: {exc}')
         return 1

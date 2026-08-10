@@ -2,6 +2,7 @@
 
 import pytest
 
+from core.config import settings
 from src.bp1.adaptive.core.cache import UnifiedCache
 from src.bp1.adaptive.integration.bridge import AdaptiveBridgeParser
 from src.bp1.adaptive.schemas import AdapterState, StrategyResult, StrategyType
@@ -69,8 +70,7 @@ async def test_bridge_returns_parsed_response(monkeypatch):
     """AdaptiveBridgeParser возвращает ParsedResponse."""
     # Очищаем ключи LLM, чтобы использовалась эвристика (сбор ссылок),
     # а не реальный LLM-путь (не зависеть от .env).
-    monkeypatch.delenv('LLM_API_KEY', raising=False)
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     parser = AdaptiveBridgeParser(source_name=EXAMPLE_SOURCE_NAME)
     parser._adaptive_parser._orchestrator = _FakeOrchestrator()
 
@@ -96,8 +96,7 @@ async def test_bridge_promotes_news(monkeypatch):
     Пункт 12: BP-2 должен обрабатывать каждую статью как самостоятельное
     событие с полным текстом (ex_text в text), а не только листинг.
     """
-    monkeypatch.delenv('LLM_API_KEY', raising=False)
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     parser = AdaptiveBridgeParser(source_name=EXAMPLE_SOURCE_NAME)
     parser._adaptive_parser._orchestrator = _FakeOrchestrator()
 

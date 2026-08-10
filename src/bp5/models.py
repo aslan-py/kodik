@@ -4,8 +4,12 @@
 - EventType: типы значимых событий + слова-маркеры для детекции
 - Channel: каналы доставки (telegram, email, dashboard)
 - User: конкретные получатели алертов (email, telegram)
-- RoutingRule: матрица маршрутизации (тип + приоритет → получатель + канал
-  + режим)
+- RoutingRule: матрица маршрутизации. Тип события — необязательное поле:
+  правило с типом срабатывает на (тип, приоритет), как раньше; правило БЕЗ
+  типа (`event_type_id IS NULL`) срабатывает на любое событие нужного
+  приоритета, независимо от заголовка — так выражается требование ТЗ «слать
+  все события приоритета П1», которое через ключевые слова не выразить
+  (см. openspec/changes/add-priority-only-routing)
 
 Журнал:
 - Alert: что/кому/куда отправлено. История + защита от повторной отправки
@@ -222,7 +226,8 @@ class PasswordResetCode(Base, Mixin):
 
 
 class RoutingRule(Base, Mixin, ActiveMixin):
-    """Матрица маршрутизации: тип + приоритет → получатель + канал + режим.
+    """Матрица маршрутизации: (тип + приоритет) ИЛИ приоритет → получатель +
+    канал + режим.
 
     Аналитик заполняет заранее. Детектор находит event_type_id и priority
     события, читает подходящие строки правила: «если событие такого типа
@@ -230,11 +235,18 @@ class RoutingRule(Base, Mixin, ActiveMixin):
     на пару (тип, приоритет) = несколько строк = несколько доставок; чтобы
     добавить или убрать адресата, просто добавляют/деактивируют строку —
     без правки кода.
+
+    event_type_id пустой — правило срабатывает на любое событие нужного
+    приоритета, независимо от заголовка (см. `src/bp5/pipeline.py::
+    sync_alerts`, `openspec/changes/add-priority-only-routing`).
     """
 
-    event_type_id: Mapped[int] = mapped_column(
+    event_type_id: Mapped[int | None] = mapped_column(
         ForeignKey('event_type.id', ondelete='RESTRICT'),
-        comment='Для какого типа значимого события',
+        comment=(
+            'Для какого типа значимого события. Пусто — любой тип события '
+            'этого приоритета (правило по приоритету)'
+        ),
     )
     priority: Mapped[PriorityLevel] = mapped_column(
         priority_level,
@@ -254,7 +266,7 @@ class RoutingRule(Base, Mixin, ActiveMixin):
     )
 
     # Связи нужны админке (FastAdmin показывает FK только через relationship).
-    event_type: Mapped['EventType'] = relationship('EventType')
+    event_type: Mapped['EventType | None'] = relationship('EventType')
     user: Mapped['User'] = relationship('User')
     channel: Mapped['Channel'] = relationship('Channel')
 
@@ -262,12 +274,25 @@ class RoutingRule(Base, Mixin, ActiveMixin):
         return f'#{self.id} · {self.priority} · {self.mode}'
 
     __table_args__ = (
+        # Ловит дубли правил С ЗАДАННЫМ типом (event_type_id NOT NULL) —
+        # как и раньше: NULL в Postgres не равен NULL, поэтому строки без
+        # типа этот constraint между собой не сравнивает.
         UniqueConstraint(
             'event_type_id',
             'priority',
             'channel_id',
             'user_id',
             name='uq_routing_rule_type_priority_channel_user',
+        ),
+        # Ловит дубли правил БЕЗ типа (event_type_id IS NULL) — тот же
+        # приём, что uq_search_task_no_trigger в src/bp1/models.py.
+        Index(
+            'uq_routing_rule_no_type_priority_channel_user',
+            'priority',
+            'channel_id',
+            'user_id',
+            unique=True,
+            postgresql_where=text('event_type_id IS NULL'),
         ),
     )
 
@@ -291,9 +316,12 @@ class Alert(Base, Mixin):
         ForeignKey('showcase_event.id', ondelete='RESTRICT'),
         comment='По какому событию витрины сработал алерт',
     )
-    event_type_id: Mapped[int] = mapped_column(
+    event_type_id: Mapped[int | None] = mapped_column(
         ForeignKey('event_type.id', ondelete='RESTRICT'),
-        comment='Какой тип значимого события распознан',
+        comment=(
+            'Какой тип значимого события распознан. Пусто — сработало '
+            'правило по приоритету, тип события распознать не удалось'
+        ),
     )
     priority: Mapped[PriorityLevel] = mapped_column(
         priority_level,
@@ -337,7 +365,7 @@ class Alert(Base, Mixin):
 
     # Связи нужны админке (FastAdmin показывает FK только через relationship).
     showcase_event: Mapped['ShowcaseEvent'] = relationship('ShowcaseEvent')
-    event_type: Mapped['EventType'] = relationship('EventType')
+    event_type: Mapped['EventType | None'] = relationship('EventType')
     user: Mapped['User'] = relationship('User')
     channel: Mapped['Channel'] = relationship('Channel')
 

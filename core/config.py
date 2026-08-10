@@ -176,7 +176,7 @@ class Settings(BaseSettings):
     # Эксплуатационные ручки: меняются при работе с конкретными источниками,
     # без правки кода. Значения по умолчанию равны прежним константам
     # (adaptive/processing/parser.py, adaptive/strategies/orchestrator.py).
-    bp1_max_news_per_source: int = 5
+    bp1_max_news_per_source: int = 3
     bp1_min_article_text_length: int = 100
     bp1_min_full_article_text_length: int = 300
     bp1_max_tail_fetch_attempts: int = 3

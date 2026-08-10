@@ -3,7 +3,10 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { useSelector } from "react-redux";
 import { Button } from "@/components/ui/Button/button";
-import { useCreateActionItemMutation, useGetActionItemsQuery } from "@/api/actionApi";
+import {
+  useCreateActionItemMutation,
+  useGetActionItemsQuery,
+} from "@/api/actionApi";
 import { Divider } from "@/components/ui/Divider";
 import { TaskCreation } from "@/components/cards/TaskCreation";
 import { Attributes } from "@/components/cards/Attributes";
@@ -18,6 +21,8 @@ import { Icon } from "@/components/ui/Icon/Icon";
 import { statusLabel } from "@/helpers/status";
 import { hasAccess, selectUser } from "@/store/authSlice";
 import styles from "./CardIncident.module.css";
+import { formatDateWithTime, toDisplayDate, toDotDate } from "@/helpers/date";
+import { EditShowcase } from "../EditShowcase/EditShowcase";
 
 export type CardIncidentProps = {
   incident: Showcase | null;
@@ -40,12 +45,18 @@ export function CardIncident({
   onTaskCreated,
 }: CardIncidentProps) {
   const [notification, setNotification] = useState<NotificationState>(null);
-  const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [createTask, { isLoading: taskLoading }] = useCreateActionItemMutation();
+  const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const [isEditing, setIsEditing] = useState(false);
+  const [createTask, { isLoading: taskLoading }] =
+    useCreateActionItemMutation();
 
   const user = useSelector(selectUser);
-  const canCreateTask = hasAccess(user?.role, ["admin"]);
-  // ! Тут идёт запрос не на события а на задачи с фильтром по showcase_event_id
+  const canCreateTask = hasAccess(user?.role, ["analyst", "admin"]);
+  const canEditShowcase = hasAccess(user?.role, ["analyst", "admin"]);
+
+  // У события может быть не больше одной задачи (гарантия бэкенда)
   const { data: relatedTasks = [] } = useGetActionItemsQuery(
     incident ? { showcase_event_id: incident.id } : undefined,
     { skip: !incident },
@@ -55,9 +66,15 @@ export function CardIncident({
 
   useEffect(() => {
     return () => {
-      if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
+      if (notificationTimerRef.current)
+        clearTimeout(notificationTimerRef.current);
     };
   }, []);
+
+  // при смене события закрываем режим редактирования
+  useEffect(() => {
+    setIsEditing(false);
+  }, [incident?.id]);
 
   const handleTaskSuccess = useCallback(
     (createdTaskId: number) => {
@@ -66,37 +83,60 @@ export function CardIncident({
         message: "Задача успешно создана, событие передано в работу",
       });
       onTaskCreated?.(createdTaskId);
-      if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
-      notificationTimerRef.current = setTimeout(() => setNotification(null), 3000);
+      if (notificationTimerRef.current)
+        clearTimeout(notificationTimerRef.current);
+      notificationTimerRef.current = setTimeout(
+        () => setNotification(null),
+        3000,
+      );
     },
     [onTaskCreated],
   );
 
   const handleTaskError = useCallback(() => {
     setNotification({ type: "error", message: "Задача не создана, ошибка" });
-    if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
-    notificationTimerRef.current = setTimeout(() => setNotification(null), 3000);
+    if (notificationTimerRef.current)
+      clearTimeout(notificationTimerRef.current);
+    notificationTimerRef.current = setTimeout(
+      () => setNotification(null),
+      3000,
+    );
   }, []);
 
-  const headerButtons: CardHeaderButton[] = useMemo(() => {
-    if (!relatedTask) return [];
-    return [
-      {
-        icon: <Icon name="arrow-right" />,
-        onClick: () => onOpenTask?.(relatedTask.id),
-        label: "Открыть задачу",
-      },
-    ];
-  }, [relatedTask, onOpenTask]);
+  const handleShowcaseUpdateSuccess = useCallback(() => {
+    setIsEditing(false);
+    setNotification({
+      type: "success",
+      message: "Событие успешно обновлено",
+    });
+    if (notificationTimerRef.current)
+      clearTimeout(notificationTimerRef.current);
+    notificationTimerRef.current = setTimeout(
+      () => setNotification(null),
+      3000,
+    );
+  }, []);
+
+  const handleShowcaseUpdateError = useCallback(() => {
+    setNotification({ type: "error", message: "Событие не обновлено, ошибка" });
+    if (notificationTimerRef.current)
+      clearTimeout(notificationTimerRef.current);
+    notificationTimerRef.current = setTimeout(
+      () => setNotification(null),
+      3000,
+    );
+  }, []);
+
 
   const header = useMemo(() => {
     if (!incident) return null;
+
     return (
       <CardHeader
         priority={incident.priority}
         status="Новое"
-        dateLabel="Обнаружено"
-        dateValue={incident.published_at.slice(0, 10).split("-").reverse().join(".")}
+        dateLabel="Опубликовано"
+        dateValue={toDisplayDate(incident.published_at)}
         title={incident.title}
         tags={[
           <span key="object">
@@ -117,18 +157,43 @@ export function CardIncident({
   }, [incident]);
 
   if (!incident) return null;
+
+  if (isEditing && canEditShowcase) {
+    return (
+      <Card
+        isOpen={isOpen}
+        onClose={onClose}
+        header={header}
+       
+      >
+        <EditShowcase
+          showcase={incident}
+          onSuccess={handleShowcaseUpdateSuccess}
+          onError={handleShowcaseUpdateError}
+          onCancel={() => setIsEditing(false)}
+        />
+      </Card>
+    );
+  }
+
   return (
     <Card
       isOpen={isOpen}
       onClose={onClose}
       header={header}
-      headerButtons={headerButtons}
       onCopyLink={() => {
         const url = `${window.location.origin}/incidents/${incident.id}`;
         navigator.clipboard.writeText(url).then(() => {
-          setNotification({ type: "success", message: "Ссылка на событие скопирована" });
-          if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
-          notificationTimerRef.current = setTimeout(() => setNotification(null), 3000);
+          setNotification({
+            type: "success",
+            message: "Ссылка на событие скопирована",
+          });
+          if (notificationTimerRef.current)
+            clearTimeout(notificationTimerRef.current);
+          notificationTimerRef.current = setTimeout(
+            () => setNotification(null),
+            3000,
+          );
         });
       }}
       onOpenSource={() => {
@@ -136,26 +201,47 @@ export function CardIncident({
           window.open(incident.source_url, "_blank", "noopener,noreferrer");
         }
       }}
+      footer={
+        <div className="flex items-center justify-between">
+          <p className="text-xs">Обновлено: {toDotDate(incident.updated_at)}</p>
+          {canEditShowcase && (
+            <Button
+              variant="primary"
+              size="small"
+              onClick={() => setIsEditing(true)}
+            >
+              Изменить событие
+            </Button>
+          )}
+        </div>
+      }
     >
       <div className="space-y-2">
-        <p className="text-[13px] font-semibold text-(--color-strong)">Что произошло</p>
+        <p className="text-[13px] font-semibold text-(--color-strong)">
+          Что произошло
+        </p>
         <p className="text-xs text-(--color-ink)">{incident.title}</p>
       </div>
       <Divider />
       <div className="space-y-2">
-        <p className="text-[13px] font-semibold text-(--color-strong)">Анализ события</p>
+        <p className="text-[13px] font-semibold text-(--color-strong)">
+          Анализ события
+        </p>
         <div className="grid grid-cols-[160px_1fr] gap-x-4 gap-y-3">
           <p className="text-xs text-(--color-muted)">Комментарий</p>
           <p className="text-xs text-(--color-ink)">
-            {incident.comment ? incident.comment : 'Комментарий отсутствует'}
+            {incident.comment ? incident.comment : "Комментарий отсутствует"}
           </p>
           <p className="text-xs text-(--color-muted)">Рекомендуемое действие</p>
           <p className="text-xs text-(--color-ink)">
-            {incident.action ? incident.action : 'Рекомендации отсутствуют'}
+            {incident.action ? incident.action : "Рекомендации отсутствуют"}
           </p>
           <p className="text-xs text-(--color-muted)">Срок реакции</p>
           <p className="text-xs font-medium text-(--color-ink)">
-          {incident.deadline ? incident.deadline : 'Срок не определён'}</p>
+            {toDisplayDate(incident.deadline)
+              ? toDisplayDate(incident.deadline)
+              : "Срок не определён"}
+          </p>
         </div>
       </div>
 
@@ -163,7 +249,7 @@ export function CardIncident({
       {hasTask && relatedTask ? (
         <>
           <RelatedTask
-            title={relatedTask.title}
+            title={relatedTask.task}
             details={`${statusLabel(relatedTask.status)}${relatedTask.deadline ? ` · до ${relatedTask.deadline.slice(0, 10)}` : ""}`}
             onClick={() => onOpenTask?.(relatedTask.id)}
           />
@@ -172,25 +258,33 @@ export function CardIncident({
       ) : canCreateTask ? (
         <TaskCreation
           incidentId={incident.id}
+          incidentDeadline={incident.deadline}
           onSubmit={(data) => createTask(data).unwrap()}
           onSuccess={(created) => handleTaskSuccess(created.id)}
           onError={handleTaskError}
         />
       ) : (
         <p className="text-xs text-(--color-muted)">
-          Задача по событию ещё не создана. Создание задач доступно только администраторам.
+          Задача по событию ещё не создана. Создание задач доступно только
+          администраторам.
         </p>
       )}
       {notification && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50">
-          <Notification type={notification.type}>{notification.message}</Notification>
+          <Notification type={notification.type}>
+            {notification.message}
+          </Notification>
         </div>
       )}
       <Divider />
       <Sources
         source={incident.source_url}
         items={[
-          { name: `${incident.media}`, date: "26 июл 2026", label: "первоисточник" },
+          {
+            name: `${incident.media}`,
+            date: "26 июл 2026",
+            label: "первоисточник",
+          },
         ]}
       />
       <Divider />

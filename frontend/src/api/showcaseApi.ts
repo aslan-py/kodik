@@ -28,24 +28,34 @@ export type Showcase = {
 export type GetShowcasesParams = {
   limit?: number;
   offset?: number;
-  title?: string;
-  category?: string;
-  priority?: string;
-  region?: string;
-  competitor?: string;
-  department?: string;
-  published_from?: string;
-  published_to?: string;
+  title?: string | null;
+  category?: string | null;
+  priority?: string | null;
+  region?: string | null;
+  competitor?: string | null;
+  department?: string | null;
+  published_from?: string | null;
+  published_to?: string | null;
 };
-type UpdateShowcaseRequest = {
-  priority?: string;
-  category_id?: number;
-  tonality?: string;
-  action?: string;
-  deadline?: string; // ISO-дата
-  department_id?: number;
-  comment?: string;
+// PATCH
+export type PriorityLevel = "p1" | "p2" | "p3" | "p4";
+export type Tonality =
+  | "positive"
+  | "neutral"
+  | "negative"
+  | "alarming"
+  | "irrelevant";
+
+export type UpdateShowcaseRequest = {
+  priority?: PriorityLevel | null;
+  category_id?: number | null;
+  tonality?: Tonality | null;
+  action?: string | null;
+  deadline?: string | null; // ISO-дата
+  department_id?: number | null;
+  comment?: string | null;
 };
+
 export const showcaseApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getShowcases: builder.query<Showcase[], GetShowcasesParams | void>({
@@ -65,9 +75,17 @@ export const showcaseApi = baseApi.injectEndpoints({
         const qs = sp.toString();
         return qs ? `/showcase?${qs}` : "/showcase";
       },
+      providesTags: (result) =>
+        result
+          ? [
+              ...result.map((item) => ({ type: "Showcases" as const, id: item.id })),
+              { type: "Showcases" as const, id: "LIST" },
+            ]
+          : [{ type: "Showcases" as const, id: "LIST" }],
     }),
     getShowcaseById: builder.query<Showcase, number>({
       query: (id) => `/showcase/${id}`,
+      providesTags: (_result, _error, id) => [{ type: "Showcases", id }],
     }),
     updateShowcase: builder.mutation<
       Showcase,
@@ -78,8 +96,16 @@ export const showcaseApi = baseApi.injectEndpoints({
         method: "PATCH",
         body,
       }),
+      invalidatesTags: (_result, _error, { id }) => [
+        { type: "Showcases", id },
+        { type: "Showcases", id: "LIST" },
+      ],
     }),
   }),
 });
 
-export const { useGetShowcasesQuery, useGetShowcaseByIdQuery } = showcaseApi;
+export const {
+  useGetShowcasesQuery,
+  useGetShowcaseByIdQuery,
+  useUpdateShowcaseMutation,
+} = showcaseApi;

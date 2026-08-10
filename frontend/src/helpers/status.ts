@@ -1,6 +1,6 @@
 /** Маппинг статусов задач */
 export function statusLabel(status: string): string {
-  if (status === "new") return "Новая";
+  if (status === "open" || status === "new") return "Новая";
   if (status === "in_progress") return "В работе";
   if (status === "done") return "Выполнена";
   return status;
@@ -8,10 +8,10 @@ export function statusLabel(status: string): string {
 
 /** Маппинг статусов для CSS-класса */
 export function statusClass(status: string): string {
-  if (status === "Новая" || status === "Новое" || status === "new") return "tonality tonality-neutral";
-  if (status === "В работе" || status === "in_progress") return "tonality tonality-positive";
-  if (status === "Выполнена" || status === "done") return "tonality tonality-positive";
-  return "tonality tonality-neutral";
+  if (status === "open" || status === "new") return "status-task status-task-open";
+  if (status === "in_progress") return "status-task status-task-progress";
+  if (status === "done") return "status-task status-task-done";
+  return "status-task status-task-open";
 }
 
 /** Маппинг приоритетов для CSS-класса */

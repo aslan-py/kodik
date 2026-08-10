@@ -4,9 +4,11 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal/Modal";
 import { useAuth } from "@/hooks/useAuth";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export default function RegisterForm() {
+  const router = useRouter();
   const [email, setEmail] = useState("user@example.com");
   const [full_name, setFullName] = useState("string");
   const [password, setPassword] = useState("string");
@@ -105,7 +107,7 @@ export default function RegisterForm() {
           type="submit"
           loading={loading}
         >
-          Войти
+          Зарегистрироваться
         </Button>
       </form>
       <Modal isOpen={success} onClose={() => setSuccess(false)}>
@@ -120,7 +122,7 @@ export default function RegisterForm() {
             className="btn mt-6 h-9 text-sm font-medium"
             fullWidth
             variant="primary"
-            onClick={() => setSuccess(false)}
+            onClick={() => router.push("/login")}
           >
             Ок
           </Button>

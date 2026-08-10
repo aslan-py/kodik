@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
+import Loader from "@/app/loading";
 // ⚠️ поправьте путь под ваш проект
 import { type Permission } from "@/store/authSlice";
 import { ProtectedRoute } from "@/components/protected-route/protected-route";
@@ -47,7 +48,9 @@ function HomeContent() {
     );
   }
 
-  return null; // не-pending: этот кадр пуст, дальше сработает редирект в /incidents
+  // не-pending: показываем лоадер, пока useEffect переводит на /incidents,
+  // чтобы не было пустого (белого) кадра после входа
+  return <Loader />;
 }
 
 export default function HomePage() {

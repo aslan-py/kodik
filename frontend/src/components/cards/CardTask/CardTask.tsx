@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { Card, CardHeaderButton } from "@/components/ui/Card/Card";
 import { Icon } from "@/components/ui/Icon/Icon";
 import { Divider } from "@/components/ui/Divider";
@@ -9,34 +9,107 @@ import { RelatedTask } from "@/components/cards/RelatedTask";
 import { Button } from "@/components/ui/Button/button";
 import { useGetActionItemByIdQuery } from "@/api/actionApi";
 import { useGetShowcaseByIdQuery } from "@/api/showcaseApi";
-import { formatDateWithTime, formatDeadline } from "@/helpers/date";
+import { useGetAllUsersQuery } from "@/api/usersApi";
+import { formatDateWithTime, toDisplayDate, toDotDate } from "@/helpers/date";
 import { statusLabel } from "@/helpers/status";
 import Loader from "@/app/loading";
+import { TaskCreation } from "../TaskCreation";
+import { usePermission } from "@/hooks/useAuth";
+import { useDepartmentName } from "@/hooks/useDepartamentName";
+import { Notification } from "@/components/ui/Notification";
 
 export type CardTaskProps = {
   taskId: number | null;
   isOpen: boolean;
   onClose: () => void;
-  onOpenIncident: (incidentId: number) => void;
+  onOpenIncident?: (incidentId: number) => void; // теперь опционален
 };
 
-const cardStubProps = {
-  onCopyLink: () => {},
-  onOpenSource: () => {},
-};
+function DepartmentLabel({ departmentId }: { departmentId: number }) {
+  const name = useDepartmentName(departmentId);
+  return <span>{name}</span>;
+}
 
-export function CardTask({ taskId, isOpen, onClose, onOpenIncident }: CardTaskProps) {
+type NotificationState = {
+  type: "success" | "error";
+  message: string;
+} | null;
+
+export function CardTask({
+  taskId,
+  isOpen,
+  onClose,
+  onOpenIncident,
+}: CardTaskProps) {
   const { data: task, isLoading } = useGetActionItemByIdQuery(taskId ?? 0, {
     skip: !taskId,
   });
 
-  // связанное событие подтягиваем отдельно по showcase_id, когда задача загружена
-  const { data: incident } = useGetShowcaseByIdQuery(task?.showcase_id ?? 0, {
-    skip: !task,
-  });
+  const { data: incident } = useGetShowcaseByIdQuery(
+    task?.showcase_event_id ?? 0,
+    {
+      skip: !task?.showcase_event_id,
+    },
+  );
+  // TODO добавить пользователя после подключения по айди
+  const { data: user } = useGetAllUsersQuery(
+    { id: task?.assigned_user_id ?? undefined },
+    {
+      skip: !task?.assigned_user_id,
+    },
+  );
+  const [isEditing, setIsEditing] = useState(false);
+  const canAdmin = usePermission(["analyst", "admin"]);
 
-  const [showComment, setShowComment] = useState(false);
-  const [comment, setComment] = useState("");
+  const [notification, setNotification] = useState<NotificationState>(null);
+  const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  useEffect(() => {
+    return () => {
+      if (notificationTimerRef.current)
+        clearTimeout(notificationTimerRef.current);
+    };
+  }, []);
+
+  const showNotification = useCallback(
+    (state: NonNullable<NotificationState>) => {
+      setNotification(state);
+      if (notificationTimerRef.current)
+        clearTimeout(notificationTimerRef.current);
+      notificationTimerRef.current = setTimeout(
+        () => setNotification(null),
+        3000,
+      );
+    },
+    [],
+  );
+
+  const handleCopyLink = useCallback(() => {
+    if (!task) return;
+    const url = `${window.location.origin}/task/${task.id}`;
+    navigator.clipboard
+      .writeText(url)
+      .then(() => {
+        showNotification({
+          type: "success",
+          message: "Ссылка на задачу скопирована",
+        });
+      })
+      .catch(() => {
+        showNotification({
+          type: "error",
+          message: "Не удалось скопировать ссылку",
+        });
+      });
+  }, [task, showNotification]);
+
+  const handleOpenSource = useCallback(() => {
+    if (incident?.source_url) {
+      window.open(incident.source_url, "_blank", "noopener,noreferrer");
+    }
+  }, [incident]);
 
   const header = useMemo(() => {
     if (!task) return null;
@@ -46,39 +119,19 @@ export function CardTask({ taskId, isOpen, onClose, onOpenIncident }: CardTaskPr
         status={statusLabel(task.status)}
         dateLabel="Создана"
         dateValue={formatDateWithTime(task.created_at)}
-        title={task.title}
-        tags={[incident?.competitor, incident?.category].filter(Boolean) as string[]}
+        title={task.task}
+        tags={
+          [incident?.competitor, incident?.category].filter(Boolean) as string[]
+        }
       />
     );
   }, [task, incident]);
-
-  const headerButtons: CardHeaderButton[] = useMemo(() => {
-    return [
-      {
-        icon: <Icon name="arrow-right" />,
-        onClick: onClose,
-        label: "Назад",
-      },
-    ];
-  }, [onClose]);
-
-  const handleAddComment = useCallback(() => {
-    if (!comment.trim()) return;
-    // TODO: подключить, когда появится API комментариев/истории задачи
-    setComment("");
-    setShowComment(false);
-  }, [comment]);
 
   if (!taskId) return null;
 
   if (isLoading) {
     return (
-      <Card
-        isOpen={isOpen}
-        onClose={onClose}
-        header={<Loader />}
-        {...cardStubProps}
-      >
+      <Card isOpen={isOpen} onClose={onClose} header={<Loader />}>
         <div className="p-4 text-sm text-(--color-muted)">Загрузка...</div>
       </Card>
     );
@@ -89,132 +142,129 @@ export function CardTask({ taskId, isOpen, onClose, onOpenIncident }: CardTaskPr
       <Card
         isOpen={isOpen}
         onClose={onClose}
-        header={<div className="text-sm text-(--color-muted)">Задача не найдена</div>}
-        {...cardStubProps}
+        header={
+          <div className="text-sm text-(--color-muted)">Задача не найдена</div>
+        }
       >
-        <div className="p-4 text-sm text-(--color-muted)">Задача не найдена</div>
+        <div className="p-4 text-sm text-(--color-muted)">
+          Задача не найдена
+        </div>
       </Card>
     );
   }
 
+  // ── Режим редактирования ──
+  if (isEditing && canAdmin) {
+    return (
+      <Card isOpen={isOpen} onClose={onClose} header={header}>
+        <TaskCreation
+          incidentId={task.showcase_event_id}
+          incidentDeadline={incident?.deadline}
+          isEditing
+          initialData={task}
+          onSuccess={() => setIsEditing(false)}
+          onError={() => setIsEditing(false)}
+        />
+      </Card>
+    );
+  }
+
+  // ── Режим просмотра ──
   return (
     <Card
       isOpen={isOpen}
       onClose={onClose}
       header={header}
-      headerButtons={headerButtons}
-      {...cardStubProps}
+      onCopyLink={handleCopyLink}
+      onOpenSource={incident?.source_url ? handleOpenSource : undefined}
+      footer={
+        <p className="text-xs">Обновлено: {toDotDate(task.updated_at)}</p>
+      }
     >
-      {/* ── Требуемое действие ── */}
-      <div className="space-y-4">
+      <div className="mb-4">
         <p className="text-[13px] font-semibold text-(--color-strong)">
+          Содержание задачи
+        </p>
+      </div>
+      <div className="mb-4">
+        <p className="text-[11px] text-(--color-muted) mb-1">
           Требуемое действие
         </p>
-        <p className="text-xs text-(--color-ink)">{task.title}</p>
+        <p className="text-xs text-(--color-ink)">{task.task}</p>
       </div>
 
-      <Divider />
-
-      {/* ── Ответственный и срок ── */}
-      <div className="space-y-4">
-        <p className="text-[13px] font-semibold text-(--color-strong)">
-          Ответственный и срок
-        </p>
-        {/* TODO: заглушка — заменить на данные пользователя, когда появится usersApi */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-(--color-accent-light) text-(--color-accent) flex items-center justify-center text-xs font-semibold shrink-0">
-            —
-          </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-medium text-(--color-ink)">
-              {task.assigned_user_id != null
-                ? `Пользователь #${task.assigned_user_id}`
-                : "Не назначен"}
-            </span>
-          </div>
-        </div>
-        <div className="grid grid-cols-[160px_1fr] gap-x-4 gap-y-3">
-          <p className="text-xs text-(--color-muted)">Срок</p>
-          <p className="text-xs font-medium text-(--color-ink)">
-            {task.deadline ? formatDeadline(task.deadline) : "—"}
-          </p>
-        </div>
-      </div>
-
-      <Divider />
-
-      {/* ── Ожидаемый результат ── */}
-      <div className="space-y-4">
-        <p className="text-[13px] font-semibold text-(--color-strong)">
+      <div className="mb-4">
+        <p className="text-[11px] text-(--color-muted) mb-1">
           Ожидаемый результат
         </p>
         <p className="text-xs text-(--color-ink)">{task.expected_result}</p>
       </div>
 
+      <div className="mb-4">
+        <p className="text-[11px] text-(--color-muted) mb-1">
+          Ответственный отдел
+        </p>
+        <p className="text-xs text-(--color-ink)">
+          <DepartmentLabel departmentId={task.department_id} />
+        </p>
+      </div>
+      {task.assigned_user_id ? (
+        <div className="mb-4">
+          <p className="text-[11px] text-(--color-muted) mb-1">Исполнитель</p>
+          <div className="text-xs text-(--color-ink)">
+            <div className="w-8 h-8 rounded-full bg-(--color-accent-light) text-(--color-accent) flex items-center justify-center text-xs font-semibold shrink-0">
+              {task.assigned_user_id}
+            </div>
+          </div>
+        </div>
+      ) : (
+        ""
+      )}
+
+      <div className="mb-4">
+        <p className="text-[11px] text-(--color-muted) mb-1">Срок</p>
+        <p className="text-xs text-(--color-ink)">
+          {task.deadline ? toDisplayDate(task.deadline) : "—"}
+        </p>
+      </div>
+
       <Divider />
 
-      {/* ── Связанное событие ── */}
       {incident && (
         <RelatedTask
           label="Связанное событие"
           description={incident.title}
           title={incident.title}
           details={`${incident.competitor} · ${incident.category} · ${incident.priority} · ${incident.published_at.slice(0, 10)} · ${incident.region}`}
-          onClick={() => onOpenIncident(task.showcase_id)}
+          onClick={
+            onOpenIncident
+              ? () => onOpenIncident(task.showcase_event_id)
+              : undefined
+          }
         />
       )}
 
       <Divider />
 
-      {/* ── Комментарии и история ── */}
-      {/* TODO: заглушка — подключить, когда появится API истории/комментариев задачи */}
-      <div className="text-sm">
-        <p className="font-medium">Комментарии и история</p>
-        <div className="mb-3 text-xs text-(--color-muted)">Пока недоступно</div>
-        {showComment ? (
-          <div>
-            <p className="text-(--color-secondary) mb-2">Комментарий аналитика</p>
-            <textarea
-              className="w-full border border-(--color-border) rounded-lg p-3 text-xs resize-none focus:outline-none focus:border-(--color-accent) bg-transparent"
-              rows={3}
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              placeholder="Введите комментарий..."
-            />
-            <div className="flex gap-2 mt-2">
-              <Button variant="primary" size="small" onClick={handleAddComment}>
-                Отправить
-              </Button>
-              <Button
-                variant="tertiary"
-                size="small"
-                onClick={() => {
-                  setShowComment(false);
-                  setComment("");
-                }}
-              >
-                Отмена
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setShowComment(true)}
-            className="text-(--color-accent) text-sm cursor-pointer bg-transparent border-none p-0 text-left"
+      {canAdmin && (
+        <div className="flex justify-end">
+          <Button
+            variant="secondary"
+            size="medium"
+            onClick={() => setIsEditing(true)}
           >
-            + Комментарий аналитика
-          </button>
-        )}
-      </div>
+            Изменить задачу
+          </Button>
+        </div>
+      )}
 
-      <Divider />
-
-      {/* ── Footer ── */}
-      <div className="flex justify-end">
-        <Button variant="secondary" size="medium">
-          Изменить задачу
-        </Button>
-      </div>
+      {notification && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50">
+          <Notification type={notification.type}>
+            {notification.message}
+          </Notification>
+        </div>
+      )}
     </Card>
   );
 }

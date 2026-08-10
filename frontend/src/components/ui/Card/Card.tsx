@@ -15,7 +15,7 @@ export type CardProps = {
   onClose: () => void;
   header: ReactNode;
   children: ReactNode;
-  headerButtons?: CardHeaderButton[];
+  footer?: ReactNode;
   onCopyLink?: () => void;
   onOpenSource?: () => void;
 };
@@ -25,7 +25,7 @@ export function Card({
   onClose,
   header,
   children,
-  headerButtons,
+  footer,
   onCopyLink,
   onOpenSource,
 }: CardProps) {
@@ -40,16 +40,7 @@ export function Card({
           >
             <Icon name="close" />
           </button>
-          {headerButtons?.map((btn, i) => (
-            <button
-              key={i}
-              className={styles.iconButton}
-              onClick={btn.onClick}
-              title={btn.label}
-            >
-              {btn.icon}
-            </button>
-          ))}
+
           {onCopyLink && (
             <button
               className={styles.iconButtonInverse}
@@ -72,6 +63,7 @@ export function Card({
         </div>
         <div className={styles.card}>
           <div className={styles.content}>{header}{children}</div>
+          {footer && <div className={styles.footer}>{footer}</div>}
         </div>
       </div>
     </Modal>

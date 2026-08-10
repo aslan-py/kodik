@@ -4,14 +4,15 @@ import { Button } from "@/components/ui/Button";
 import { Checkbox } from "@/components/ui/Checkbox/Checkbox";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/hooks/useAuth";
+import { ResetPassword } from "@/components/auth/ResetPassword";
 import { useState } from "react";
 
 export default function LoginForm() {
-  const [email, setEmail] = useState("viewer@example.com");
+  const [email, setEmail] = useState("admin@example.com");
   const [password, setPassword] = useState("12345Admin");
-  const [agree, setAgree] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showReset, setShowReset] = useState(false);
 
   const { login } = useAuth();
 
@@ -58,16 +59,21 @@ export default function LoginForm() {
           className="mb-6"
         />
         <div className="flex justify-between items-center mb-6">
-          <Checkbox
+          {/* <Checkbox
             id="agree"
             checked={agree}
             onChange={setAgree}
             label="Запомнить меня"
             error=""
             className=""
-          />
+          /> */}
 
-          <Button className="btn inline text-sm" size="none" variant="tertiary">
+          <Button
+            className="btn inline text-sm"
+            size="none"
+            variant="tertiary"
+            onClick={() => setShowReset(true)}
+          >
             Забыли пароль?
           </Button>
         </div>
@@ -97,6 +103,8 @@ export default function LoginForm() {
           </Button>
         </div>
       </Modal> */}
+
+      <ResetPassword isOpen={showReset} onClose={() => setShowReset(false)} />
     </div>
   );
 }

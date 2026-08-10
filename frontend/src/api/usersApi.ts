@@ -2,7 +2,6 @@
 import type { AuthUser, Permission } from "@/store/authSlice";
 import { baseApi } from "./baseApi";
 
-
 type EditMeRequest = {
   email?: string;
   password?: string;
@@ -12,6 +11,7 @@ type EditMeRequest = {
   current_password?: string;
 };
 type GetAllUsersParams = {
+  id?: number | null;
   full_name?: string;
   email?: string;
   department_id?: number;
@@ -39,20 +39,24 @@ export const usersApi = baseApi.injectEndpoints({
         method: "PATCH",
         body: { role },
       }),
+      invalidatesTags: ["Users"],
     }),
-    getAllUsers: builder.query<{ user: AuthUser[] }, GetAllUsersParams | void>({
+    getAllUsers: builder.query<AuthUser[], GetAllUsersParams | void>({
       query: (params) => {
         const searchParams = new URLSearchParams();
         if (params?.full_name) searchParams.set("full_name", params.full_name);
         if (params?.email) searchParams.set("email", params.email);
         if (params?.department_id != null)
           searchParams.set("department_id", String(params.department_id));
+        if (params?.id != null) searchParams.set("id", String(params.id));
+
         const qs = searchParams.toString();
         return qs ? `/users?${qs}` : "/users";
       },
+      providesTags: ["Users"],
     }),
   }),
 });
 
-export const { useGetMeQuery, useGetAllUsersQuery, useUpdateRoleUserMutation } =
+export const { useGetMeQuery, useEditMeMutation, useGetAllUsersQuery, useUpdateRoleUserMutation } =
   usersApi;

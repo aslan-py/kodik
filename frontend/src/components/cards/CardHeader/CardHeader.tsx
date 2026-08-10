@@ -26,7 +26,7 @@ export function CardHeader({
       <div className="flex flex-col">
         <p className="flex gap-2.5 mb-3.5 items-center">
           <span className={priorityClass(priority)}>{priority}</span>
-          <span className={statusClass(status)}>{status}</span>
+          {status ? <span className={statusClass(status)}>{status}</span> : null}
           <span className="text-xs text-(--color-muted)">
             {dateLabel} {dateValue}
           </span>

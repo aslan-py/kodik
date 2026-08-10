@@ -6,18 +6,16 @@ import { usePathname } from "next/navigation";
 import UserSidebarProfile from "./UserSidebarProfile";
 import { Icon } from "@/components/ui/Icon/Icon";
 import { usePermission } from "@/hooks/useAuth";
+import { Divider } from "../ui/Divider";
 
-const baseItems = [
-  { href: "/incidents", label: "События" },
-  { href: "/task", label: "Задачи" },
-];
+const baseItems = [{ href: "/incidents", label: "События" }];
+const viewerItems = [{ href: "/myTask", label: "Мои задачи" }];
 
 const adminSubItems = [
-  { href: "/admin", label: "Администрирование" },
-  { href: "/admin/monitoring", label: "Мониторинг" },
-  { href: "/admin/filtring", label: "Фильтрация" },
-  { href: "/admin/classification", label: "Классификация" },
-  { href: "/admin/users", label: "Пользователи" },
+  { href: "monitoring", label: "Мониторинг" },
+  { href: "filtring", label: "Фильтрация" },
+  { href: "classification", label: "Классификация" },
+  { href: "users", label: "Пользователи" },
 ];
 
 export default function Sidebar() {
@@ -26,12 +24,13 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   const canViewer = usePermission(["viewer"]);
-  const canAnalyst = usePermission(["analyst"]);
-  const canAdmin = usePermission(["admin"]);
+  const canAdmin = usePermission(["analyst", "admin"]);
+  const canAnalyst = usePermission(["analyst", "admin"]);
 
   const navItems = [
     ...baseItems,
-    ...(canAnalyst || canAdmin ? adminSubItems : []),
+    ...(canViewer ? viewerItems : []),
+    ...(canAdmin || canAnalyst ? [{ href: "/task", label: "Задачи" }] : []),
   ];
 
   const isAdminActive = adminSubItems.some((item) => pathname === item.href);
@@ -124,8 +123,22 @@ export default function Sidebar() {
               )}
             </li>
           )}
+          <Divider></Divider>
+          <li >
+            <Link
+              href={process.env.NEXT_PUBLIC_ANALYTICS_URL ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex gap-1 items-center rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${isCollapsed ? "text-center" : ""} text-(--color-text-navbar) hover:bg-zinc-800`}
+              title={isCollapsed ? "Аналитика" : undefined}
+            >
+              {isCollapsed ? "А" : "Аналитика"}
+            <Icon name="open-source" className="text-[#9A9EA4]"></Icon>
+            </Link>
+          </li>
         </ul>
       </nav>
+
       <div className={isCollapsed ? "hidden" : ""}>
         <UserSidebarProfile />
       </div>

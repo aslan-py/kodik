@@ -243,3 +243,10 @@
   color:#dc2626;
 
 }
+:global(.search-checkbox ) input {
+
+}
+:global(.search-checkbox ) span {
+  color: var(--color-muted);
+  font-size: 12px;
+}

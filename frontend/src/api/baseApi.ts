@@ -3,8 +3,7 @@ import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import { getAccessToken, clearAccessToken } from "@/helpers/cookies";
 
 const baseQuery = fetchBaseQuery({
-  baseUrl: "http://127.0.0.1:8000",
-  // baseUrl: process.env.NEXT_PUBLIC_API_URL,
+  baseUrl: process.env.NEXT_PUBLIC_API_URL,
   prepareHeaders: (headers) => {
     const token = getAccessToken();
     if (token) {
@@ -26,9 +25,8 @@ const baseQueryWithAuth: typeof baseQuery = async (args, api, extraOptions) => {
 
   if (result.error?.status === 401 && !isExempt) {
     clearAccessToken();
-    // диспатчим тип экшена напрямую, БЕЗ импорта action-creator'а из authSlice —
-    // это и есть разрыв цикла baseApi → authSlice → usersApi → baseApi
     api.dispatch({ type: "auth/logout" });
+    api.dispatch(baseApi.util.resetApiState()); // сброс кэша RTK Query
     window.location.href = "/login";
   }
 
@@ -38,6 +36,6 @@ const baseQueryWithAuth: typeof baseQuery = async (args, api, extraOptions) => {
 export const baseApi = createApi({
   reducerPath: "baseApi",
   baseQuery: baseQueryWithAuth,
-  tagTypes: ["Showcases"],
+  tagTypes: ["Showcases", "Department", "ActionItem", "Category", "Users"],
   endpoints: () => ({}),
 });

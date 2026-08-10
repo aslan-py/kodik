@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { hasAccess, type Permission } from "@/store/authSlice";
-import Loader from "@/app/loading";
+import Loader from "@/app/(navPages)/loading";
 
 type ProtectedRouteProps = {
   onlyUnAuth?: boolean;

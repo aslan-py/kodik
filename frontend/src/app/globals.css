@@ -125,6 +125,54 @@ body {
 }
 
 
+/* Task status badges */
+
+.status-task {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.status-task::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* open — Новая */
+.status-task-open {
+    color: var(--color-accent);
+    background: var(--color-accent-light);
+}
+.status-task-open::before {
+    background: var(--color-accent);
+}
+
+/* in_progress — В работе */
+.status-task-progress {
+    color: var(--color-ink);
+    background: var(--color-surface);
+}
+.status-task-progress::before {
+    background: var(--color-accent);
+}
+
+/* done — Выполнена */
+.status-task-done {
+    color: var(--color-secondary);
+    background: var(--color-surface);
+}
+.status-task-done::before {
+    background: #6F8C77;
+}
+
 /* Surface block */
 
 .surface-block {

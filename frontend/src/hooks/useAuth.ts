@@ -20,6 +20,7 @@ import {
 } from "@/store/authSlice";
 import { useToast } from "@/components/ui/Notification/toast";
 import { setAccessToken, clearAccessToken } from "@/helpers/cookies";
+import { baseApi } from "@/api/baseApi";
 
 export function usePermission(requiredRoles?: Permission[]) {
   const role = useAppSelector(selectUser)?.role;
@@ -51,6 +52,7 @@ export function useAuth() {
       } catch {
         clearAccessToken();
         dispatch(logoutAction());
+         dispatch(baseApi.util.resetApiState()); // на случай если до этого был залогинен другой юзер
         showToast("error", "Ошибка входа. Проверьте email и пароль");
       }
     },
@@ -98,6 +100,7 @@ export function useAuth() {
     } finally {
       clearAccessToken();
       dispatch(logoutAction());
+      dispatch(baseApi.util.resetApiState());
 
       if (serverLogoutSucceeded) {
         showToast("success", "Вы вышли из системы");

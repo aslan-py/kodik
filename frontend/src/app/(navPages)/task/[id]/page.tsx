@@ -2,7 +2,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { CardTask } from "@/components/cards/CardTask";
+import { TaskWithIncident } from "@/components/cards/TaskWithIncident/TaskWithIncident";
 import TaskPage from "../page";
 
 export default function TaskDetailPage() {
@@ -13,11 +13,9 @@ export default function TaskDetailPage() {
   return (
     <>
       <TaskPage />
-      <CardTask
+      <TaskWithIncident
         taskId={Number.isFinite(id) ? id : null}
-        isOpen
         onClose={() => router.push("/task")}
-        onOpenIncident={(incidentId) => router.push(`/incidents/${incidentId}`)}
       />
     </>
   );

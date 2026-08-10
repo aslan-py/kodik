@@ -3,19 +3,20 @@ import { baseApi } from "./baseApi";
 
 export type ActionItem = {
   id: number;
-  showcase_id: number;
-  title: string;
-  assigned_user_id?: number | null;
-  expected_result: string;
+  showcase_event_id: number;
+  task: string;
   department_id: number;
+  assigned_user_id?: number | null;
+  deadline?: string | null;
+  expected_result: string | null;
   status: string; // "new" | "in_progress" | "done"
-  deadline?: string;
   created_at: string;
+  updated_at: string;
 };
 
 export type CreateActionItemRequest = {
-  showcase_id: number;
-  title: string;
+  showcase_event_id: number;
+  task: string;
   assigned_user_id?: number | null;
   department_id: number;
   deadline?: string;
@@ -35,7 +36,9 @@ type UpdateActionItemRequest = {
   status?: string;
   expected_result?: string;
   // только для analyst/admin:
+  task?: string;
   department_id?: number;
+  deadline?: string;
   assigned_user_id?: number | null;
 };
 export const actionApi = baseApi.injectEndpoints({
@@ -46,6 +49,7 @@ export const actionApi = baseApi.injectEndpoints({
         method: "POST",
         body,
       }),
+      invalidatesTags: ["ActionItem"],
     }),
     getActionItems: builder.query<ActionItem[], GetActionItemsParams | void>({
       query: (params) => {
@@ -61,9 +65,11 @@ export const actionApi = baseApi.injectEndpoints({
         const qs = sp.toString();
         return qs ? `/action-items?${qs}` : "/action-items";
       },
+      providesTags: ["ActionItem"],
     }),
     getActionItemById: builder.query<ActionItem, number>({
       query: (id) => `/action-items/${id}`,
+      providesTags: (_result, _error, id) => [{ type: "ActionItem", id }],
     }),
     updateActionItem: builder.mutation<
       ActionItem,
@@ -74,6 +80,7 @@ export const actionApi = baseApi.injectEndpoints({
         method: "PATCH",
         body,
       }),
+      invalidatesTags: (_result, _error, { id }) => [{ type: "ActionItem", id }, "ActionItem"],
     }),
   }),
 });

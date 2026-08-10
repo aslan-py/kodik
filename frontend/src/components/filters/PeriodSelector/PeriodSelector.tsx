@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { formatDate, formatShort } from "@helpers/date";
+import { formatDate, formatShort, parseISODate } from "@helpers/date";
 import { Select, SelectItem } from "@/components/ui/Select";
+import { DateTimePicker } from "@/components/ui/DatePicker/DatePicker";
 
 type PeriodOption =
   | "today"
@@ -110,8 +111,8 @@ export function PeriodSelector({
   const dateLabel = useMemo(() => {
     if (!dateFrom && !dateTo) return "";
 
-    const from = dateFrom ? new Date(dateFrom + "T00:00:00") : null;
-    const to = dateTo ? new Date(dateTo + "T00:00:00") : null;
+    const from = parseISODate(dateFrom);
+    const to = parseISODate(dateTo);
 
     if (currentPeriod === "today" && to) {
       return formatShort(to);
@@ -151,18 +152,16 @@ export function PeriodSelector({
 
               {opt.value === "custom" && currentPeriod === "custom" && (
                 <div className="flex items-center gap-1.5 border-t border-zinc-100 px-3 py-2">
-                  <input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => onDateFromChange(e.target.value)}
-                    className="date-input min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs outline-none transition focus:border-zinc-900"
+                  <DateTimePicker
+                    value={parseISODate(dateFrom)}
+                    onChange={(d) => onDateFromChange(formatDate(d))}
+                    withTime={false}
                   />
                   <span className="text-xs text-zinc-400">—</span>
-                  <input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => onDateToChange(e.target.value)}
-                    className="date-input min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-xs outline-none transition focus:border-zinc-900"
+                  <DateTimePicker
+                    value={parseISODate(dateTo)}
+                    onChange={(d) => onDateToChange(formatDate(d))}
+                    withTime={false}
                   />
                 </div>
               )}

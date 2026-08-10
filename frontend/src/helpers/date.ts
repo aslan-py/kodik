@@ -1,3 +1,4 @@
+/** Сокращённые названия месяцев для формата "DD MMM" (напр. "5 авг") */
 export const shortMonthNames = [
   "янв",
   "фев",
@@ -13,6 +14,7 @@ export const shortMonthNames = [
   "дек",
 ];
 
+/** Date → "YYYY-MM-DD" (для запросов к бэку, инпутов type=date и т.п.) */
 export function formatDate(d: Date): string {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, "0");
@@ -20,10 +22,12 @@ export function formatDate(d: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/** Date → "5 авг" (короткий формат для отображения пользователю) */
 export function formatShort(d: Date): string {
   return `${d.getDate()} ${shortMonthNames[d.getMonth()]}`;
 }
 
+/** Текущая дата → "5 августа" (полное название месяца, локаль ru-RU) */
 export const dateToDayView = () => {
   return new Intl.DateTimeFormat("ru-RU", {
     day: "numeric",
@@ -31,85 +35,89 @@ export const dateToDayView = () => {
   }).format(new Date());
 };
 
-/** Парсит "DD.MM.YYYY" → Date */
+/**
+ * "YYYY-MM-DD" → "DD.MM.YYYY" (для отображения даты с бэка пользователю)
+ * ⚠️ несмотря на название, разделитель — точка, а не дефис
+ */
+export function toDisplayDate(d: string): string {
+  if (!d) return "";
+  const [year, month, day] = d.split("-");
+  return `${day}.${month}.${year}`;
+}
+
+/**
+ * "DD-MM-YYYY" → "YYYY-MM-DD" (для отправки даты на бэк)
+ */
+export function toISODate(d: string): string {
+  if (!d) return "";
+  const [day, month, year] = d.split("-");
+  return `${year}-${month}-${day}`;
+}
+
+/** "DD.MM.YYYY" → Date (парсинг даты, введённой/показанной пользователю) */
 export function parseDotDate(d: string): Date {
   const [day, month, year] = d.split(".").map(Number);
   return new Date(year, month - 1, day);
 }
 
+/** "YYYY-MM-DD" → Date, без сдвига по таймзоне (фиксируем время 00:00 локально) */
+export function parseISODate(d: string): Date | undefined {
+  if (!d) return undefined;
+  return new Date(`${d}T00:00:00`);
+}
+
 /* ──────────────── Для CardTask ──────────────── */
 
-/** ISO-строка → "26 июл, 10:47" */
+/** ISO-строка с датой и временем → "26 июл, 10:47" */
 export function formatDateWithTime(dateStr: string): string {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return dateStr;
   return `${d.getDate()} ${shortMonthNames[d.getMonth()]}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/** "MM-DD-YYYY HH:mm" → относительный формат (Сегодня / Завтра / Послезавтра / Через N дней) */
+/** ISO-строка с временем ("2026-08-05T18:15:28.912940Z") → "DD.MM.YYYY" (локальная таймзона браузера) */
+export function toDotDate(isoString: string): string {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return "";
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${day}.${month}.${year}`;
+}
+/**
+ * "YYYY-MM-DD" → разница в днях с сегодня + распарсенная дата.
+ * Общая база для formatDeadline и компонентов типа DeadlineBadge,
+ * чтобы не пересчитывать diffDays в нескольких местах.
+ */
+export function getDeadlineStatus(
+  deadline: string,
+): { date: Date; diffDays: number } | null {
+  const date = parseISODate(deadline);
+  if (!date) return null;
+  const now = new Date();
+  const diffDays = Math.ceil(
+    (date.getTime() -
+      new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) /
+      86400000,
+  );
+  return { date, diffDays };
+}
+/**
+ * "YYYY-MM-DD" → относительный формат даты
+ * ("Просрочено на N дней" для прошедших дат /
+ * "Сегодня" / "Завтра" / "Послезавтра" /
+ * "Через N дней" для 3–7 дней, иначе "DD.MM.YYYY")
+ */
 export function formatDeadline(deadline: string): string {
   if (!deadline) return "";
-  const match = deadline.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/);
-  if (!match) return deadline;
-  const [, month, day, year, hour, minute] = match;
-  const now = new Date();
-  const date = new Date(Number(year), Number(month) - 1, Number(day));
-  const diffDays = Math.ceil(
-    (date.getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) / 86400000
-  );
-  const time = `${hour}:${minute}`;
-  if (diffDays === 0) return `Сегодня, ${time}`;
-  if (diffDays === 1) return `Завтра, ${time}`;
-  if (diffDays === 2) return `Послезавтра, ${time}`;
-  if (diffDays > 2 && diffDays <= 7) return `Через ${diffDays} дней, ${time}`;
-  return `${day}.${month}.${year} ${time}`;
-}
-
-/* ──────────────── Для DateInput ──────────────── */
-
-/** MM-DD-YYYY HH:mm → YYYY-MM-DDTHH:mm (для datetime-local) */
-export function toLocalValue(value: string): string {
-  if (!value) return "";
-  const match = value.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/);
-  if (!match) return "";
-  const [, month, day, year, hour, minute] = match;
-  return `${year}-${month}-${day}T${hour}:${minute}`;
-}
-
-/** YYYY-MM-DDTHH:mm → MM-DD-YYYY HH:mm */
-export function toDisplayValue(localValue: string): string {
-  if (!localValue) return "";
-  const date = new Date(localValue);
-  if (isNaN(date.getTime())) return "";
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const year = date.getFullYear();
-  const hour = String(date.getHours()).padStart(2, "0");
-  const minute = String(date.getMinutes()).padStart(2, "0");
-  return `${month}-${day}-${year} ${hour}:${minute}`;
-}
-
-/** Разница в целых днях между двумя датами (без времени) */
-export function daysDiff(a: Date, b: Date): number {
-  const ta = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-  const tb = new Date(b.getFullYear(), b.getMonth(), b.getDate());
-  return Math.round((tb.getTime() - ta.getTime()) / 86400000);
-}
-
-/** "MM-DD-YYYY HH:mm" → относительный формат для DateInput */
-export function formatDateDisplay(rawValue: string): string {
-  if (!rawValue) return "";
-  const match = rawValue.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/);
-  if (!match) return rawValue;
-  const [, month, day, year, hour, minute] = match;
-  const date = new Date(+year, +month - 1, +day, +hour, +minute);
-  if (isNaN(date.getTime())) return rawValue;
-  const now = new Date();
-  const diff = daysDiff(now, date);
-  const time = `${hour}:${minute}`;
-  if (diff === 0) return `Сегодня, ${time}`;
-  if (diff === 1) return `Завтра, ${time}`;
-  if (diff === 2) return `Послезавтра, ${time}`;
-  if (diff >= 3 && diff <= 7) return `Через ${diff} дней, ${time}`;
-  return `${day}.${month}.${year} ${time}`;
+  const status = getDeadlineStatus(deadline);
+  if (!status) return deadline;
+  const { diffDays } = status;
+  if (diffDays < 0) return `Просрочено на ${Math.abs(diffDays)} дней`;
+  if (diffDays === 0) return "Сегодня";
+  if (diffDays === 1) return "Завтра";
+  if (diffDays === 2) return "Послезавтра";
+  if (diffDays > 2 && diffDays <= 7) return `Через ${diffDays} дней`;
+  return toDisplayDate(deadline);
 }

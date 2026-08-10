@@ -147,8 +147,8 @@ class Settings(BaseSettings):
     password_reset_code_expire_minutes: int = 10
 
     # ===== BP-3 (LLM-категоризация через OpenRouter, поиск источников Tavily)
-    openrouter_api_key: str
-    tavily_api_key: str
+    # openrouter_api_key: str
+    # tavily_api_key: str
     bp3_model: str = 'openai/gpt-4o'
 
     # ===== AI-ассистент (BP-6, генерация action_item) =====

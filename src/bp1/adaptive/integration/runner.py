@@ -28,6 +28,7 @@ from ..core.quality import DataQualityGate
 from ..schemas import PipelineReport, PipelineStage, UnifiedConfig
 from ..strategies.classifier import SourceClassifier
 from .bridge import AdaptiveBridgeParser
+from .search_probe import SearchUrlProber, _normalize_target_text
 from .sources import SearchParamResolver, build_search_url, extract_host
 
 logger = logging.getLogger(__name__)
@@ -73,12 +74,29 @@ class AdaptiveRunner:
         self._cache = UnifiedCache()
         self._classifier = SourceClassifier()
         self._search_param_resolver = SearchParamResolver()
+        self._prober = SearchUrlProber(fetch=self._fetch_content)
         self._logger = logging.getLogger(__name__)
 
     def _bind_redis(self, redis_client: Any) -> None:
         """Привязывает Redis-клиент к кэшу для хранения классификаций."""
         if self._cache.redis is None:
             self._cache.redis = redis_client
+
+    async def _fetch_content(self, url: str) -> str | None:
+        """Скачивает HTML через оркестратор для перебора параметров.
+
+        Возвращает ``None``, если страница недоступна или пуста.
+        """
+        try:
+            orchestrator = self._parser._adaptive_parser._orchestrator
+            result = await orchestrator.fetch_with_degradation(url)
+            if result.success and result.data:
+                return result.data
+        except Exception as e:
+            self._logger.warning(
+                'Ошибка фетча при переборе параметров (%s): %s', url, e
+            )
+        return None
 
     def _get_parser_for_source(self, source_name: str):
         """Вернуть специализированный RPA-парсер для источника.
@@ -284,9 +302,72 @@ class AdaptiveRunner:
                 'reason': 'circuit_open',
             }
 
+        # 3.2. Адаптивный перебор параметров/форм/реформулировок.
+        #      Сначала пробуем параметр, распознанный из HTML-формы поиска
+        #      (если найден), затем типовые q/query/text/..., затем
+        #      реформулировки запроса. Успешный URL передаётся дальше
+        #      в парсер как фактический адрес страницы результатов.
+        probe_report: dict[str, Any] | None = None
+        # Найденный на странице результатов вариант названия конкурента:
+        # 'full' (с ОПФ) | 'stripped' (без ОПФ/кавычек) | None. Используется
+        # далее как имя конкурента при сборе новостей, чтобы перебирать
+        # новости именно того варианта, который реально есть на странице.
+        matched_variant: str | None = None
+        if self._prober is not None:
+            try:
+                plan = await self._prober.probe(
+                    url,
+                    search_param,
+                    source_type=classification.source_type,
+                    target_name=competitor,
+                    target_inn=competitor_inn,
+                )
+                probe_report = plan.to_extra()
+                # Проверяем, что у нас есть данные о переборе.
+                if probe_report is not None:
+                    wins = [a for a in plan.attempts if a.ok]
+                    if wins:
+                        url = wins[0].url
+                        source_request_url = url
+                        matched_variant = wins[0].matched_variant
+                        self._logger.info(
+                            'Адаптивный перебор: успех (kind=%s, label=%s) '
+                            'для %s',
+                            wins[0].kind,
+                            wins[0].label,
+                            source_name,
+                        )
+                    else:
+                        self._logger.info(
+                            'Адаптивный перебор не дал результатов для %s '
+                            '(перебрано %d вариантов)',
+                            source_name,
+                            len(plan.attempts),
+                        )
+            except Exception as e:
+                self._logger.warning(
+                    'Ошибка адаптивного перебора параметров (%s): %s',
+                    source_name,
+                    e,
+                )
+                probe_report = None
+
+        # Имя конкурента, по которому собираем новости: берём тот вариант
+        # названия, который реально присутствует на странице результатов
+        # (полное с ОПФ или без ОПФ/кавычек). Это ключевое исправление
+        # «каши»: раньше новости перебирались по полному названию даже там,
+        # где страница содержала конкурента без ОПФ (или наоборот).
+        news_competitor = competitor
+        if matched_variant:
+            if matched_variant == 'stripped':
+                stripped_name = _normalize_target_text(competitor, True)
+                if stripped_name:
+                    news_competitor = stripped_name
+            # 'full' — оставляем полное название как есть.
+
         parse_kwargs = {
             'search_task_id': task_id,
-            'competitor': competitor,
+            'competitor': news_competitor,
             'trigger': trigger,
             'source_request_url': source_request_url,
         }
@@ -307,7 +388,7 @@ class AdaptiveRunner:
                 if competitor_inn:
                     parse_kwargs['inn'] = competitor_inn
                     parse_kwargs['name'] = competitor
-                elif trigger and trigger.isdigit() and len(trigger) in (10, 12):
+                elif trigger and len(trigger) in (10, 12) and trigger.isdigit():
                     parse_kwargs['inn'] = trigger
                     parse_kwargs['name'] = competitor
                 else:
@@ -386,6 +467,10 @@ class AdaptiveRunner:
 
         persisted['strategy'] = classification.recommended_strategy
         persisted['pipeline_report'] = report.model_dump(mode='json')
+        # Отчёт адаптивного перебора параметров/форм/реформулировок.
+        # Позволяет увидеть, какой query-параметр и формулировка сработали.
+        if probe_report is not None:
+            persisted['probe_report'] = probe_report
         return persisted
 
     async def _record_source_failure(

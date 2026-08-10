@@ -5,7 +5,6 @@
 проектом:
 - ``AdaptiveBridgeParser`` — мост к ``BaseParser`` BP-1.
 - ``AdaptiveRunner`` — единая точка входа для сбора данных.
-- ``MCPServer`` — MCP-сервер для управления сбором данных.
 - ``SourceRegistrationService`` — регистрация нового источника по ссылке.
 """
 

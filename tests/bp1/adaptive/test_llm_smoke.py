@@ -29,6 +29,7 @@ from types import ModuleType
 
 import pytest
 
+from core.config import settings
 from src.bp1.adaptive.processing.html_cleaner import HtmlCleaner
 from src.bp1.adaptive.processing.llm import AIAgent, LLMClient
 from src.bp1.adaptive.processing.merger import ResultMerger
@@ -43,8 +44,6 @@ from .constants import (
     CONTAINER_SELECTOR_VALUE,
     ENCODING_ERRORS_REPLACE,
     ENCODING_UTF8,
-    ENV_LLM_API_KEY,
-    ENV_OPENAI_API_KEY,
     EXPECTED_FIELDS_SMOKE,
     FAKE_LLM_ERROR,
     HTML_GLOB,
@@ -200,8 +199,7 @@ async def test_smoke_classify(html_page):
 async def test_smoke_analyze_structure_heuristic(html_page, monkeypatch):
     """analyze_structure без ключа API использует эвристический fallback."""
     html, _ = html_page
-    monkeypatch.delenv(ENV_LLM_API_KEY, raising=False)
-    monkeypatch.delenv(ENV_OPENAI_API_KEY, raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     client = LLMClient()
     config = await client.analyze_structure(
         html=html,
@@ -220,7 +218,7 @@ async def test_smoke_analyze_structure_heuristic(html_page, monkeypatch):
 async def test_smoke_analyze_structure_real_path(html_page, monkeypatch):
     """analyze_structure с ключом API вызывает OpenAI и парсит JSON."""
     html, _ = html_page
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(
         monkeypatch,
         '{"selectors": {"container": "div.item", "title": "h2"}, '
@@ -249,7 +247,7 @@ async def test_smoke_analyze_structure_real_path(html_page, monkeypatch):
 async def test_smoke_chunked_pipeline(html_page, monkeypatch):
     """Полный конвейер чанкирования работает на реальной странице."""
     html, _ = html_page
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(
         monkeypatch,
         '{"selectors": {"container": "div.item", "title": "h2"}, '
@@ -308,7 +306,7 @@ async def test_smoke_chunked_pipeline(html_page, monkeypatch):
 async def test_smoke_llm_analyze_direct(html_page, monkeypatch):
     """_llm_analyze обрабатывает реальный HTML одним запросом."""
     html, _ = html_page
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(
         monkeypatch,
         '{"selectors": {"container": "div.item"}, '
@@ -330,7 +328,7 @@ async def test_smoke_llm_analyze_fallback_on_error(html_page, monkeypatch):
     """При ошибке OpenAI _llm_analyze пробрасывает исключение, а вызывающий
     код переключается на эвристический fallback (как в llm_test.py)."""
     html, _ = html_page
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
 
     fake = ModuleType(MODULE_OPENAI)
 
@@ -382,8 +380,7 @@ async def test_smoke_llm_analyze_fallback_on_error(html_page, monkeypatch):
 async def test_smoke_agent_choose_strategy_heuristic(html_page, monkeypatch):
     """AIAgent без ключа API выбирает стратегию эвристически."""
     html, source_name = html_page
-    monkeypatch.delenv(ENV_LLM_API_KEY, raising=False)
-    monkeypatch.delenv(ENV_OPENAI_API_KEY, raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     agent = AIAgent()
     classification = await SourceClassifier().classify(
         source_name=source_name,
@@ -398,7 +395,7 @@ async def test_smoke_agent_choose_strategy_heuristic(html_page, monkeypatch):
 async def test_smoke_agent_choose_strategy_real_path(html_page, monkeypatch):
     """AIAgent с ключом API выбирает стратегию из ответа LLM."""
     html, source_name = html_page
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(monkeypatch, '{"strategy": "BROWSER"}')
     agent = AIAgent()
     classification = await SourceClassifier().classify(
@@ -416,8 +413,7 @@ async def test_smoke_agent_analyze_result(html_page, monkeypatch):
     html, source_name = html_page
 
     # Fallback без ключа.
-    monkeypatch.delenv(ENV_LLM_API_KEY, raising=False)
-    monkeypatch.delenv(ENV_OPENAI_API_KEY, raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     agent = AIAgent()
     items = [
         {'title': 'Пример записи 1', 'url': 'https://example.com/1'},
@@ -428,7 +424,7 @@ async def test_smoke_agent_analyze_result(html_page, monkeypatch):
     assert result['confidence'] == LLM_DEFAULT_CONFIDENCE
 
     # Реальный путь с ключом.
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(
         monkeypatch,
         '{"recommendation": "improve_selectors", "confidence": 0.9}',

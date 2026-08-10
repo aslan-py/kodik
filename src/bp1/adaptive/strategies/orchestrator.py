@@ -13,12 +13,14 @@ import logging
 import time
 from abc import ABC, abstractmethod
 
+from core.config import settings
+
 from ..schemas import StrategyResult, StrategyType
 
 logger = logging.getLogger(__name__)
 
 # Минимальная длина контента, при которой стратегия считается успешной.
-MIN_CONTENT_LENGTH = 300
+MIN_CONTENT_LENGTH = settings.bp1_min_content_length
 
 # Порядок стратегий при деградации.
 _DEGRADATION_ORDER = (

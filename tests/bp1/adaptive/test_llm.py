@@ -5,6 +5,7 @@ from types import ModuleType
 
 import pytest
 
+from core.config import settings
 from src.bp1.adaptive.processing.llm import AIAgent, LLMClient, _default_model
 from src.bp1.adaptive.schemas import (
     SiteType,
@@ -16,8 +17,6 @@ from src.bp1.adaptive.schemas import (
 from .constants import (
     COMPETITOR,
     CONTAINER_SELECTOR_VALUE,
-    ENV_LLM_API_KEY,
-    ENV_OPENAI_API_KEY,
     EXAMPLE_SOURCE_NAME,
     FAKE_LLM_ERROR,
     HTML_EMPTY,
@@ -149,8 +148,7 @@ def test_parse_json_handles_invalid():
 async def test_agent_choose_strategy_heuristic_captcha(monkeypatch):
     """AIAgent выбирает STEALTH при наличии CAPTCHA."""
     # Очищаем ключи, чтобы гарантировать fallback (не зависеть от .env).
-    monkeypatch.delenv(ENV_LLM_API_KEY, raising=False)
-    monkeypatch.delenv(ENV_OPENAI_API_KEY, raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     agent = AIAgent()
     classification = SourceClassification(
         source_name=EXAMPLE_SOURCE_NAME,
@@ -165,8 +163,7 @@ async def test_agent_choose_strategy_heuristic_captcha(monkeypatch):
 async def test_agent_choose_strategy_heuristic_spa(monkeypatch):
     """AIAgent выбирает BROWSER для SPA."""
     # Очищаем ключи, чтобы гарантировать fallback (не зависеть от .env).
-    monkeypatch.delenv(ENV_LLM_API_KEY, raising=False)
-    monkeypatch.delenv(ENV_OPENAI_API_KEY, raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     agent = AIAgent()
     classification = SourceClassification(
         source_name=EXAMPLE_SOURCE_NAME,
@@ -181,8 +178,7 @@ async def test_agent_choose_strategy_heuristic_spa(monkeypatch):
 async def test_agent_analyze_result_without_llm(monkeypatch):
     """AIAgent без LLM возвращает рекомендацию no_llm."""
     # Очищаем ключи, чтобы гарантировать fallback (не зависеть от .env).
-    monkeypatch.delenv(ENV_LLM_API_KEY, raising=False)
-    monkeypatch.delenv(ENV_OPENAI_API_KEY, raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     agent = AIAgent()
     result = await agent.analyze_result(
         HTML_EMPTY,
@@ -200,7 +196,7 @@ async def test_agent_analyze_result_without_llm(monkeypatch):
 @pytest.mark.asyncio
 async def test_llm_analyze_structure_real_path(monkeypatch):
     """LLMClient с ключом API вызывает OpenAI и парсит JSON-ответ."""
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(
         monkeypatch,
         '{"selectors": {"container": "div.item"}, '
@@ -232,7 +228,7 @@ async def test_llm_analyze_structure_real_path(monkeypatch):
 @pytest.mark.asyncio
 async def test_llm_analyze_structure_chunked(monkeypatch):
     """LLMClient чанкирует большие HTML и объединяет результаты."""
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
 
     # Большой HTML, который не помещается в один чанк.
     item = '<div class="item">Новость</div>'
@@ -261,7 +257,7 @@ async def test_llm_analyze_structure_chunked(monkeypatch):
 @pytest.mark.asyncio
 async def test_llm_extract_article_text_single(monkeypatch):
     """extract_article_text извлекает текст короткой статьи одним запросом."""
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(
         monkeypatch,
         'Полный текст короткой статьи про конкурента.',
@@ -283,7 +279,7 @@ async def test_llm_extract_article_text_chunked(monkeypatch):
 
     Каждый чанк обрабатывается отдельным запросом, результаты склеиваются.
     """
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
 
     # Длинный контент, не помещающийся в один чанк (LLM_CHUNK_MAX_SIZE).
     paragraph = '<p>Один и тот же абзац текста статьи.</p>'
@@ -306,8 +302,7 @@ async def test_llm_extract_article_text_chunked(monkeypatch):
 async def test_llm_analyze_structure_heuristic_selectors(monkeypatch):
     """Эвристический fallback возвращает селектор url для ссылок."""
     # Очищаем ключи, чтобы гарантировать fallback (не зависеть от .env).
-    monkeypatch.delenv(ENV_LLM_API_KEY, raising=False)
-    monkeypatch.delenv(ENV_OPENAI_API_KEY, raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     client = LLMClient()
     config = await client.analyze_structure(
         HTML_WITH_LINK,
@@ -321,7 +316,7 @@ async def test_llm_analyze_structure_heuristic_selectors(monkeypatch):
 @pytest.mark.asyncio
 async def test_llm_analyze_structure_fallback_on_error(monkeypatch):
     """При ошибке OpenAI LLMClient переключается на эвристику."""
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
 
     fake = ModuleType(MODULE_OPENAI)
 
@@ -358,7 +353,7 @@ async def test_llm_analyze_structure_fallback_on_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_agent_choose_strategy_real_path(monkeypatch):
     """AIAgent с ключом API выбирает стратегию из ответа LLM."""
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(monkeypatch, '{"strategy": "BROWSER"}')
 
     agent = AIAgent()
@@ -377,7 +372,7 @@ async def test_agent_choose_strategy_real_path(monkeypatch):
 @pytest.mark.asyncio
 async def test_agent_choose_strategy_fallback_on_invalid(monkeypatch):
     """При невалидной стратегии из LLM AIAgent использует эвристику."""
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(monkeypatch, '{"strategy": "NOT_A_STRATEGY"}')
 
     agent = AIAgent()
@@ -395,7 +390,7 @@ async def test_agent_choose_strategy_fallback_on_invalid(monkeypatch):
 @pytest.mark.asyncio
 async def test_agent_analyze_result_real_path(monkeypatch):
     """AIAgent с ключом API возвращает рекомендации из ответа LLM."""
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(
         monkeypatch,
         '{"recommendation": "improve_selectors", "confidence": 0.9}',
@@ -426,7 +421,7 @@ async def test_classify_with_llm_heuristic_fallback():
 @pytest.mark.asyncio
 async def test_classify_with_llm_real_path(monkeypatch):
     """LLMClient с ключом API возвращает классификацию из ответа LLM."""
-    monkeypatch.setenv(ENV_LLM_API_KEY, TEST_API_KEY)
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
     _install_fake_openai(
         monkeypatch,
         '{'

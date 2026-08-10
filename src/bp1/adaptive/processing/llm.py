@@ -11,10 +11,10 @@
 - ``AIAgent`` — агент принятия решений: выбирает стратегию обхода,
   анализирует результаты парсинга и корректирует адаптеры.
 
-LLM-провайдер настраивается через переменные окружения:
-``LLM_MODEL`` (по умолчанию ``gpt-4o-mini``), ``LLM_API_KEY``,
-``LLM_BASE_URL``. Если ключ не задан, используется эвристический fallback,
-чтобы пакет оставался работоспособным без внешних сервисов.
+LLM-провайдер настраивается через ``core.config.settings``: ``llm_model``
+(по умолчанию ``gpt-4o-mini``), ``llm_api_key``, ``llm_base_url``. Если ключ
+не задан, используется эвристический fallback, чтобы пакет оставался
+работоспособным без внешних сервисов.
 
 Работа с LLM выполняется через официальный OpenAI SDK
 (``openai.AsyncOpenAI``). Для OpenAI-совместимых API (например, DeepSeek)
@@ -26,12 +26,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
-from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup
+
+from core.config import settings
 
 from ..schemas import (
     AdapterConfig,
@@ -48,10 +48,6 @@ from .html_cleaner import HtmlCleaner
 from .merger import ResultMerger
 
 logger = logging.getLogger(__name__)
-
-# Корень проекта kodik/ — пять уровней вверх от этого файла.
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-_ENV_PATH = _PROJECT_ROOT / '.env'
 
 # Поля по умолчанию для анализа структуры.
 _DEFAULT_FIELDS = [
@@ -224,40 +220,18 @@ SELECTOR_EXTRACTION_PROMPT_V2 = """
 
 
 def _default_model() -> str:
-    """Модель LLM по умолчанию из окружения."""
-    return os.getenv('LLM_MODEL', 'gpt-4o-mini')
+    """Модель LLM по умолчанию из настроек."""
+    return settings.llm_model
 
 
 def _default_base_url() -> str | None:
-    """Базовый URL LLM-провайдера из окружения (если задан)."""
-    return os.getenv('LLM_BASE_URL') or None
+    """Базовый URL LLM-провайдера из настроек (если задан)."""
+    return settings.llm_base_url
 
 
 def _has_llm_config() -> bool:
     """Проверяет, задана ли конфигурация LLM."""
-    return bool(os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY'))
-
-
-def _load_env() -> None:
-    """Загружает LLM-переменные из .env в os.environ (без python-dotenv).
-
-    Использует ``setdefault``, чтобы не перезаписывать уже заданные
-    переменные окружения (например, заданные в тестах через monkeypatch).
-    """
-    if not _ENV_PATH.exists():
-        return
-    for line in _ENV_PATH.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, _, value = line.partition('=')
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key.startswith('LLM_') or key == 'OPENAI_API_KEY':
-            os.environ.setdefault(key, value)
-
-
-_load_env()
+    return bool(settings.llm_api_key)
 
 
 class _BaseLLMClient:
@@ -278,9 +252,7 @@ class _BaseLLMClient:
         self._model = model or _default_model()
         self._base_url = base_url or _default_base_url()
         self._logger = logger or logging.getLogger(__name__)
-        self._api_key = (
-            api_key or os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY')
-        )
+        self._api_key = api_key or settings.llm_api_key
         self._client = None
 
     def _get_client(self):

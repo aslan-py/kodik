@@ -2,6 +2,7 @@
 
 import pytest
 
+from core.config import settings
 from src.bp1.adaptive.processing.llm import LLMClient
 from src.bp1.adaptive.processing.parser import (
     DEFAULT_MAX_NEWS,
@@ -71,8 +72,7 @@ async def test_parse_extracts_items(monkeypatch):
     """AdaptiveParser извлекает элементы из HTML."""
     # Очищаем ключи LLM, чтобы использовалась эвристика (сбор ссылок),
     # а не реальный LLM-путь (не зависеть от .env).
-    monkeypatch.delenv('LLM_API_KEY', raising=False)
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.setattr(settings, 'llm_api_key', None)
     parser = AdaptiveParser()
     parser._orchestrator = _FakeOrchestrator()
 

@@ -15,16 +15,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from core.config import settings
+
 from ..schemas import AdapterState, SourceClassification
 
 # TTL адаптера по умолчанию — 7 дней (в секундах).
-ADAPTER_TTL_SECONDS = 86400 * 7
+ADAPTER_TTL_SECONDS = settings.bp1_adapter_ttl_seconds
 
 # TTL классификации источника по умолчанию — 7 дней (в секундах).
-CLASSIFICATION_TTL_SECONDS = 86400 * 7
+CLASSIFICATION_TTL_SECONDS = settings.bp1_classification_ttl_seconds
 
 # TTL кэша полного текста статьи по умолчанию — 7 дней (в секундах).
-ARTICLE_TEXT_TTL_SECONDS = 86400 * 7
+ARTICLE_TEXT_TTL_SECONDS = settings.bp1_article_text_ttl_seconds
 
 
 def _canonical_source_name(source_name: str) -> str:

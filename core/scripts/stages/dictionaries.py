@@ -427,11 +427,26 @@ async def seed(session: AsyncSession) -> int:
         added += await _insert(session, TopicLimit, TOPIC_LIMITS)
     await session.flush()
 
-    # user: email И telegram_id по отдельности unique (не пара), поэтому
-    # обычный _insert с ON CONFLICT по двум колонкам сразу не подходит —
-    # тот же count-guard, что и у routing_rule. department_id резолвится
-    # из уже залитых Department.
-    if await _is_empty(session, User):
+    # user: миграция уже создаёт системного admin, поэтому проверка
+    # «таблица целиком пуста» пропустила бы всех демо-получателей. Email и
+    # telegram_id уникальны по отдельности: добавляем только строки, у
+    # которых свободны оба значения.
+    existing_users = (
+        await session.execute(select(User.email, User.telegram_id))
+    ).all()
+    existing_emails = {email for email, _ in existing_users}
+    existing_telegram_ids = {
+        telegram_id
+        for _, telegram_id in existing_users
+        if telegram_id is not None
+    }
+    users_to_add = [
+        u
+        for u in USERS
+        if u['email'] not in existing_emails
+        and u['telegram_id'] not in existing_telegram_ids
+    ]
+    if users_to_add:
         dept = await _key_to_id(session, Department, Department.name)
         demo_password_hash = hash_password(DEMO_USER_PASSWORD)
         session.add_all(
@@ -442,9 +457,9 @@ async def seed(session: AsyncSession) -> int:
                 telegram_id=u['telegram_id'],
                 password_hash=demo_password_hash,
             )
-            for u in USERS
+            for u in users_to_add
         )
-        added += len(USERS)
+        added += len(users_to_add)
     await session.flush()
 
     if await _is_empty(session, RoutingRule):

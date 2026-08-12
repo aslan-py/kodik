@@ -189,12 +189,12 @@ docker compose down -v
 него не нужен, только инфраструктура из `docker compose up -d`:
 
 ```bash
-uvicorn api.main:app --reload
+python -m api.main
 ```
 
 | Что | Адрес | Кредсы |
 |--------|-----|--------|
-| **Swagger** (документация API) | http://localhost:8000/docs | — (не нужны) |
+| **Swagger** (документация API) | http://localhost:8001/docs | — (не нужны) |
 | **Админка** | http://localhost:8000/admin | email + пароль пользователя с ролью `admin` или `analyst` |
 | **Redis Commander** (веб-интерфейс к Redis) | http://localhost:8081 | — (не нужны) |
 | **Postgres** (подключение из DBeaver или кода) | localhost:5432, база `kodik_db` | admin / password |

@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""CLI-скрипт заполнения БД данными BP-1 из CSV-файлов.
+"""Тестовая конфигурация для реального сбора BP-1 из ``core/data/*.csv``.
 
-Заполняет таблицы: Competitor, Trigger, Source, SearchTask.
-Поддерживает идемпотентность (ON CONFLICT DO NOTHING) и dry-run режим.
+Заполняет Competitor, Trigger, Source и SearchTask правдоподобными
+источниками, конкурентами с ИНН и готовыми сочетаниями поисковых триггеров.
+Это не демо-новости из ``core/scripts/scripts_data/``: после этого сидинга
+таблица RawItem пуста, а данные получает настоящий запуск BP-1.
 
-Расположение: core/seed_data.py (вместе с конфигом и database.py).
-CSV-файлы лежат рядом: core/data/*.csv.
+Поддерживает идемпотентность (ON CONFLICT DO NOTHING), dry-run и чтение
+другого каталога через ``--csv-dir``. По умолчанию использует четыре файла:
+``core/data/competitor.csv``, ``source.csv``, ``trigger.csv`` и
+``search_task.csv``.
 
 Запуск (из корня проекта):
-    python -m core.scripts.seed_data                     # полный прогон из CSV
-    python -m core.scripts.seed_data --dry-run     # показать что будет сделано
-    python -m core.scripts.seed_data --only competitors     # только конкуренты
+    python -m core.scripts.seed_data              # полный прогон из CSV
+    python -m core.scripts.seed_data --dry-run    # показать объём без записи
+    python -m core.scripts.seed_data --only competitors
     python -m core.scripts.seed_data --clear      # очистить и заполнить заново
     python -m core.scripts.seed_data --csv-dir ./custom/path  # свой путь к CSV
-
-Или напрямую:
-    python core/seed_data.py
-
-Повторный запуск безопасен — дубликаты не создаются (ON CONFLICT DO NOTHING).
 """
 
 import argparse
@@ -526,10 +525,10 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             'Примеры:\n'
-            '  python -m core.seed_data\n'
-            '  python -m core.seed_data --dry-run\n'
-            '  python -m core.seed_data --only competitors\n'
-            '  python -m core.seed_data --clear\n'
+            '  python -m core.scripts.seed_data\n'
+            '  python -m core.scripts.seed_data --dry-run\n'
+            '  python -m core.scripts.seed_data --only competitors\n'
+            '  python -m core.scripts.seed_data --clear\n'
         ),
     )
     parser.add_argument(

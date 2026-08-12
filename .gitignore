@@ -181,3 +181,4 @@ vibe/
 src/bp1/data/
 testik
 run_test.py
+.agents

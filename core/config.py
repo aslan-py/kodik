@@ -129,6 +129,8 @@ class Settings(BaseSettings):
     true_parsing: bool = True
 
     # ===== FASTAPI SETTINGS =====
+    api_host: str = '127.0.0.1'
+    api_port: int
     app_title: str = 'Конкурентная разведка'
     description: str = 'API управлния проектом конкурентная разведка'
 

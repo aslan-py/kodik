@@ -54,6 +54,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+from core.config import settings
+
 
 def _find_project_root(start: Path) -> Path:
     """Корень проекта = ближайший наверх каталог с alembic.ini.
@@ -72,8 +74,8 @@ def _find_project_root(start: Path) -> Path:
 
 
 ROOT = _find_project_root(Path(__file__).resolve().parent)
-HOST = '127.0.0.1'
-PORT = 8000
+HOST = settings.api_host
+PORT = settings.api_port
 DOCS_URL = f'http://{HOST}:{PORT}/docs'
 
 sys.stdout.reconfigure(encoding='utf-8')

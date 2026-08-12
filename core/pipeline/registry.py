@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import AsyncSessionLocal
 from core.scripts.stages import bp1_stub
-from src.bp1.models import RawItem, SearchTask
+from src.bp1.models import RawItem
 from src.bp1.pipeline import run_bp1
 from src.bp2.models import NormalizedItem
 from src.bp2.pipeline import run_bp2
@@ -95,12 +95,10 @@ STAGES: dict[int, StageDescriptor] = {
         number=1,
         title='Сбор (BP-1)',
         run=run_bp1,
-        requires=SearchTask,
-        requires_active=True,
-        missing_data_hint=(
-            'заведите хотя бы одну активную задачу сбора '
-            '(конкурент + источник) в админке.'
-        ),
+        # Реальный BP-1 сам создаёт недостающие SearchTask из активных
+        # Source × Competitor до обхода, поэтому пустая таблица задач —
+        # допустимое начальное состояние, а не ошибка preflight.
+        requires=None,
         is_stub=False,
         run_stub=functools.partial(
             _run_stub,

@@ -12,6 +12,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from core.enums import SourceSearchDepth
+
 
 class Settings(BaseSettings):
     """Настройки приложения, загружаемые из .env файла."""
@@ -159,6 +161,12 @@ class Settings(BaseSettings):
     openrouter_api_key: str
     tavily_api_key: str
     bp3_model: str = 'openai/gpt-4o'
+    bp3_search_max_results: int = 2
+    bp3_search_depth: SourceSearchDepth = SourceSearchDepth.basic
+    bp3_search_time_range: str = 'week'
+    bp3_llm_base_url: str = 'https://openrouter.ai/api/v1'
+    bp3_llm_temperature: float = 0
+    bp3_llm_max_tokens: int = 4096
 
     # ===== AI-ассистент (BP-6, генерация action_item) =====
     deepseek_token: str

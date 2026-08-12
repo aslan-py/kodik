@@ -2,15 +2,13 @@ from langchain_openai import ChatOpenAI
 
 from core.config import settings
 
-API_BASE = 'https://openrouter.ai/api/v1'  # https://openrouter.ai/api/v1   https://api.kodikrouter.ru/v1
-
 
 def get_llm() -> ChatOpenAI:
-    """Собрать клиент LLM (ChatOpenAI поверх OpenRouter) с ключом из настроек."""  # noqa
+    """Собрать клиент LLM с параметрами BP-3 из настроек."""
     return ChatOpenAI(
         openai_api_key=settings.openrouter_api_key,
-        openai_api_base=API_BASE,
+        openai_api_base=settings.bp3_llm_base_url,
         model=settings.bp3_model,
-        temperature=0,
-        max_tokens=4096,
+        temperature=settings.bp3_llm_temperature,
+        max_tokens=settings.bp3_llm_max_tokens,
     )

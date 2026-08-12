@@ -7,13 +7,15 @@
 
 Порядок шагов:
 
-  1. взять все активные задачи сбора — AdaptiveRunner.run_all (учитывает
+  1. досоздать задачи без поискового слова для всех активных пар
+     «конкурент × источник» — sync_search_task_coverage
+  2. взять все активные задачи сбора — AdaptiveRunner.run_all (учитывает
      активность самой задачи, её источника и конкурента)
-  2. по каждой задаче: классифицировать источник, распознать структуру,
+  3. по каждой задаче: классифицировать источник, распознать структуру,
      извлечь события, провалидировать качество — src/bp1/adaptive/
-  3. сохранить результат в RawItem с дедупликацией по хэшу содержимого
+  4. сохранить результат в RawItem с дедупликацией по хэшу содержимого
      (Redis) — RawDataService.persist (src/bp1/storage.py)
-  4. свернуть результаты по задачам в сводку прогона — _summarize
+  5. свернуть результаты по задачам в сводку прогона — _summarize
 
 Оркестратор run_bp1 открывает сессию и Redis-клиент один раз на весь
 прогон, коммитит сессию и закрывает Redis в finally — по образцу
@@ -36,6 +38,7 @@ from core.config import settings
 from core.database import AsyncSessionLocal
 from core.redis_client import redis_client as redis_client_instance
 from src.bp1.adaptive.integration.runner import AdaptiveRunner
+from src.bp1.search_task_coverage import sync_search_task_coverage
 
 # Статусы результата одной задачи (run_task/persist), которые считаем
 # отдельно в сводке; всё остальное ('skipped', 'source_inactive',
@@ -77,14 +80,16 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, int]:
 async def run_bp1() -> dict[str, Any]:
     """Один самостоятельный прогон конвейера BP-1: сбор -> raw_item.
 
-    Открывает свою сессию и Redis-клиент, обходит все активные задачи
-    сбора через AdaptiveRunner.run_all, коммитит сессию и закрывает Redis
-    в finally. Возвращает сводку прогона (сколько задач обработано и с
-    каким исходом).
+    Открывает свою сессию и Redis-клиент, сначала в этой же сессии
+    досоздаёт покрытие активных пар «конкурент × источник», затем обходит
+    все активные задачи через AdaptiveRunner.run_all. Коммитит оба шага
+    вместе и закрывает Redis в finally. Возвращает сводку прогона, включая
+    число автоматически созданных задач.
     """
     redis_client = await redis_client_instance.get_client()
     try:
         async with AsyncSessionLocal() as session:
+            search_tasks_created = await sync_search_task_coverage(session)
             runner = AdaptiveRunner(
                 mode=settings.bp1_adaptive_mode,
                 headless=settings.bp1_headless,
@@ -96,4 +101,6 @@ async def run_bp1() -> dict[str, Any]:
     finally:
         await redis_client_instance.close()
 
-    return _summarize(results)
+    summary = _summarize(results)
+    summary['search_tasks_created'] = search_tasks_created
+    return summary

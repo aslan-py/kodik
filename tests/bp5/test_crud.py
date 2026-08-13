@@ -355,6 +355,24 @@ async def test_load_event_types_returns_active_only(session, event_type):
     assert inactive.id not in ids
 
 
+async def test_bp5_baseline_keeps_current_fixture_data_active(
+    session, event_type, routing_rule
+):
+    """Baseline отключает лишь данные до теста, а не его fixture-строки."""
+    assert event_type.is_active is True
+    assert routing_rule.is_active is True
+
+    crud = Bp5Crud(session)
+    loaded_types = await crud.load_event_types()
+    loaded_rules = await crud.load_routing_rules()
+
+    assert event_type.id in {item.id for item in loaded_types}
+    assert routing_rule.id in {
+        item.id
+        for item in loaded_rules.by_type[(event_type.id, PriorityLevel.p1)]
+    }
+
+
 async def test_load_routing_rules_grouped_by_type_and_priority(
     session, routing_rule
 ):

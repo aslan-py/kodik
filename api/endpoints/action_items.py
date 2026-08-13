@@ -8,6 +8,8 @@ status/expected_result и только в задачах своего отдел
 проверяет и обрубает).
 """
 
+from datetime import date
+
 from fastapi import APIRouter
 
 from api.dependencies import EditorDep, SessionDep, ViewerDep
@@ -59,9 +61,11 @@ async def create_action_item(
         'игнорируется (всегда его собственный отдел) — остальные фильтры '
         'работают для всех ролей.\n\n'
         'Фильтры: `task` — подстрока без учёта регистра; '
-        '`status`/`assigned_user_id`/`showcase_event_id` — точное '
+        '`status`/`assigned_user_id`/`showcase_event_id`/`deadline` — точное '
         'совпадение (`showcase_event_id` удобен, чтобы проверить, есть '
-        'ли уже задача по конкретному событию витрины).'
+        'ли уже задача по конкретному событию витрины); `priority` — точное '
+        'совпадение с отображаемым приоритетом связанного события витрины '
+        '(`П1`—`П4`). Все фильтры объединяются условием AND.'
     ),
 )
 async def list_action_items(
@@ -72,6 +76,8 @@ async def list_action_items(
     task: str | None = None,
     assigned_user_id: int | None = None,
     showcase_event_id: int | None = None,
+    deadline: date | None = None,
+    priority: str | None = None,
 ) -> list[ActionItemRead]:
     return await ActionItemService(session).list_items(
         viewer,
@@ -80,6 +86,8 @@ async def list_action_items(
         task,
         assigned_user_id,
         showcase_event_id,
+        deadline,
+        priority,
     )
 
 

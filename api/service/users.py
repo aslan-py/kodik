@@ -34,6 +34,14 @@ class UserService:
         users = await self.crud.list_all(full_name, email, department_id)
         return [UserRead.model_validate(u) for u in users]
 
+    async def get_by_id(self, user_id: int) -> UserRead:
+        user = await self.crud.get_by_id(user_id)
+        if user is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, 'Пользователь не найден'
+            )
+        return UserRead.model_validate(user)
+
     async def update_role(self, user_id: int, data: UserRoleUpdate) -> UserRead:
         user = await self.crud.get_by_id(user_id)
         if user is None:

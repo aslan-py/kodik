@@ -12,7 +12,7 @@ class AlertRead(BaseModel):
 
     id: int
     showcase_event_id: int
-    event_type_id: int
+    event_type_id: int | None
     priority: PriorityLevel
     user_id: int
     channel_id: int

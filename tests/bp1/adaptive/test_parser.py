@@ -3,6 +3,7 @@
 import pytest
 
 from core.config import settings
+from src.bp1.adaptive.processing import parser as parser_module
 from src.bp1.adaptive.processing.llm import LLMClient
 from src.bp1.adaptive.processing.parser import (
     DEFAULT_MAX_NEWS,
@@ -20,6 +21,7 @@ from .constants import (
     COMPETITOR,
     DATE_1,
     EXAMPLE_ITEM_URL_1,
+    EXAMPLE_ITEM_URL_2,
     EXAMPLE_SOURCE_NAME,
     EXAMPLE_URL,
     NETWORK_ERROR,
@@ -249,6 +251,85 @@ def test_parse_items_filters_non_http_schemes():
     assert not any(u.startswith('javascript:') for u in urls)
     # Полезная ссылка сохраняется.
     assert 'https://example.com/news/1' in urls
+
+
+def test_parse_items_applies_limit_after_filtering_noise(monkeypatch):
+    """Служебные ссылки не занимают квоту полезных материалов."""
+    monkeypatch.setattr(parser_module, 'DEFAULT_MAX_NEWS', 2)
+    html = """
+    <html><body>
+      <a href="/account/login">Войти</a>
+      <a href="mailto:news@example.com">Написать</a>
+      <a href="https://example.com/news/1">Новость 1</a>
+      <a href="https://example.com/news/2">Новость 2</a>
+      <a href="https://example.com/news/3">Новость 3</a>
+    </body></html>
+    """
+
+    items = _parse_items(
+        html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors={}
+    )
+
+    assert [item['url'] for item in items] == [
+        'https://example.com/news/1',
+        'https://example.com/news/2',
+    ]
+
+
+def test_parse_items_returns_all_useful_links_below_limit(monkeypatch):
+    """При нехватке пригодных ссылок фильтр не добавляет шум."""
+    monkeypatch.setattr(parser_module, 'DEFAULT_MAX_NEWS', 3)
+    html = """
+    <html><body>
+      <a href="javascript:void(0)">Меню</a>
+      <a href="/article/cookie_policy">Политика</a>
+      <a href="https://example.com/news/1">Новость 1</a>
+    </body></html>
+    """
+
+    items = _parse_items(
+        html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors={}
+    )
+
+    assert [item['url'] for item in items] == ['https://example.com/news/1']
+
+
+def test_parse_items_with_selectors_filters_before_limit(monkeypatch):
+    """Селекторный путь применяет лимит только после фильтрации URL."""
+    monkeypatch.setattr(parser_module, 'DEFAULT_MAX_NEWS', 2)
+    html = """
+    <html><body>
+      <div class="item">
+        <a class="title" href="/account/login">Войти</a>
+      </div>
+      <div class="item">
+        <a class="title" href="tel:+74951234567">Позвонить</a>
+      </div>
+      <div class="item">
+        <a class="title" href="https://example.com/1">Новость 1</a>
+      </div>
+      <div class="item">
+        <a class="title" href="https://example.com/2">Новость 2</a>
+      </div>
+      <div class="item">
+        <a class="title" href="https://example.com/3">Новость 3</a>
+      </div>
+    </body></html>
+    """
+    selectors = {
+        'container': SELECTOR_CONTAINER,
+        'title': SELECTOR_TITLE,
+        'url': SELECTOR_URL,
+    }
+
+    items = _parse_items(
+        html, EXAMPLE_SOURCE_NAME, COMPETITOR, TRIGGER, selectors=selectors
+    )
+
+    assert [item['url'] for item in items] == [
+        EXAMPLE_ITEM_URL_1,
+        EXAMPLE_ITEM_URL_2,
+    ]
 
 
 def test_to_absolute():

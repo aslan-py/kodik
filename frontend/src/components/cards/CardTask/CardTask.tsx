@@ -257,9 +257,13 @@ export function CardTask({
       {incident && (
         <RelatedTask
           label="Связанное событие"
-          description={incident.title}
-          title={incident.title}
-          details={`${incident.competitor} · ${incident.category} · ${incident.priority} · ${incident.published_at.slice(0, 10)} · ${incident.region}`}
+          relatedTask={{
+            id: incident.id,
+            task: incident.title,
+            status: incident.priority,
+            deadline: incident.deadline,
+            expected_result: incident.action,
+          }}
           onClick={
             onOpenIncident
               ? () => onOpenIncident(task.showcase_event_id)

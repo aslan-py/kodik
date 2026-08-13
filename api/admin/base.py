@@ -91,13 +91,10 @@ class RelatedLabelMixin:
 # фиксирована: длинные названия обрезаются многоточием. Поэтому названия
 # короткие и различаются ПЕРВЫМ словом — «Администрирование · …» у трёх
 # разделов подряд читалось одинаково и было бесполезно.
-MENU_USERS = 'Пользователи'
-MENU_SHOWCASE = 'Витрина'
-MENU_ACTIONS = 'План действий'
 MENU_ADMIN_PARSING = 'Настройки парсинга'
-MENU_ADMIN_NORMALIZATION = 'Настройки валидации'
+MENU_ADMIN_REFERENCES = 'Настройки справочников'
 MENU_ADMIN_ALERTING = 'Настройки алертинга'
-MENU_PIPELINE = 'Данные конвейера'
+MENU_FINAL_TABLES = 'Финальные таблицы'
 MENU_PIPELINE_CONTROL = 'Пайплайн'
 
 

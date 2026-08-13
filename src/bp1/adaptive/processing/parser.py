@@ -800,7 +800,7 @@ def _page_items(
     pairs: list[tuple[str, str]] = []
 
     if selectors.get('container'):
-        for raw in _extract_by_selectors(html, selectors)[:DEFAULT_MAX_NEWS]:
+        for raw in _extract_by_selectors(html, selectors):
             url_rel = raw.get('url', '')
             title = raw.get('title', '')
             if (
@@ -810,13 +810,17 @@ def _page_items(
             ):
                 continue
             pairs.append((title, url_rel))
+            if len(pairs) == DEFAULT_MAX_NEWS:
+                break
     else:
         collector = _LinkCollector()
         collector.feed(html)
-        for title, href in collector.links[:DEFAULT_MAX_NEWS]:
+        for title, href in collector.links:
             if _is_noise_url(href) or _reject_non_http_scheme(href):
                 continue
             pairs.append((title, href))
+            if len(pairs) == DEFAULT_MAX_NEWS:
+                break
 
     return [
         (title, _to_absolute(url_rel, base_url), url_rel)
@@ -909,38 +913,47 @@ def _parse_items(
     selectors = selectors or {}
 
     if selectors.get('container'):
-        return [
-            _make_item(
-                source_name=source_name,
-                competitor=competitor,
-                trigger=trigger,
-                url=raw.get('url', ''),
-                title=raw.get('title', ''),
-                text=raw.get('text'),
-                published_at=raw.get('published_at'),
-                region=raw.get('region'),
-                media_name=raw.get('media_name'),
-                base_url=base_url,
+        items = []
+        for raw in _extract_by_selectors(html, selectors):
+            if _is_noise_url(raw.get('url')) or _reject_non_http_scheme(
+                raw.get('url')
+            ):
+                continue
+            items.append(
+                _make_item(
+                    source_name=source_name,
+                    competitor=competitor,
+                    trigger=trigger,
+                    url=raw.get('url', ''),
+                    title=raw.get('title', ''),
+                    text=raw.get('text'),
+                    published_at=raw.get('published_at'),
+                    region=raw.get('region'),
+                    media_name=raw.get('media_name'),
+                    base_url=base_url,
+                )
             )
-            for raw in _extract_by_selectors(html, selectors)[:DEFAULT_MAX_NEWS]
-            if (
-                not _is_noise_url(raw.get('url'))
-                and not _reject_non_http_scheme(raw.get('url'))
-            )
-        ]
+            if len(items) == DEFAULT_MAX_NEWS:
+                break
+        return items
 
     collector = _LinkCollector()
     collector.feed(html)
 
-    return [
-        _make_item(
-            source_name=source_name,
-            competitor=competitor,
-            trigger=trigger,
-            url=href,
-            title=title,
-            base_url=base_url,
+    items = []
+    for title, href in collector.links:
+        if _is_noise_url(href) or _reject_non_http_scheme(href):
+            continue
+        items.append(
+            _make_item(
+                source_name=source_name,
+                competitor=competitor,
+                trigger=trigger,
+                url=href,
+                title=title,
+                base_url=base_url,
+            )
         )
-        for title, href in collector.links[:DEFAULT_MAX_NEWS]
-        if not _is_noise_url(href) and not _reject_non_http_scheme(href)
-    ]
+        if len(items) == DEFAULT_MAX_NEWS:
+            break
+    return items

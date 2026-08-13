@@ -12,6 +12,7 @@ from api.dependencies import ApproverDep, CurrentUser, SessionDep
 from api.responses import (
     ME_RESPONSES,
     ME_UPDATE_RESPONSES,
+    USER_DETAIL_RESPONSES,
     USER_ROLE_UPDATE_RESPONSES,
     USERS_LIST_RESPONSES,
 )
@@ -80,6 +81,21 @@ async def list_users(
     return await UserService(session).list_users(
         full_name, email, department_id
     )
+
+
+@router.get(
+    '/{user_id}',
+    response_model=UserRead,
+    responses=USER_DETAIL_RESPONSES,
+    summary='Пользователь по идентификатору',
+    description='Доступ: только `analyst` и `admin`.',
+)
+async def read_user(
+    user_id: int,
+    session: SessionDep,
+    _approver: ApproverDep,
+) -> UserRead:
+    return await UserService(session).get_by_id(user_id)
 
 
 @router.patch(

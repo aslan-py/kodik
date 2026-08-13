@@ -177,6 +177,36 @@ require_at_least_one_field`): без этой проверки пустой PATC
 изменений через `exclude_unset`), а `200` без единого изменённого поля
 скорее вводит в заблуждение, чем помогает.
 
+### `filter-options` — варианты фильтров
+
+`GET /filter-options` доступен ролям `viewer`, `analyst` и `admin` и за
+один запрос возвращает варианты для витрины и плана действий:
+
+```json
+{
+  "showcase": {
+    "category": ["Логистика"],
+    "region": ["Москва"],
+    "priority": ["П1", "П2", "П3", "П4"],
+    "competitor": ["Ozon"],
+    "department": ["Коммерческий"]
+  },
+  "action_items": {
+    "status": ["open", "in_progress", "done"],
+    "deadline": ["2026-02-19"],
+    "priority": ["П1"],
+    "assigned_user_id": [{"value": 17, "label": "Анастасия Иванова"}],
+    "department_id": [{"value": 3, "label": "Коммерческий"}]
+  }
+}
+```
+
+Сроки передаются в машинном ISO-формате `YYYY-MM-DD`. Для полей
+`assigned_user_id` и `department_id` фронт показывает `label`, а в
+одноимённый query-параметр отправляет числовой `value`. Варианты задач для
+`viewer` вычисляются только по задачам его отдела; `analyst` и `admin`
+получают общий набор.
+
 ---
 
 ## Регистрация и telegram_id

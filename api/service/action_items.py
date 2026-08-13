@@ -6,6 +6,8 @@ ActionItemService — вся логика (фильтрация по отдел�
 правки, HTTPException, commit) живёт здесь.
 """
 
+from datetime import date
+
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +37,8 @@ class ActionItemService:
         task: str | None = None,
         assigned_user_id: int | None = None,
         showcase_event_id: int | None = None,
+        deadline: date | None = None,
+        priority: str | None = None,
     ) -> list[ActionItemRead]:
         """viewer видит только задачи своего отдела (весь отдел, не
         только те, где он assigned_user_id — так решили: отдел в целом
@@ -51,6 +55,8 @@ class ActionItemService:
             task,
             assigned_user_id,
             showcase_event_id,
+            deadline,
+            priority,
         )
         return [ActionItemRead.model_validate(i) for i in items]
 

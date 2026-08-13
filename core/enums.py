@@ -198,6 +198,36 @@ class SourceCandidateStatus(enum.StrEnum):
     promoted = 'promoted'
 
 
+class PipelineRunKind(enum.StrEnum):
+    single = 'single'
+    all = 'all'
+
+
+class PipelineRunSource(enum.StrEnum):
+    admin = 'admin'
+    api = 'api'
+    cli = 'cli'
+    beat = 'beat'
+
+
+class PipelineRunStatus(enum.StrEnum):
+    queued = 'queued'
+    running = 'running'
+    succeeded = 'succeeded'
+    partial_failed = 'partial_failed'
+    failed = 'failed'
+    rejected = 'rejected'
+    stale = 'stale'
+
+
+class PipelineStageStatus(enum.StrEnum):
+    queued = 'queued'
+    running = 'running'
+    succeeded = 'succeeded'
+    failed = 'failed'
+    skipped = 'skipped'
+
+
 # ============================================================================
 #  Общие экземпляры типов SQLAlchemy (имя = имя PG-типа)
 # ============================================================================
@@ -217,3 +247,7 @@ source_candidate_status = Enum(
     SourceCandidateStatus, name='source_candidate_status'
 )
 user_role = Enum(UserRole, name='user_role')
+pipeline_run_kind = Enum(PipelineRunKind, name='pipeline_run_kind')
+pipeline_run_source = Enum(PipelineRunSource, name='pipeline_run_source')
+pipeline_run_status = Enum(PipelineRunStatus, name='pipeline_run_status')
+pipeline_stage_status = Enum(PipelineStageStatus, name='pipeline_stage_status')

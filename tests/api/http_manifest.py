@@ -81,6 +81,22 @@ HTTP_MANIFEST = (
     ),
     EndpointContract('GET', '/action-items', VIEWER, 200, 'action-item-list'),
     EndpointContract('GET', '/filter-options', VIEWER, 200, 'filter-options'),
+    EndpointContract('GET', '/pipeline/runs', VIEWER, 200, 'pipeline-list'),
+    EndpointContract(
+        'GET', '/pipeline/runs/{run_id}', VIEWER, 200, 'pipeline-detail'
+    ),
+    EndpointContract('POST', '/pipeline/runs', EDITOR, 202, 'pipeline-list'),
+    EndpointContract(
+        'POST',
+        '/pipeline/stages/{stage}/runs',
+        EDITOR,
+        202,
+        'pipeline-list',
+    ),
+    EndpointContract('GET', '/pipeline/schedule', VIEWER, 200, 'pipeline-list'),
+    EndpointContract(
+        'PATCH', '/pipeline/schedule', EDITOR, 200, 'pipeline-list'
+    ),
     EndpointContract(
         'GET', '/action-items/{item_id}', VIEWER, 200, 'action-item-detail'
     ),

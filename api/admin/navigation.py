@@ -32,7 +32,11 @@ ADMIN_SECTIONS = (
             'Результат каждого запуска отображается на этой странице.'
         ),
         zone='pipeline',
-        models=('PipelineControlMarker',),
+        models=(
+            'PipelineControlMarker',
+            'PipelineRun',
+            'PipelineStageRun',
+        ),
     ),
     AdminSection(
         id='parsing',

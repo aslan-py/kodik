@@ -25,7 +25,7 @@ def test_sections_have_exact_titles_zones_and_models():
         ('final', 'Финальные таблицы', 'final'),
     ]
     assert [section.models for section in ADMIN_SECTIONS] == [
-        ('PipelineControlMarker',),
+        ('PipelineControlMarker', 'PipelineRun', 'PipelineStageRun'),
         ('Competitor', 'Source', 'Trigger', 'SearchTask'),
         (
             'Region',
@@ -93,6 +93,9 @@ def test_pipeline_marker_stays_registered_with_all_widget_actions():
     )
     assert isinstance(marker_admin, PipelineControlAdmin)
     assert marker_admin.widget_actions == (
+        'show_schedule',
+        'save_schedule',
+        'reset_schedule',
         'stage_1',
         'stage_2',
         'stage_3',

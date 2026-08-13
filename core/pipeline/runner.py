@@ -16,6 +16,10 @@ from dataclasses import dataclass
 
 from core.config import settings
 from core.database import AsyncSessionLocal
+from core.pipeline.errors import (
+    PipelineBusinessError,
+    PipelinePreconditionError,
+)
 from core.pipeline.registry import STAGES, StageDescriptor
 from core.scripts.stages.cascade import count_rows
 
@@ -81,7 +85,7 @@ async def _preflight(descriptor: StageDescriptor, *, use_stub: bool) -> None:
         hint = (
             descriptor.missing_data_hint or 'сначала прогоните предыдущий этап.'
         )
-        raise RuntimeError(
+        raise PipelinePreconditionError(
             f'Этап {descriptor.number} ({descriptor.title}): нет данных в '
             f'"{descriptor.requires.__tablename__}" — {hint}'
         )
@@ -99,12 +103,12 @@ async def _execute(
     идёт в `StageResult.is_stub` вместо статичного поля дескриптора.
     """
     if reparse and descriptor.run_reparse is None:
-        raise RuntimeError(
+        raise PipelineBusinessError(
             f'Этап {descriptor.number} ({descriptor.title}): '
             'не поддерживает режим пересборки.'
         )
     if true_parsing is False and descriptor.run_stub is None:
-        raise RuntimeError(
+        raise PipelineBusinessError(
             f'Этап {descriptor.number} ({descriptor.title}): '
             'не поддерживает режим заглушки.'
         )

@@ -43,7 +43,13 @@ def _bootstrap_env() -> None:
         'ADMIN_DATETIME_FORMAT': 'DD.MM.YYYY HH:mm',
     }
     for key, value in defaults.items():
-        os.environ.setdefault(key, value)
+        # Docker Compose passes ``ADMIN_SECRET_KEY=`` through as an existing,
+        # but empty, environment variable.  Treat it like an omitted value so
+        # the documented fallback to JWT_SECRET_KEY remains effective.
+        if key == 'ADMIN_SECRET_KEY' and not os.environ.get(key):
+            os.environ[key] = value
+        else:
+            os.environ.setdefault(key, value)
 
 
 _bootstrap_env()
@@ -61,6 +67,7 @@ from api.admin import (  # noqa: E402, F401
     parsing,
     pipeline,
     pipeline_control,
+    pipeline_runs,
     users,
     workflow,
 )

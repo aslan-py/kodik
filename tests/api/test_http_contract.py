@@ -74,7 +74,7 @@ def test_manifest_matches_openapi_and_operation_ids_are_unique():
         if 'operationId' in operation
     ]
 
-    assert len(HTTP_MANIFEST) == 92
+    assert len(HTTP_MANIFEST) == 98
     assert manifest == documented
     assert len(operation_ids) == len(set(operation_ids))
 
@@ -105,6 +105,8 @@ def _request_path(template: str) -> str:
         template.replace('{item_id}', '999999999')
         .replace('{showcase_id}', '999999999')
         .replace('{user_id}', '999999999')
+        .replace('{run_id}', '00000000-0000-0000-0000-000000000000')
+        .replace('{stage}', '1')
     )
 
 

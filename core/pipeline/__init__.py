@@ -7,6 +7,16 @@ Base.metadata при импорте пакета — нужно для Alembic a
 приём, что и в src/bpN/__init__.py, см. src/db_registry.py).
 """
 
-from core.pipeline.models import PipelineControlMarker
+from core.pipeline.models import (
+    PipelineControlMarker,
+    PipelineRun,
+    PipelineSchedule,
+    PipelineStageRun,
+)
 
-__all__ = ['PipelineControlMarker']
+__all__ = [
+    'PipelineControlMarker',
+    'PipelineRun',
+    'PipelineSchedule',
+    'PipelineStageRun',
+]

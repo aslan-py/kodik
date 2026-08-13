@@ -12,8 +12,6 @@ add-pipeline-reparse-and-admin-ui).
 между реестром и админкой.
 """
 
-from typing import Any
-
 from fastadmin import (
     WidgetActionArgumentProps,
     WidgetActionInputSchema,
@@ -28,22 +26,21 @@ from fastadmin import (
 from api.admin.base import MENU_PIPELINE_CONTROL, ReadOnlyModelAdmin
 from core.config import settings
 from core.database import AsyncSessionLocal
-from core.pipeline.models import PipelineControlMarker
+from core.enums import PipelineRunKind, PipelineRunSource
+from core.pipeline.models import PipelineControlMarker, PipelineSchedule
 from core.pipeline.registry import STAGES
-from core.pipeline.runner import StageResult, run_all, run_stage
-
-
-def _format_result(result: StageResult) -> dict[str, Any]:
-    stub = ' [ЗАГЛУШКА]' if result.is_stub else ''
-    return {
-        'этап': f'{result.number}. {result.title}{stub}',
-        'статус': 'OK' if result.ok else 'ОШИБКА',
-        'подробности': result.result if result.ok else result.error,
-    }
-
+from core.pipeline.schedule import (
+    InvalidPipelineSchedule,
+    get_effective_schedule,
+    validate_schedule_values,
+)
+from core.pipeline.service import PipelineRunConflict, PipelineRunService
 
 REPARSE_FIELD = 'пересобрать'
 TRUE_PARSING_FIELD = 'реальный сбор'
+SCHEDULE_ENABLED_FIELD = 'включено'
+SCHEDULE_CRON_FIELD = 'cron'
+SCHEDULE_TIMEZONE_FIELD = 'часовой пояс'
 
 
 def _reparse_requested(payload: WidgetActionInputSchema) -> bool:
@@ -75,25 +72,68 @@ def _true_parsing_requested(
     return None
 
 
+def _payload_value(
+    payload: WidgetActionInputSchema, field_name: str, default: object
+) -> object:
+    for item in payload.query:
+        if item.field_name == field_name:
+            return item.value
+    return default
+
+
+async def _schedule_response() -> WidgetActionResponseSchema:
+    async with AsyncSessionLocal() as session:
+        effective = await get_effective_schedule(session)
+    return WidgetActionResponseSchema(
+        data=[
+            {
+                'enabled': effective.enabled,
+                'cron': effective.cron,
+                'timezone': effective.timezone,
+                'enabled_source': effective.enabled_source,
+                'cron_source': effective.cron_source,
+                'timezone_source': effective.timezone_source,
+                'next_run_at': effective.next_slot.isoformat(),
+            }
+        ]
+    )
+
+
 async def _run_stage_widget(
     number: int, payload: WidgetActionInputSchema
 ) -> WidgetActionResponseSchema:
     reparse = _reparse_requested(payload)
     true_parsing = _true_parsing_requested(payload)
     try:
-        result = await run_stage(
-            number, reparse=reparse, true_parsing=true_parsing
+        async with AsyncSessionLocal() as session:
+            created = await PipelineRunService(session).enqueue_run(
+                kind=PipelineRunKind.single,
+                stage=number,
+                source=PipelineRunSource.admin,
+                parameters={
+                    'reparse': reparse,
+                    'true_parsing': true_parsing,
+                },
+            )
+    except PipelineRunConflict as exc:
+        return WidgetActionResponseSchema(
+            data=[
+                {
+                    'status': 'conflict',
+                    'run_id': str(exc.run_id),
+                    'details_url': f'/pipeline/runs/{exc.run_id}',
+                }
+            ]
         )
-    except Exception as exc:  # неизвестный номер / preflight / сбой этапа
-        descriptor = STAGES.get(number)
-        result = StageResult(
-            number=number,
-            title=descriptor.title if descriptor else f'Этап {number}',
-            is_stub=descriptor.is_stub if descriptor else False,
-            ok=False,
-            error=str(exc),
-        )
-    return WidgetActionResponseSchema(data=[_format_result(result)])
+    return WidgetActionResponseSchema(
+        data=[
+            {
+                'status': 'queued',
+                'run_id': str(created.run_id),
+                'details_url': f'/pipeline/runs/{created.run_id}',
+            }
+        ]
+    )
 
 
 @register(PipelineControlMarker, sqlalchemy_sessionmaker=AsyncSessionLocal)
@@ -103,6 +143,9 @@ class PipelineControlAdmin(ReadOnlyModelAdmin):
     verbose_name_plural = 'Пайплайн'
 
     widget_actions = (
+        'show_schedule',
+        'save_schedule',
+        'reset_schedule',
         'stage_1',
         'stage_2',
         'stage_3',
@@ -112,6 +155,106 @@ class PipelineControlAdmin(ReadOnlyModelAdmin):
         'stage_7',
         'run_all_stages',
     )
+
+    @widget_action(
+        tab=MENU_PIPELINE_CONTROL,
+        title='Расписание: показать',
+        widget_action_type=WidgetActionType.Action,
+    )
+    async def show_schedule(
+        self, payload: WidgetActionInputSchema
+    ) -> WidgetActionResponseSchema:
+        return await _schedule_response()
+
+    @widget_action(
+        tab=MENU_PIPELINE_CONTROL,
+        title='Расписание: сохранить',
+        widget_action_type=WidgetActionType.Action,
+        widget_action_props=WidgetActionProps(
+            arguments=[
+                WidgetActionArgumentProps(
+                    name=SCHEDULE_ENABLED_FIELD,
+                    widget_type=WidgetType.Switch,
+                    widget_props={
+                        'defaultChecked': settings.pipeline_schedule_enabled
+                    },
+                ),
+                WidgetActionArgumentProps(
+                    name=SCHEDULE_CRON_FIELD,
+                    widget_type=WidgetType.Input,
+                    widget_props={
+                        'defaultValue': settings.pipeline_schedule_cron
+                    },
+                ),
+                WidgetActionArgumentProps(
+                    name=SCHEDULE_TIMEZONE_FIELD,
+                    widget_type=WidgetType.Input,
+                    widget_props={
+                        'defaultValue': settings.pipeline_schedule_timezone
+                    },
+                ),
+            ]
+        ),
+    )
+    async def save_schedule(
+        self, payload: WidgetActionInputSchema
+    ) -> WidgetActionResponseSchema:
+        enabled = bool(
+            _payload_value(
+                payload,
+                SCHEDULE_ENABLED_FIELD,
+                settings.pipeline_schedule_enabled,
+            )
+        )
+        cron = str(
+            _payload_value(
+                payload, SCHEDULE_CRON_FIELD, settings.pipeline_schedule_cron
+            )
+        )
+        timezone = str(
+            _payload_value(
+                payload,
+                SCHEDULE_TIMEZONE_FIELD,
+                settings.pipeline_schedule_timezone,
+            )
+        )
+        try:
+            validate_schedule_values(cron, timezone)
+        except InvalidPipelineSchedule as exc:
+            return WidgetActionResponseSchema(
+                data=[{'status': 'invalid', 'error': str(exc)}]
+            )
+        async with AsyncSessionLocal() as session:
+            schedule = await session.get(PipelineSchedule, 1)
+            if schedule is None:
+                return WidgetActionResponseSchema(
+                    data=[{'status': 'unavailable'}]
+                )
+            schedule.enabled_override = enabled
+            schedule.cron_override = cron
+            schedule.timezone_override = timezone
+            await session.commit()
+        return await _schedule_response()
+
+    @widget_action(
+        tab=MENU_PIPELINE_CONTROL,
+        title='Расписание: сбросить к .env',
+        widget_action_type=WidgetActionType.Action,
+    )
+    async def reset_schedule(
+        self, payload: WidgetActionInputSchema
+    ) -> WidgetActionResponseSchema:
+        async with AsyncSessionLocal() as session:
+            schedule = await session.get(PipelineSchedule, 1)
+            if schedule is None:
+                return WidgetActionResponseSchema(
+                    data=[{'status': 'unavailable'}]
+                )
+            schedule.enabled_override = None
+            schedule.cron_override = None
+            schedule.timezone_override = None
+            await session.commit()
+        return await _schedule_response()
 
     @widget_action(
         tab=MENU_PIPELINE_CONTROL,
@@ -236,7 +379,28 @@ class PipelineControlAdmin(ReadOnlyModelAdmin):
     async def run_all_stages(
         self, payload: WidgetActionInputSchema
     ) -> WidgetActionResponseSchema:
-        results = await run_all()
+        try:
+            async with AsyncSessionLocal() as session:
+                created = await PipelineRunService(session).enqueue_run(
+                    kind=PipelineRunKind.all,
+                    source=PipelineRunSource.admin,
+                )
+        except PipelineRunConflict as exc:
+            return WidgetActionResponseSchema(
+                data=[
+                    {
+                        'status': 'conflict',
+                        'run_id': str(exc.run_id),
+                        'details_url': f'/pipeline/runs/{exc.run_id}',
+                    }
+                ]
+            )
         return WidgetActionResponseSchema(
-            data=[_format_result(r) for r in results]
+            data=[
+                {
+                    'status': 'queued',
+                    'run_id': str(created.run_id),
+                    'details_url': f'/pipeline/runs/{created.run_id}',
+                }
+            ]
         )

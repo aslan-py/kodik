@@ -157,6 +157,19 @@
     );
   }
 
+  let activeRunRefreshTimer = null;
+  function refreshActiveRunHistory() {
+    window.clearTimeout(activeRunRefreshTimer);
+    const location = combinedLocation();
+    const isRunHistory = location.includes('pipelinerun');
+    const text = document.body?.innerText?.toLowerCase() || '';
+    const hasActiveRun = /\b(queued|running)\b/.test(text);
+    if (!isRunHistory || !hasActiveRun) return;
+    activeRunRefreshTimer = window.setTimeout(() => {
+      window.location.reload();
+    }, 10000);
+  }
+
   let scheduled = false;
   const observerOptions = { childList: true, subtree: true };
   function applyUi() {
@@ -170,6 +183,7 @@
         markNavigation();
         renameDashboardHeading();
         updateBanner();
+        refreshActiveRunHistory();
       } finally {
         observer?.observe(document.documentElement, observerOptions);
       }

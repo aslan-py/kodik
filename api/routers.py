@@ -21,6 +21,7 @@ from api.endpoints import (
     event_type_router,
     filter_options_router,
     normalized_item_router,
+    pipeline_router,
     raw_item_router,
     region_router,
     routing_rule_router,
@@ -46,6 +47,9 @@ main_router.include_router(
 )
 main_router.include_router(
     filter_options_router, prefix='/filter-options', tags=['Варианты фильтров']
+)
+main_router.include_router(
+    pipeline_router, prefix='/pipeline', tags=['Управление пайплайном']
 )
 
 # --- Администрирование (парсинг, BP-1) ---

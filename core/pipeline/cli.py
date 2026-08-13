@@ -12,7 +12,10 @@
 import asyncio
 import sys
 
+from core.database import AsyncSessionLocal
+from core.enums import PipelineRunKind, PipelineRunSource
 from core.pipeline.runner import StageResult, run_all, run_stage
+from core.pipeline.service import PipelineRunConflict, PipelineRunService
 
 
 def _print_result(r: StageResult) -> None:
@@ -24,6 +27,8 @@ def _print_result(r: StageResult) -> None:
 
 
 async def _main(argv: list[str]) -> int:
+    direct = '--direct' in argv
+    argv = [arg for arg in argv if arg != '--direct']
     if len(argv) not in (1, 2):
         print(__doc__)
         return 1
@@ -33,6 +38,18 @@ async def _main(argv: list[str]) -> int:
         if len(argv) != 1:
             print(__doc__)
             return 1
+        if not direct:
+            try:
+                async with AsyncSessionLocal() as session:
+                    created = await PipelineRunService(session).enqueue_run(
+                        kind=PipelineRunKind.all,
+                        source=PipelineRunSource.cli,
+                    )
+            except PipelineRunConflict as exc:
+                print(f'Pipeline is already running: {exc.run_id}')
+                return 2
+            print(f'Queued pipeline run: {created.run_id}')
+            return 0
         results = await run_all()
         print('Сводка по прогону всего конвейера:')
         for r in results:
@@ -58,6 +75,33 @@ async def _main(argv: list[str]) -> int:
         else:
             print(__doc__)
             return 1
+
+    if not direct:
+        if number not in range(1, 8):
+            print(f'Unknown pipeline stage: {number}')
+            return 1
+        if reparse and number != 2:
+            print('reparse is supported only by BP2')
+            return 1
+        if true_parsing is not None and number != 1:
+            print('stub/real is supported only by BP1')
+            return 1
+        try:
+            async with AsyncSessionLocal() as session:
+                created = await PipelineRunService(session).enqueue_run(
+                    kind=PipelineRunKind.single,
+                    stage=number,
+                    source=PipelineRunSource.cli,
+                    parameters={
+                        'reparse': reparse,
+                        'true_parsing': true_parsing,
+                    },
+                )
+        except PipelineRunConflict as exc:
+            print(f'Pipeline is already running: {exc.run_id}')
+            return 2
+        print(f'Queued pipeline run: {created.run_id}')
+        return 0
 
     try:
         result = await run_stage(

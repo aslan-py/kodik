@@ -70,6 +70,100 @@ services:
       timeout: 5s
       retries: 10
 
+  celery-worker:
+    image: kodik-backend:local
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: >
+      celery -A core.celery_app:app worker --loglevel=INFO
+      --queues=pipeline.control,pipeline.stages
+      --hostname=celery-worker@%h
+      --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A core.celery_app:app inspect ping -d celery-worker@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  celery-worker-bp1:
+    image: kodik-backend:local
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: >
+      celery -A core.celery_app:app worker --loglevel=INFO
+      --queues=pipeline.bp1
+      --hostname=celery-worker-bp1@%h
+      --concurrency=${CELERY_BP1_WORKER_CONCURRENCY:-1}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A core.celery_app:app inspect ping -d celery-worker-bp1@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  celery-beat:
+    image: kodik-backend:local
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: celery -A core.celery_app:app beat --loglevel=INFO
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "tr '\\0' ' ' < /proc/1/cmdline | grep -q 'celery.*beat'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  flower:
+    image: kodik-backend:local
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: >
+      sh -c 'test -n "$$FLOWER_BASIC_AUTH" ||
+      (echo "FLOWER_BASIC_AUTH is required" && exit 1);
+      celery -A core.celery_app:app flower --port=5555
+      --basic_auth="$$FLOWER_BASIC_AUTH"'
+    ports:
+      - '127.0.0.1:${FLOWER_PORT:-5555}:5555'
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import base64, os, urllib.request; request = urllib.request.Request('http://127.0.0.1:5555/'); request.add_header('Authorization', 'Basic ' + base64.b64encode(os.environ['FLOWER_BASIC_AUTH'].encode()).decode()); urllib.request.urlopen(request, timeout=3)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
   frontend:
     image: kodik-frontend:local
     build:
@@ -77,6 +171,7 @@ services:
       dockerfile: Dockerfile
       args:
         API_INTERNAL_URL: http://api:8000
+        NEXT_PUBLIC_API_URL: /api
     environment:
       NEXT_PUBLIC_API_URL: /api
       PORT: 3000

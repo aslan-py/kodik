@@ -61,6 +61,21 @@ class Settings(BaseSettings):
     # BP-1), чтобы очередь/результаты Celery не смешивались с бизнес-данными.
     celery_broker_db: int = 1
     celery_result_backend_db: int = 2
+    celery_worker_concurrency: int = 2
+    celery_bp1_worker_concurrency: int = 1
+    celery_task_soft_time_limit_seconds: int = 900
+    celery_task_time_limit_seconds: int = 960
+    celery_task_max_retries: int = 3
+    celery_task_default_retry_delay_seconds: int = 60
+    celery_task_retry_backoff_max_seconds: int = 600
+
+    # ===== Pipeline orchestration =====
+    pipeline_schedule_enabled: bool = False
+    pipeline_schedule_cron: str = '0 8 * * *'
+    pipeline_schedule_timezone: str = 'Europe/Moscow'
+    pipeline_schedule_poll_seconds: int = 60
+    pipeline_run_stale_timeout_seconds: int = 1800
+    flower_basic_auth: str | None = None
 
     @property
     def celery_broker_url(self) -> str:

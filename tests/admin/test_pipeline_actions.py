@@ -5,8 +5,11 @@ from unittest.mock import AsyncMock
 import pytest
 from fastadmin import WidgetActionInputSchema
 from fastadmin.models.base import admin_models
+from fastadmin.models.schemas import WidgetActionQuerySchema, WidgetType
 
-from core.pipeline.runner import StageResult
+from core.enums import PipelineRunStatus
+from core.pipeline.models import PipelineSchedule
+from core.pipeline.service import CreatedPipelineRun
 
 
 def _pipeline_admin():
@@ -31,22 +34,42 @@ async def test_stage_widget_calls_existing_stage_handler(
 
 
 async def test_run_all_widget_calls_existing_all_stages_handler(monkeypatch):
-    run_all = AsyncMock(
-        return_value=[
-            StageResult(
-                number=1,
-                title='Сбор',
-                is_stub=False,
-                ok=True,
-                result={'processed': 1},
-            )
-        ]
+    enqueue_run = AsyncMock(
+        return_value=CreatedPipelineRun(
+            run_id='00000000-0000-0000-0000-000000000001',
+            status=PipelineRunStatus.queued,
+        )
     )
-    monkeypatch.setattr('api.admin.pipeline_control.run_all', run_all)
+    monkeypatch.setattr(
+        'core.pipeline.service.PipelineRunService.enqueue_run', enqueue_run
+    )
 
     response = await _pipeline_admin().run_all_stages(
         WidgetActionInputSchema(query=[])
     )
 
-    run_all.assert_awaited_once_with()
-    assert response.data[0]['статус'] == 'OK'
+    enqueue_run.assert_awaited_once()
+    assert response.data[0]['status'] == 'queued'
+
+
+async def test_schedule_widget_saves_and_resets_override(session):
+    schedule = await session.get(PipelineSchedule, 1)
+    assert schedule is not None
+    payload = WidgetActionInputSchema(
+        query=[
+            WidgetActionQuerySchema('включено', WidgetType.Switch, True),
+            WidgetActionQuerySchema('cron', WidgetType.Input, '15 9 * * 1-5'),
+            WidgetActionQuerySchema(
+                'часовой пояс', WidgetType.Input, 'Europe/Berlin'
+            ),
+        ]
+    )
+
+    response = await _pipeline_admin().save_schedule(payload)
+    assert response.data[0]['cron'] == '15 9 * * 1-5'
+    assert response.data[0]['enabled_source'] == 'admin'
+
+    response = await _pipeline_admin().reset_schedule(
+        WidgetActionInputSchema(query=[])
+    )
+    assert response.data[0]['enabled_source'] == 'env'

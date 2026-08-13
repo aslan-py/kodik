@@ -137,3 +137,18 @@ class TestUpdateRole:
             )
 
         assert exc.value.status_code == 404
+
+
+class TestGetUserById:
+    async def test_returns_requested_user(self, session):
+        user = await _make_user(session)
+
+        result = await UserService(session).get_by_id(user.id)
+
+        assert result.id == user.id
+
+    async def test_unknown_user_not_found(self, session):
+        with pytest.raises(HTTPException) as exc:
+            await UserService(session).get_by_id(999_999)
+
+        assert exc.value.status_code == 404

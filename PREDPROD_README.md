@@ -133,7 +133,7 @@ pre-commit run ruff-format --all-files
 cp .env.example .env
 
 # Поднимаем все контейнеры (Postgres, Redis, Redis Commander)
-docker compose up -d
+docker compose up --build -d
 ```
 
 После запуска должны подняться 3 сервиса:
@@ -189,7 +189,7 @@ docker compose down -v
 него не нужен, только инфраструктура из `docker compose up -d`:
 
 ```bash
-python -m api.main
+docker compose up --build -d
 ```
 
 | Что | Адрес | Кредсы |

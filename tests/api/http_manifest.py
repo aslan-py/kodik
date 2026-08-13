@@ -65,6 +65,7 @@ HTTP_MANIFEST = (
         'PATCH', '/users/me', AUTHENTICATED, 200, 'current-user-update'
     ),
     EndpointContract('GET', '/users', EDITOR, 200, 'users-list'),
+    EndpointContract('GET', '/users/{user_id}', EDITOR, 200, 'user-detail'),
     EndpointContract(
         'PATCH', '/users/{user_id}/role', EDITOR, 200, 'user-role'
     ),

@@ -21,6 +21,7 @@ IMPLEMENTED_SUCCESS_SCENARIOS = {
     'current-user',
     'current-user-update',
     'users-list',
+    'user-detail',
     'user-role',
     'showcase-list',
     'showcase-detail',
@@ -73,7 +74,7 @@ def test_manifest_matches_openapi_and_operation_ids_are_unique():
         if 'operationId' in operation
     ]
 
-    assert len(HTTP_MANIFEST) == 91
+    assert len(HTTP_MANIFEST) == 92
     assert manifest == documented
     assert len(operation_ids) == len(set(operation_ids))
 

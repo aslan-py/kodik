@@ -21,6 +21,8 @@ COPY --from=deps /app/node_modules ./node_modules
 
 COPY . .
 
+ARG API_INTERNAL_URL=http://127.0.0.1:8000
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 

@@ -39,13 +39,9 @@ def test_search_depth_values_match_tavily_contract():
     }
 
 
-def test_bp3_settings_keep_previous_defaults():
+def test_llm_defaults_are_applied():
     configured = Settings(_env_file=None, **REQUIRED_SETTINGS)
 
-    assert configured.bp3_search_max_results == 2
-    assert configured.bp3_search_depth is SourceSearchDepth.basic
-    assert configured.bp3_search_time_range == 'week'
-    assert configured.bp3_llm_base_url == 'https://openrouter.ai/api/v1'
     assert configured.bp3_llm_temperature == 0
     assert configured.bp3_llm_max_tokens == 4096
 

@@ -165,3 +165,24 @@ async def test_users_list_filter_and_role_update(
             '/users/999999999/role', headers=headers, json={'role': 'viewer'}
         )
     ).status_code == 404
+
+
+async def test_user_by_id_requires_editor_role_and_returns_requested_user(
+    client, users_by_role, auth_headers
+):
+    target = users_by_role[UserRole.pending]
+    admin_headers = auth_headers(users_by_role[UserRole.admin])
+
+    found = await client.get(f'/users/{target.id}', headers=admin_headers)
+    missing = await client.get('/users/999999999', headers=admin_headers)
+    unauthenticated = await client.get(f'/users/{target.id}')
+    forbidden = await client.get(
+        f'/users/{target.id}',
+        headers=auth_headers(users_by_role[UserRole.viewer]),
+    )
+
+    assert found.status_code == 200
+    assert found.json()['id'] == target.id
+    assert missing.status_code == 404
+    assert unauthenticated.status_code == 401
+    assert forbidden.status_code == 403

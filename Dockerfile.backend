@@ -8,7 +8,14 @@ WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install -r requirements.txt && \
-    python -m playwright install --with-deps chromium
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources && \
+    for attempt in 1 2 3; do \
+        python -m playwright install --with-deps chromium && exit 0; \
+        echo "Не удалось установить Chromium и системные зависимости (попытка ${attempt}/3); повтор через 10 секунд"; \
+        sleep 10; \
+    done; \
+    exit 1
 
 COPY alembic ./alembic
 COPY alembic.ini ./

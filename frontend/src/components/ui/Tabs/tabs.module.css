@@ -1,0 +1,38 @@
+/* TabsNav.module.css */
+.tabsNav {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e2e2e7;
+  padding: 0 8px;
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #6b6b76;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.tab:hover {
+  color: #1a1a1f;
+}
+
+.tabActive {
+  color: #1a1a1f;
+}
+
+.tabActive::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: #4f46e5;
+  border-radius: 2px 2px 0 0;
+}

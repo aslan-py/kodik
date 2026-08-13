@@ -1,0 +1,215 @@
+.wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.popup {
+  position: absolute;
+  z-index: 10000;
+  width: 360px;
+  padding: 14px;
+  
+  background: #FFFFFF;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* header */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  height: 24px;
+}
+
+.header span {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-strong, #41464D);
+  text-transform: capitalize;
+}
+
+.header button {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-muted, #9A9EA4);
+  cursor: pointer;
+  transition: 0.2s;
+}
+.arrows {
+  display: flex;
+}
+.header button:hover {
+  background: var(--color-hover, #f3f4f6);
+}
+
+.header button:active {
+  transform: scale(0.96);
+}
+
+.header button:disabled {
+  color: var(--color-disabled, #d1d5db);
+  cursor: not-allowed;
+}
+
+/* быстрые кнопки */
+
+.quick {
+ display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.quick button {
+  height: 30px;
+  padding: 6px 8px;
+  width: auto;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background:  #F1F3F7;
+  color: #747A84;
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.quick button:hover {
+  border-color: var(--color-primary, #2563eb);
+  color: var(--color-primary, #2563eb);
+}
+
+.quick button:active {
+  transform: scale(0.97);
+}
+
+/* react day picker */
+
+.popup :global(.rdp) {
+  --rdp-cell-size: 42px;
+  margin: 0;
+}
+
+.popup :global(.rdp-month) {
+  width: 100%;
+}
+
+.popup :global(.rdp-weekdays) {
+  margin-bottom: 6px;
+}
+.popup :global(.rdp-month_grid) {
+  width: 100%;
+}
+
+.popup :global(.rdp-weekday) {
+  width: 30px;
+  height: 20px;
+  color: var(--color-muted, #9ca3af);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.popup :global(.rdp-day_button) {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  color: var(--color-text, #374151);
+  font-size: 14px;
+  transition: 0.15s;
+}
+
+.popup :global(.rdp-day_button:hover) {
+  background: var(--color-hover, #518bff);
+  color: white;
+
+}
+
+.popup :global(.rdp-today:not(.rdp-selected button)) {
+  /* background: var(--color-border, #2563eb); */
+}
+
+.popup :global(.rdp-selected button) {
+  background: var(--color-primary, #2563eb);
+  color: white;
+  font-weight: 600;
+}
+
+.popup :global(.rdp-selected:hover button) {
+  background: var(--color-primary-hover, #1d4ed8);
+  color: white;
+}
+
+.popup :global(.rdp-disabled button) {
+  color: var(--color-disabled, #d1d5db);
+  cursor: not-allowed;
+}
+
+.popup :global(.rdp-month_caption),
+.popup :global(.rdp-nav) {
+  display: none;
+}
+
+/* время */
+
+.time {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.time span {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text, #374151);
+}
+
+.time select {
+  height: 40px;
+  padding: 0 36px 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border, #d1d5db);
+  background: var(--color-background, #fff);
+  color: var(--color-text, #111827);
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+}
+
+.time select:hover {
+  border-color: var(--color-primary, #2563eb);
+}
+
+.time select:focus {
+  border-color: var(--color-primary, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+/* адаптив */
+
+@media (max-width: 480px) {
+  .popup {
+    width: calc(100vw - 32px);
+  }
+
+  .quick {
+    grid-template-columns: 1fr;
+  }
+}

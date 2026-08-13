@@ -22,6 +22,48 @@ logger = logging.getLogger(__name__)
 # Минимальная длина контента, при которой стратегия считается успешной.
 MIN_CONTENT_LENGTH = settings.bp1_min_content_length
 
+# Минимальное количество ссылок (элементов данных) в HTML, при котором
+# страница считается «информативной». Многие сайты (Lenta.ru, SPA-приложения)
+# отдают по HTTP «пустой скелет» (JS-shell): тело больше MIN_CONTENT_LENGTH,
+# но реальные данные появляются только после выполнения JS. Такая страница
+# НЕ должна считаться успешной для FAST/CRAWL4AI — нужно деградировать до
+# стратегии с JS-рендерингом (BROWSER/STEALTH).
+MIN_LINK_COUNT_FOR_CONTENT = 3
+
+# Стратегии, которые выполняют JavaScript (браузерные). Для них проверка
+# «информативности» по ссылкам не применяется — только по длине контента.
+_JS_RENDERING_STRATEGIES = (StrategyType.BROWSER, StrategyType.STEALTH)
+
+
+def _is_informative_html(html: str) -> bool:
+    """True, если HTML содержит реальные элементы данных (ссылки).
+
+    Многие сайты (Lenta.ru, SPA-приложения) отдают по HTTP «пустой скелет»
+    (JS-shell): тело длинное, но настоящий контент появляется только после
+    выполнения JS. Такая страница НЕ информативна — при отсутствии в ней
+    достаточного числа ссылок её не стоит считать успешным результатом для
+    не-JS-стратегий.
+
+    Args:
+        html: Исходный HTML.
+
+    Returns:
+        True, если страница содержит ``MIN_LINK_COUNT_FOR_CONTENT`` и более
+        ссылок (элементов данных), иначе False.
+    """
+    if not html or not html.strip():
+        return False
+    # Считаем только ссылки на реальные (не-пустые) страницы. Лёгкая проверка
+    # через ``html.parser`` (без BeautifulSoup) для скорости.
+    import re
+
+    # Грубая, но быстрая оценка: число вхождений ``href=``/``<a `` в HTML.
+    # Для страниц-списков (новости, вакансии) этого достаточно, чтобы
+    # отличить пустой JS-shell от страницы с данными.
+    link_count = len(re.findall(r'<a[\s>]', html, flags=re.IGNORECASE))
+    return link_count >= MIN_LINK_COUNT_FOR_CONTENT
+
+
 # Порядок стратегий при деградации.
 _DEGRADATION_ORDER = (
     StrategyType.FAST,
@@ -195,6 +237,25 @@ class BrowserStrategy(BaseStrategy):
         self._headless = headless
         self._timeout_ms = timeout_ms
 
+    # Количество попыток ожидания реального контента после goto. Многие сайты
+    # (Lenta.ru, SPA) грузят результаты поиска асинхронно после события load,
+    # поэтому контент из ``page.content()`` сразу после ``goto`` — пустой
+    # JS-shell (нет ссылок/элементов данных).
+    _CONTENT_POLL_ATTEMPTS = 10
+    # Интервал (в секундах) между попытками проверки появления контента.
+    _CONTENT_POLL_INTERVAL_S = 0.8
+
+    # Селекторы, по которым опрашиваем появление реальных элементов данных.
+    # Здесь же ведётся подсчёт ссылок на материалы, чтобы отличить страницу
+    # с выдачей от навигационной оболочки (шапка/подвал).
+    _NEWS_CONTAINER_SELECTORS = (
+        'ul.search-results__list li',
+        'ul.search-results__list.js-search-results-list li',
+        'div[class*=search-results] li',
+        '[class*=search-results] article',
+        '[class*=search-result] li',
+    )
+
     async def fetch(self, url: str, **kwargs) -> StrategyResult:
         start = time.monotonic()
         p = None
@@ -208,8 +269,55 @@ class BrowserStrategy(BaseStrategy):
             # с самоподписанными/недоверенными сертификатами).
             context = await browser.new_context(ignore_https_errors=True)
             page = await context.new_page()
-            await page.goto(url, timeout=self._timeout_ms)
-            html = await page.content()
+            try:
+                await page.goto(url, timeout=self._timeout_ms)
+            except Exception:
+                # Если goto бросил исключение (таймаут/навигация), пробуем
+                # всё равно прочитать текущий контент страницы ниже.
+                pass
+
+            # Дожидаемся появления реального контента (элементов данных).
+            # Результаты поиска на SPA-сайтах и новостных порталах грузятся
+            # асинхронно после события load (XHR/fetch), поэтому ``goto``
+            # возвращается раньше, чем в DOM появятся результаты.
+            #
+            # Используем ``page.wait_for_selector`` по контейнеру результатов
+            # поиска: он ждёт именно появления элемента в DOM (не зависает на
+            # постоянных соединениях в отличие от networkidle) и корректно
+            # обрабатывает навигацию/перестройку DOM. Если за отведённое время
+            # контейнер не появился — читаем текущий контент как есть.
+            found = False
+            for selector in self._NEWS_CONTAINER_SELECTORS:
+                try:
+                    await page.wait_for_selector(
+                        selector,
+                        timeout=min(
+                            self._CONTENT_POLL_ATTEMPTS
+                            * int(self._CONTENT_POLL_INTERVAL_S * 1000),
+                            self._timeout_ms,
+                        ),
+                    )
+                    found = True
+                    break
+                except Exception:
+                    continue
+            if not found:
+                # Контейнер не появился — ждём появления любых ссылок.
+                for _ in range(self._CONTENT_POLL_ATTEMPTS):
+                    try:
+                        html = await page.content()
+                    except Exception:
+                        html = ''
+                    if _is_informative_html(html):
+                        found = True
+                        break
+                    await asyncio.sleep(self._CONTENT_POLL_INTERVAL_S)
+
+            # Всегда читаем финальный контент после ожидания.
+            try:
+                html = await page.content()
+            except Exception:
+                html = ''
 
             elapsed = int((time.monotonic() - start) * 1000)
             return StrategyResult(
@@ -329,6 +437,40 @@ class AgenticOrchestrator:
                 url,
             )
             result = await strategy.fetch(url, **kwargs)
+
+            # Проверка «информативности» контента: страница должна быть не
+            # только достаточно длинной, но и содержать реальные элементы
+            # данных (ссылки). Многие сайты отдают по HTTP пустой JS-shell
+            # (Lenta.ru, SPA): длина больше MIN_CONTENT_LENGTH, но реального
+            # контента нет, и парсер соберёт только пустой элемент. Для
+            # не-JS-стратегий (FAST/CRAWL4AI) при таком контенте считаем
+            # стратегию неуспешной и деградируем к JS-рендерингу
+            # (BROWSER/STEALTH). Браузерные стратегии уже выполнили JS и
+            # оцениваются только по длине.
+            if (
+                strategy_type not in _JS_RENDERING_STRATEGIES
+                and result.success
+                and result.data
+                and not _is_informative_html(result.data)
+            ):
+                self._logger.warning(
+                    'Стратегия %s для %s вернула неинформативный '
+                    'контент (JS-shell, длина=%d) — деградация',
+                    strategy_type.value,
+                    url,
+                    result.content_length,
+                )
+                result = StrategyResult(
+                    strategy=strategy_type,
+                    success=False,
+                    data=result.data,
+                    content_length=result.content_length,
+                    error=(
+                        'non-informative content (likely JS-shell, '
+                        'no data elements)'
+                    ),
+                    elapsed_ms=result.elapsed_ms,
+                )
 
             if result.success:
                 self._logger.info(

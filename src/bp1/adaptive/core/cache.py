@@ -175,14 +175,40 @@ class UnifiedCache:
     def _probed_url_key(self, source_name: str) -> str:
         return f'bp1:probed_url:{_canonical_source_name(source_name)}'
 
-    async def get_probed_url(self, source_name: str) -> ProbedUrl | None:
+    def _probed_url_key_for_query(
+        self, source_name: str, search_param: str
+    ) -> str:
+        """Составной ключ кэша probed URL: источник + хэш поискового запроса.
+
+        Ключ привязывает закэшированный probed URL к конкретному поисковому
+        параметру конкурента. Без этого ``bp1:probed_url:{host}``
+        перезаписывался бы последней задачей на источнике, и для другого
+        конкурента на том же источнике использовался бы чужой URL (нужно
+        было искать заново).
+        """
+        digest = hashlib.md5(search_param.encode('utf-8')).hexdigest()[:12]
+        return f'bp1:probed_url:{_canonical_source_name(source_name)}:{digest}'
+
+    async def get_probed_url(
+        self, source_name: str, search_param: str | None = None
+    ) -> ProbedUrl | None:
         """Получить закэшированный probed URL источника из Redis.
+
+        Если передан ``search_param`` — ищем по составному ключу
+        (источник + хэш запроса), чтобы у разных конкурентов на одном
+        источнике были независимые записи. Иначе — по ключу только источника
+        (обратная совместимость).
 
         Возвращает ``None``, если ключа нет или значение повреждено.
         """
         if self.redis is None:
             return None
-        raw = await self.redis.get(self._probed_url_key(source_name))
+        key = (
+            self._probed_url_key_for_query(source_name, search_param)
+            if search_param is not None
+            else self._probed_url_key(source_name)
+        )
+        raw = await self.redis.get(key)
         if not raw:
             return None
         try:
@@ -195,21 +221,35 @@ class UnifiedCache:
         source_name: str,
         probed: ProbedUrl,
         ttl: int = PROBED_URL_TTL_SECONDS,
+        search_param: str | None = None,
     ) -> None:
-        """Сохранить probed URL источника в Redis (TTL 7 дней)."""
+        """Сохранить probed URL источника в Redis (TTL 7 дней).
+
+        Если передан ``search_param`` — пишем по составному ключу
+        (источник + хэш запроса), иначе — по ключу только источника
+        (обратная совместимость).
+        """
         if self.redis is None:
             return
-        await self.redis.set(
-            self._probed_url_key(source_name),
-            probed.model_dump_json(),
-            ex=ttl,
+        key = (
+            self._probed_url_key_for_query(source_name, search_param)
+            if search_param is not None
+            else self._probed_url_key(source_name)
         )
+        await self.redis.set(key, probed.model_dump_json(), ex=ttl)
 
-    async def clear_probed_url(self, source_name: str) -> None:
+    async def clear_probed_url(
+        self, source_name: str, search_param: str | None = None
+    ) -> None:
         """Удалить probed URL источника из Redis."""
         if self.redis is None:
             return
-        await self.redis.delete(self._probed_url_key(source_name))
+        key = (
+            self._probed_url_key_for_query(source_name, search_param)
+            if search_param is not None
+            else self._probed_url_key(source_name)
+        )
+        await self.redis.delete(key)
 
     # ========================================================================
     # Профили браузеров (диск)

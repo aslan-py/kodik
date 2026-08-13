@@ -799,7 +799,16 @@ def _page_items(
     selectors = selectors or {}
     pairs: list[tuple[str, str]] = []
 
-    if selectors.get('container'):
+    # Если задан контейнер, извлекаем элементы по селекторам полей адаптера.
+    # Если контейнер есть, но у него нет рабочих селекторов ``url``/``title``
+    # (LLM вернул только ``container``, а остальные поля пустые) — по
+    # ``_extract_by_selectors`` мы не сможем собрать ни одного элемента
+    # (url/title пустые → все отбрасываются). Тогда деградируем к
+    # эвристическому сбору ссылок внутри контейнера, чтобы не терять выдачу.
+    has_container = bool((selectors.get('container') or '').strip())
+    has_field_selectors = bool(selectors.get('url') and selectors.get('title'))
+
+    if has_container and has_field_selectors:
         for raw in _extract_by_selectors(html, selectors):
             url_rel = raw.get('url', '')
             title = raw.get('title', '')
@@ -813,8 +822,16 @@ def _page_items(
             if len(pairs) >= DEFAULT_MAX_NEWS:
                 break
     else:
+        # Эвристический сбор ссылок. Если контейнер задан, ограничиваем сбор
+        # его областью (иначе соберутся навигационные ссылки шапки/подвала).
+        if has_container:
+            soup = BeautifulSoup(html, 'html.parser')
+            container = soup.select_one(selectors['container'])
+            container_html = str(container) if container is not None else html
+        else:
+            container_html = html
         collector = _LinkCollector()
-        collector.feed(html)
+        collector.feed(container_html)
         for title, href in collector.links:
             if _is_noise_url(href) or _reject_non_http_scheme(href):
                 continue

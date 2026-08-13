@@ -83,10 +83,60 @@ class AdaptiveRunner:
         self._classifier = SourceClassifier()
         self._search_param_resolver = SearchParamResolver()
         self._logger = logging.getLogger(__name__)
-        # Пробинг поискового URL: по умолчанию включён, fetch-функция
-        # подставляется в рантайме через bind_probe_fetch (стандартный
-        # контракт SearchUrlProber — заглушка до реального рантайма).
-        self._prober = SearchUrlProber()
+        # Пробинг поискового URL: по умолчанию включён. Fetch-функция
+        # подключается реальным HTTP-загрузчиком по умолчанию (чтобы пробинг
+        # не падал на заглушке NotImplementedError), но может быть заменена
+        # через bind_probe_fetch на любой другой загрузчик (браузер/httpx).
+        self._prober = SearchUrlProber(
+            fetch=self._default_probe_fetch,
+            looks_like_search_results=self._default_looks_like,
+        )
+
+    @staticmethod
+    def _default_probe_fetch(url: str) -> str:
+        """Реальный fetch для пробинга: синхронный HTTP-запрос через urllib.
+
+        Используется по умолчанию, чтобы пробинг не падал на заглушке
+        ``NotImplementedError`` (как было раньше, когда fetch подставлялся
+        только через ``bind_probe_fetch``). При недоступности / ошибке сети
+        поднимает исключение, которое ``SearchUrlProber._safe_fetch``
+        превращает в ``None`` (вариант помечается ``fetch_error``).
+        """
+        import urllib.request
+
+        req = urllib.request.Request(
+            url,
+            headers={
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0 Safari/537.36'
+                )
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.read().decode('utf-8', errors='replace')
+        except Exception:
+            # Недоверенный SSL-сертификат (гос.порталы) — повторяем без
+            # верификации, чтобы пробинг не ложно падал.
+            import ssl
+
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                return resp.read().decode('utf-8', errors='replace')
+
+    @staticmethod
+    def _default_looks_like(html: str) -> bool:
+        """По умолчанию считаем любой непустой HTML похожим на выдачу.
+
+        Лучше попытаться спарсить страницу, чем бездумно уйти в fallback:
+        точная проверка «выдача ли это» зависит от конкретного сайта и
+        выполняется в самом парсере.
+        """
+        return bool(html and html.strip())
 
     def bind_probe_fetch(
         self,
@@ -94,12 +144,12 @@ class AdaptiveRunner:
         looks_like: Any | None = None,
         param_chain: tuple[str, ...] | None = None,
     ) -> None:
-        """Подключает реальный fetch (и опционально looks_like) к проуберу.
+        """Заменяет fetch (и опционально looks_like) у проубера.
 
-        SearchUrlProber создаётся с заглушками ``_default_fetch``/``_default_
-        looks_like``, которые поднимают NotImplementedError — реальная
-        функция загрузки HTML подставляется в рантайме (например, из
-        инфраструктурного слоя) именно этим методом.
+        По умолчанию проубер использует ``_default_probe_fetch`` (реальный
+        HTTP-загрузчик через urllib). Метод позволяет подставить другой
+        загрузчик (браузер, httpx, мок в тестах) и/или свою проверку
+        «похоже ли на выдачу».
         """
         self._prober = SearchUrlProber(
             fetch=fetch,
@@ -130,13 +180,17 @@ class AdaptiveRunner:
     ) -> tuple[str, ProbedUrl | None]:
         """Возвращает ``(url, probed_url)``: кэш -> пробинг -> fallback.
 
-        1. Кэш: если probed URL источника уже сохранён — используем его
-           (TTL 7 дней), пробинг не выполняем.
+        1. Кэш: если probed URL для пары ``(источник, поисковый запрос)``
+           уже сохранён — используем его (TTL 7 дней), пробинг не выполняем.
+           Составной ключ (источник + хэш запроса) гарантирует, что у разных
+           конкурентов на одном источнике будут независимые записи.
         2. Пробинг: иначе пробуем ``SearchUrlProber.probe_async`` по базовому
            шаблону источника (``{q}``) с таймаутом 10 с.
         3. Fallback: если пробинг не нашёл успешный вариант (или Redis
            недоступен / fetch не подключён) — строим URL по шаблону
            ``https://{host}{template}`` с percent-кодированным запросом.
+           Fallback также пишется в кэш (как ``ProbedUrl``), чтобы повторные
+           запуски той же пары не делали бесполезный пробинг заново.
 
         Возвращает ``(url, probed)``: ``url`` — итоговый URL для парсинга,
         ``probed`` — найденный/закэшированный ``ProbedUrl`` (или None).
@@ -145,7 +199,9 @@ class AdaptiveRunner:
         fallback_url = self._build_fallback_url(source_name, search_param)
 
         try:
-            cached = await self._cache.get_probed_url(source_name)
+            cached = await self._cache.get_probed_url(
+                source_name, search_param=search_param
+            )
         except Exception as e:
             self._logger.warning(
                 'Кэш probed URL недоступен (source=%s): %s',
@@ -155,13 +211,19 @@ class AdaptiveRunner:
             cached = None
         if cached is not None:
             self._logger.info(
-                'Probed URL для %s взят из кэша: %s',
+                'Probed URL для %s (query=%r) взят из кэша: %s',
                 source_name,
+                search_param,
                 cached.search_url,
             )
             return cached.search_url, cached
 
         if not self.use_probing:
+            self._logger.info(
+                'Пробинг выключен (use_probing=False), fallback для %s: %s',
+                source_name,
+                fallback_url,
+            )
             return fallback_url, None
 
         base_url = SearchUrlTemplateRegistry().build_base_url(source_name)
@@ -177,15 +239,39 @@ class AdaptiveRunner:
 
         if probed is None:
             self._logger.info(
-                'Пробинг %s не дал результата — fallback: %s',
+                'Пробинг %s (query=%r) не дал результата — fallback: %s',
                 source_name,
+                search_param,
                 fallback_url,
             )
+            # Кэшируем fallback как ProbedUrl (без уверенности в результате),
+            # чтобы следующая задача той же пары не пробовала пробинг снова.
+            fallback_probed = ProbedUrl(
+                source_name=source_name,
+                search_url=fallback_url,
+                confidence=0.0,
+            )
+            try:
+                await self._cache.set_probed_url(
+                    source_name,
+                    fallback_probed,
+                    ttl=PROBED_URL_TTL_SECONDS,
+                    search_param=search_param,
+                )
+            except Exception as e:
+                self._logger.warning(
+                    'Не удалось сохранить fallback probed URL для %s: %s',
+                    source_name,
+                    e,
+                )
             return fallback_url, None
 
         try:
             await self._cache.set_probed_url(
-                source_name, probed, ttl=PROBED_URL_TTL_SECONDS
+                source_name,
+                probed,
+                ttl=PROBED_URL_TTL_SECONDS,
+                search_param=search_param,
             )
         except Exception as e:
             self._logger.warning(

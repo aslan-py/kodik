@@ -151,7 +151,7 @@ HTTP-сервер (`uvicorn api.main:app`), он не должен сам гон
 
 ## Проверка
 
-- `uvicorn api.main:app --reload` стартует без ошибок импорта.
+- `python -m api.main` стартует без ошибок импорта на порту из `API_PORT`.
 - `POST /auth/register` → в БД строка `role=pending`; `GET /users/me` под её токеном не даёт
   доступа к `showcase`; `admin`/`analyst` меняет роль → доступ появляется.
 - `PATCH /showcase/{id}` с новым `priority` → проверить, что `categorized_event.priority` тоже

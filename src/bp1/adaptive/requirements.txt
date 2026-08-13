@@ -10,8 +10,7 @@ pydantic>=2.0,<3.0        # Pydantic-схемы (schemas.py)
 crawl4ai>=0.4.0           # AI-краулинг (engines.py: Crawl4AIStrategy)
 
 # ===== LLM (LLMClient, AIAgent) =====
-litellm>=1.40.0           # универсальный LLM-клиент (llm.py)
-openai>=1.0.0             # OpenAI-совместимый API (llm.py)
+openai>=1.0.0             # OpenAI SDK (llm.py: AsyncOpenAI)
 
 # ===== Browser Automation =====
 # ВНИМАНИЕ: pip ставит только библиотеку. Сами браузеры (бинарники ~150 МБ)

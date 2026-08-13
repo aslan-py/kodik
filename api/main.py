@@ -7,7 +7,7 @@
 требует: один процесс отдаёт и JSON API, и веб-интерфейс на /admin.
 Инструкция — api/ADMIN_README.md.
 
-Запуск: uvicorn api.main:app --reload
+Запуск: python -m api.main
 """
 
 from fastapi import FastAPI
@@ -42,3 +42,14 @@ app.include_router(main_router)
 # Путь обязан совпадать с ADMIN_PREFIX (api/admin/__init__.py) — по нему
 # фронтенд админки запрашивает свою статику.
 app.mount('/admin', admin_app)
+
+
+if __name__ == '__main__':
+    import uvicorn
+
+    uvicorn.run(
+        'api.main:app',
+        host=settings.api_host,
+        port=settings.api_port,
+        reload=True,
+    )

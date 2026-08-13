@@ -1,0 +1,1025 @@
+"""
+Реальный LLM-клиент и ИИ-агент (BP-1 Adaptive).
+
+Реализует:
+
+- ``LLMClient`` — анализ структуры HTML через LLM (``openai``).
+  Извлекает **реальные CSS-селекторы** и схему данных из HTML-разметки.
+  Поддерживает умное чанкирование больших страниц через
+  ``HtmlCleaner`` → ``StructuredChunker`` → параллельное извлечение →
+  ``ResultMerger``.
+- ``AIAgent`` — агент принятия решений: выбирает стратегию обхода,
+  анализирует результаты парсинга и корректирует адаптеры.
+
+LLM-провайдер настраивается через ``core.config.settings``: ``llm_model``
+(по умолчанию ``gpt-4o-mini``), ``llm_api_key``, ``llm_base_url``. Если ключ
+не задан, используется эвристический fallback, чтобы пакет оставался
+работоспособным без внешних сервисов.
+
+Работа с LLM выполняется через официальный OpenAI SDK
+(``openai.AsyncOpenAI``). Для OpenAI-совместимых API (например, DeepSeek)
+достаточно задать ``LLM_BASE_URL``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from typing import Any
+
+from bs4 import BeautifulSoup
+
+from core.config import settings
+
+from ..schemas import (
+    AdapterConfig,
+    BusinessFeatures,
+    ExtendedSiteClassification,
+    PageSubType,
+    SiteType,
+    SourceClassification,
+    StrategyType,
+    TechnicalFeatures,
+)
+from .chunker import Chunk, StructuredChunker
+from .html_cleaner import HtmlCleaner
+from .merger import ResultMerger
+
+logger = logging.getLogger(__name__)
+
+# Поля по умолчанию для анализа структуры.
+_DEFAULT_FIELDS = [
+    'title',
+    'text',
+    'published_at',
+    'region',
+    'url',
+    'media_name',
+]
+
+# Параметры чанкирования по умолчанию.
+_DEFAULT_MAX_CHUNK_SIZE = 8000
+_DEFAULT_OVERLAP_SIZE = 500
+_DEFAULT_MAX_CHUNKS = 10
+_DEFAULT_PARALLEL_WORKERS = 5
+
+
+# Промпт для детальной классификации сайта (расширенный).
+SITE_CLASSIFICATION_PROMPT_V2 = """
+Ты — эксперт по анализу веб-страниц с 10-летним опытом.
+
+## Входные данные:
+- URL: {url}
+- Заголовок страницы: {title}
+- Мета-описание: {description}
+- HTML (очищенный, первые 12000 символов): {html}
+
+## Задачи:
+
+### 1. Определи основной тип сайта (выбери ОДИН):
+- `news`: новостной портал
+- `job_board`: доска вакансий (hh.ru, superjob)
+- `marketplace`: маркетплейс (множество продавцов)
+- `catalog`: каталог товаров
+- `e_commerce`: интернет-магазин (товары, корзина, заказ)
+- `classifieds`: доска объявлений (Avito, Youla)
+- `review_aggregator`: агрегатор отзывов
+- `question_answer`: вопросы-ответы
+- `wiki`: вики-энциклопедия
+- `education`: образовательная платформа
+- `finance`: финансовый портал
+- `real_estate`: недвижимость
+- `legal`: правовая система
+- `media`: медиа-портал (видео, подкасты)
+- `forum`: форум
+- `social`: социальная сеть
+- `government`: государственный реестр
+- `blog`: блог
+- `documentation`: документация
+- `other`: другой
+
+### 2. Определи подтип страницы (выбери ОДИН):
+`home`, `search`, `list`, `detail`, `category`, `profile`, `archive`,
+`cart`, `checkout`, `login`, `register`, `about`, `contact`, `other`
+
+### 3. Определи бизнес-характеристики (true/false):
+`has_payment`, `has_delivery`, `has_reviews`, `has_rating`,
+`has_user_accounts`, `has_cart`, `has_search`, `has_filters`,
+`has_pagination`, `has_comments`, `has_sharing`
+
+### 4. Определи технические характеристики:
+- `frameworks`: react, vue, angular, nextjs, nuxt
+- `css_frameworks`: bootstrap, tailwind, material, semantic_ui
+- `has_antibot`: cloudflare, datadome, qrator, akamai
+- `has_captcha`: reCAPTCHA, hCaptcha
+- `is_spa`: одностраничное приложение
+- `has_mobile_version`: мобильная версия
+
+### 5. Оцени сложность парсинга (0.0-1.0):
+- 0.0-0.3: простой статический сайт
+- 0.3-0.6: динамический сайт с JS
+- 0.6-0.8: SPA с антибот-защитой
+- 0.8-1.0: сложный SPA с CAPTCHA и сильной защитой
+
+## Ответь ТОЛЬКО в формате JSON:
+
+{{
+    "site_type": "news|e_commerce|...",
+    "page_subtype": "home|search|list|...",
+    "confidence": 0.95,
+    "business_features": {{
+        "has_payment": true,
+        "has_delivery": false,
+        "has_reviews": true,
+        "has_rating": true,
+        "has_user_accounts": true,
+        "has_cart": false,
+        "has_search": true,
+        "has_filters": false,
+        "has_pagination": true,
+        "has_comments": false,
+        "has_sharing": true
+    }},
+    "technical_features": {{
+        "frameworks": ["react", "vue"],
+        "css_frameworks": ["tailwind"],
+        "has_antibot": false,
+        "has_captcha": false,
+        "is_spa": true,
+        "has_mobile_version": true
+    }},
+    "complexity_score": 0.0,
+    "recommended_strategy": "FAST|BROWSER|STEALTH|HITL"
+}}
+"""
+
+# Промпт для извлечения селекторов (расширенный).
+SELECTOR_EXTRACTION_PROMPT_V2 = """
+Ты — эксперт по извлечению данных из HTML с 8-летним опытом.
+
+## Контекст:
+- URL: {url}
+- Тип сайта: {site_type}
+- Конкурент: {competitor}
+- Ожидаемые поля: {expected_fields}
+
+## HTML (первые 12000 символов):
+{html}
+
+## Задача:
+Найди CSS-селекторы для извлечения данных из HTML-страницы.
+
+### 1. Найди контейнер элементов
+- Определи, в каком контейнере находятся элементы (новости, вакансии, товары)
+- Укажи селектор, который выбирает ВСЕ элементы на странице
+- Если несколько типов элементов — укажи все возможные селекторы
+
+### 2. Для каждого поля найди селектор
+- Приоритет: data-атрибуты > id > class > tag
+- Указывай несколько вариантов через запятую
+- Если поле не найдено — оставь пустую строку
+
+### 3. Найди пагинацию
+- Селектор кнопки "Далее" или "Следующая"
+- Паттерн URL для подстановки номера страницы
+
+## Ответь ТОЛЬКО в формате JSON:
+
+{{
+    "selectors": {{
+        "container": "",
+        "title": "",
+        "text": "",
+        "published_at": "",
+        "region": "",
+        "media_name": "",
+        "url": "a[href]"
+    }},
+    "schema": {{}},
+    "pagination": {{
+        "enabled": false,
+        "selector": "",
+        "url_pattern": "",
+        "max_pages": 1
+    }},
+    "confidence": 0.85,
+    "metadata": {{
+        "items_per_page": 0,
+        "has_infinite_scroll": false,
+        "load_more_selector": ""
+    }}
+}}
+
+## Правила:
+1. Селекторы должны быть специфичными и устойчивыми к изменениям
+2. Используй data-атрибуты, если они есть (более стабильны)
+3. Confidence — уверенность в извлечении (0.0-1.0)
+"""
+
+
+def _default_model() -> str:
+    """Модель LLM по умолчанию из настроек."""
+    return settings.llm_model
+
+
+def _default_base_url() -> str | None:
+    """Базовый URL LLM-провайдера из настроек (если задан)."""
+    return settings.llm_base_url
+
+
+def _has_llm_config() -> bool:
+    """Проверяет, задана ли конфигурация LLM."""
+    return bool(settings.llm_api_key)
+
+
+class _BaseLLMClient:
+    """Общая основа для LLM-клиентов.
+
+    Инкапсулирует конфигурацию модели (``model``, ``base_url``, ``api_key``)
+    и ленивое создание ``AsyncOpenAI``-клиента. Устраняет дублирование между
+    ``LLMClient`` и ``AIAgent``.
+    """
+
+    def __init__(
+        self,
+        model: str | None = None,
+        logger: logging.Logger | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        self._model = model or _default_model()
+        self._base_url = base_url or _default_base_url()
+        self._logger = logger or logging.getLogger(__name__)
+        self._api_key = api_key or settings.llm_api_key
+        self._client = None
+
+    def _get_client(self):
+        """Лениво создаёт и возвращает AsyncOpenAI-клиент."""
+        if self._client is None:
+            from openai import AsyncOpenAI
+
+            self._client = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+            )
+        return self._client
+
+
+class LLMClient(_BaseLLMClient):
+    """
+    Клиент для анализа структуры HTML через LLM.
+
+    Возвращает ``AdapterConfig`` с заполненными ``selectors`` (реальные
+    CSS-селекторы) и ``expected_schema`` (типы полей). Если LLM не настроен,
+    использует эвристический fallback на основе HTML-тегов, чтобы пакет
+    работал без внешних сервисов.
+    """
+
+    async def extract_article_text(self, content: str) -> str | None:
+        """Извлекает основной текст статьи из очищенного HTML через LLM.
+
+        Используется глубоким фетчем (каскад CSS → LLM → сниппет) для
+        получения полного текста новости со страницы статьи. Если LLM не
+        настроен или запрос не удался — возвращает ``None`` (передаёт
+        управление следующему способу извлечения).
+
+        Длинные статьи (больше ``_max_chunk_size``) обрабатываются по
+        частям через ``StructuredChunker``: каждая часть извлекается
+        отдельным запросом, результаты склеиваются. Это не теряет
+        окончание текста (раньше обрезалось ``content[:max_chunk_size]``).
+
+        Args:
+            content: Очищенный HTML статьи (см. ``HtmlCleaner.clean``).
+
+        Returns:
+            Полный текст статьи или ``None`` при недоступности LLM.
+        """
+        if not _has_llm_config():
+            return None
+        try:
+            if len(content) <= self._max_chunk_size:
+                text = await self._llm_extract_single(content)
+            else:
+                text = await self._llm_extract_chunked(content)
+            return (text or '').strip() or None
+        except Exception as e:
+            self._logger.warning('Ошибка LLM-извлечения статьи: %s', e)
+            return None
+
+    async def _llm_extract_single(self, content: str) -> str | None:
+        """Один LLM-запрос: извлечь основной текст из фрагмента HTML."""
+        client = self._get_client()
+        prompt = (
+            'Извлеки основной текст новостной статьи из приведённого '
+            'HTML. Исключи меню, навигацию, рекламу, футер и «похожие '
+            'новости». Верни ТОЛЬКО текст статьи без пояснений.\n\n'
+            f'HTML:\n{content}'
+        )
+        response = await client.chat.completions.create(
+            model=self._model,
+            messages=[{'role': 'user', 'content': prompt}],
+            temperature=0.0,
+        )
+        text = response.choices[0].message.content
+        return (text or '').strip() or None
+
+    async def _llm_extract_chunked(self, content: str) -> str | None:
+        """Чанкированное извлечение текста для длинных статей.
+
+        Разбивает очищенный HTML на части ``StructuredChunker`` (до
+        ``_max_chunks`` штук), извлекает текст из каждой части параллельно
+        (семафор ``_parallel_workers``) и склеивает результаты.
+        """
+        cleaned: dict[str, Any] = {'content': content, 'blocks': []}
+        chunks = self._chunker.chunk(cleaned)[: self._max_chunks]
+        if not chunks:
+            return None
+
+        semaphore = asyncio.Semaphore(self._parallel_workers)
+
+        async def _limited(chunk: Chunk) -> str | None:
+            async with semaphore:
+                return await self._llm_extract_single(chunk.content)
+
+        results = await asyncio.gather(
+            *(_limited(c) for c in chunks), return_exceptions=True
+        )
+        parts: list[str] = []
+        for result in results:
+            if isinstance(result, Exception):
+                self._logger.warning('Ошибка LLM-извлечения чанка: %s', result)
+                continue
+            if isinstance(result, str) and result.strip():
+                parts.append(result)
+        return '\n\n'.join(parts) or None
+
+    def __init__(
+        self,
+        model: str | None = None,
+        logger: logging.Logger | None = None,
+        max_chunk_size: int = _DEFAULT_MAX_CHUNK_SIZE,
+        overlap_size: int = _DEFAULT_OVERLAP_SIZE,
+        max_chunks: int = _DEFAULT_MAX_CHUNKS,
+        parallel_workers: int = _DEFAULT_PARALLEL_WORKERS,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ):
+        super().__init__(
+            model=model,
+            logger=logger,
+            base_url=base_url,
+            api_key=api_key,
+        )
+        self._max_chunk_size = max_chunk_size
+        self._overlap_size = overlap_size
+        self._max_chunks = max_chunks
+        self._parallel_workers = parallel_workers
+
+        self._cleaner = HtmlCleaner()
+        self._chunker = StructuredChunker(
+            max_chunk_size=max_chunk_size,
+            overlap_size=overlap_size,
+        )
+        self._merger = ResultMerger()
+
+    async def analyze_structure(
+        self,
+        html: str,
+        competitor: str,
+        expected_fields: list[str] | None = None,
+    ) -> AdapterConfig:
+        """
+        Анализирует HTML и извлекает структуру данных.
+
+        Возвращает ``AdapterConfig`` с реальными CSS-селекторами
+        (``selectors``) и схемой (``expected_schema``).
+
+        Для больших страниц (> ``max_chunk_size``) автоматически использует
+        чанкирование через ``analyze_structure_chunked``.
+        """
+        expected_fields = expected_fields or list(_DEFAULT_FIELDS)
+
+        if not _has_llm_config():
+            return self._heuristic_analyze(html, expected_fields)
+
+        try:
+            # Очистка HTML: сжимаем объём и извлекаем основной контент.
+            # Очищенный контент передаётся в LLM (а не сырой HTML), чтобы
+            # не превысить контекстное окно модели и не тратить токены на шум.
+            cleaned = self._cleaner.clean(html)
+            content = cleaned.get('content', '')
+            if not content:
+                return self._heuristic_analyze(html, expected_fields)
+
+            if len(content) > self._max_chunk_size:
+                return await self.analyze_structure_chunked(
+                    html, competitor, expected_fields
+                )
+            return await self._llm_analyze(content, competitor, expected_fields)
+        except Exception as e:
+            self._logger.warning('Ошибка LLM-анализа структуры: %s', e)
+            return self._heuristic_analyze(html, expected_fields)
+
+    async def classify_with_llm(
+        self,
+        html: str,
+        url: str,
+        headers: dict[str, Any] | None = None,
+    ) -> ExtendedSiteClassification:
+        """Расширенная классификация сайта через LLM.
+
+        Определяет ``SiteType``, подтип страницы, бизнес- и технические
+        характеристики. Если LLM не настроен или произошла ошибка —
+        использует эвристический fallback.
+        """
+        if not _has_llm_config():
+            return self._heuristic_classify(html, url)
+
+        try:
+            # Очистка HTML перед передачей в LLM.
+            cleaned = self._cleaner.clean(html)
+            content = cleaned.get('content', '') or html
+
+            # Извлечение заголовка и описания.
+            soup = BeautifulSoup(content, 'html.parser')
+            title_node = soup.find('title')
+            title = title_node.get_text(strip=True) if title_node else ''
+            meta_desc = soup.find('meta', attrs={'name': 'description'})
+            description = meta_desc.get('content', '') if meta_desc else ''
+
+            prompt = self._build_classification_prompt(
+                url, title, description, content
+            )
+
+            client = self._get_client()
+            response = await client.chat.completions.create(
+                model=self._model,
+                messages=[{'role': 'user', 'content': prompt}],
+                temperature=0.0,
+                max_tokens=2048,
+            )
+            raw = response.choices[0].message.content
+            data = self._parse_json(raw)
+            return self._to_extended_classification(
+                data, html, url, headers or {}
+            )
+        except Exception as e:
+            self._logger.warning('Ошибка LLM-классификации: %s', e)
+            return self._heuristic_classify(html, url)
+
+    def _build_classification_prompt(
+        self,
+        url: str,
+        title: str,
+        description: str,
+        html: str,
+    ) -> str:
+        """Строит промпт детальной классификации сайта."""
+        return SITE_CLASSIFICATION_PROMPT_V2.format(
+            url=url,
+            title=title,
+            description=description,
+            html=html[:12000],
+        )
+
+    def _to_extended_classification(
+        self,
+        data: dict[str, Any],
+        html: str,
+        url: str,
+        headers: dict[str, Any],
+    ) -> ExtendedSiteClassification:
+        """Формирует ``ExtendedSiteClassification`` из JSON-ответа LLM."""
+        site_type_raw = (data.get('site_type') or 'other').lower()
+        try:
+            site_type = SiteType(site_type_raw)
+        except ValueError:
+            site_type = SiteType.OTHER
+
+        page_raw = (data.get('page_subtype') or 'other').lower()
+        try:
+            page_subtype = PageSubType(page_raw)
+        except ValueError:
+            page_subtype = PageSubType.OTHER
+
+        business_data = data.get('business_features') or {}
+        technical_data = data.get('technical_features') or {}
+
+        technical = TechnicalFeatures(
+            frameworks=technical_data.get('frameworks') or [],
+            css_frameworks=technical_data.get('css_frameworks') or [],
+            has_antibot=bool(technical_data.get('has_antibot', False)),
+            has_captcha=bool(technical_data.get('has_captcha', False)),
+            is_spa=bool(technical_data.get('is_spa', False)),
+            has_mobile_version=bool(
+                technical_data.get('has_mobile_version', False)
+            ),
+        )
+
+        complexity = data.get('complexity_score', 0.0)
+        if not isinstance(complexity, int | float):
+            complexity = 0.0
+        complexity = max(0.0, min(1.0, float(complexity)))
+
+        confidence = data.get('confidence', 0.5)
+        if not isinstance(confidence, int | float):
+            confidence = 0.5
+        confidence = max(0.0, min(1.0, float(confidence)))
+
+        strategy = (data.get('recommended_strategy') or 'FAST').upper()
+
+        return ExtendedSiteClassification(
+            source_name=url,
+            site_type=site_type,
+            page_subtype=page_subtype,
+            confidence=confidence,
+            business_features=BusinessFeatures(
+                **{
+                    k: bool(v)
+                    for k, v in (business_data or {}).items()
+                    if k in BusinessFeatures.model_fields
+                }
+            ),
+            technical_features=technical,
+            complexity_score=complexity,
+            recommended_strategy=strategy,
+            metadata={
+                'title': data.get('metadata', {}).get('title', '')
+                if isinstance(data.get('metadata'), dict)
+                else '',
+                'url': url,
+                'headers_detected': bool(headers),
+            },
+        )
+
+    def _heuristic_classify(
+        self,
+        html: str,
+        url: str,
+    ) -> ExtendedSiteClassification:
+        """Эвристическая классификация (fallback без LLM)."""
+        soup = BeautifulSoup(html, 'html.parser')
+
+        site_type = SiteType.OTHER
+        for item in soup.find_all(
+            attrs={'itemtype': re.compile(r'schema\.org')}
+        ):
+            item_str = str(item).lower()
+            if 'product' in item_str:
+                site_type = SiteType.E_COMMERCE
+            elif 'jobposting' in item_str:
+                site_type = SiteType.JOB_BOARD
+            elif 'article' in item_str:
+                site_type = SiteType.NEWS
+                break
+
+        if site_type == SiteType.OTHER and any(
+            soup.select_one(sel)
+            for sel in ('.cart', '#cart', '.basket', '.shopping-cart')
+        ):
+            site_type = SiteType.E_COMMERCE
+
+        technical = TechnicalFeatures(
+            is_spa='id="app"' in html or 'id="root"' in html,
+            has_antibot='cloudflare' in html.lower(),
+        )
+
+        return ExtendedSiteClassification(
+            source_name=url,
+            site_type=site_type,
+            confidence=0.7 if site_type != SiteType.OTHER else 0.4,
+            technical_features=technical,
+            metadata={'url': url, 'heuristic': True},
+        )
+
+    async def analyze_structure_chunked(
+        self,
+        html: str,
+        competitor: str,
+        expected_fields: list[str] | None = None,
+        max_chunk_size: int | None = None,
+    ) -> AdapterConfig:
+        """
+        Анализирует структуру с чанкированием для больших HTML.
+
+        1. Очистка HTML (``HtmlCleaner``).
+        2. Разбиение на логические чанки с перекрытием (``StructuredChunker``).
+        3. Параллельный анализ каждого чанка через LLM.
+        4. Объединение результатов (``ResultMerger``).
+        """
+        expected_fields = expected_fields or list(_DEFAULT_FIELDS)
+        chunk_size = max_chunk_size or self._max_chunk_size
+
+        # 1. Очистка и сжатие.
+        cleaned = self._cleaner.clean(html)
+
+        # 2. Умное чанкирование.
+        chunker = self._chunker
+        if chunk_size != self._max_chunk_size:
+            chunker = StructuredChunker(
+                max_chunk_size=chunk_size,
+                overlap_size=self._overlap_size,
+            )
+        chunks = chunker.chunk(cleaned)
+        if not chunks:
+            return self._heuristic_analyze(html, expected_fields)
+
+        # Ограничение числа чанков.
+        chunks = chunks[: self._max_chunks]
+
+        # 3. Параллельное извлечение из чанков.
+        results = await self._extract_from_chunks(
+            chunks, competitor, expected_fields
+        )
+
+        # 4. Объединение результатов.
+        merged = self._merger.merge(
+            results=results,
+            chunk_metadata=[c.metadata for c in chunks],
+        )
+
+        return self._to_adapter_config(merged, expected_fields)
+
+    async def _extract_from_chunks(
+        self,
+        chunks: list[Chunk],
+        competitor: str,
+        expected_fields: list[str],
+    ) -> list[dict[str, Any]]:
+        """Параллельно извлекает структуру из чанков через LLM."""
+        semaphore = asyncio.Semaphore(self._parallel_workers)
+
+        async def _limited(chunk: Chunk) -> dict[str, Any]:
+            async with semaphore:
+                return await self._llm_analyze_chunk(
+                    chunk, competitor, expected_fields
+                )
+
+        tasks = [_limited(chunk) for chunk in chunks]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Отбрасываем ошибки, логируем их.
+        valid: list[dict[str, Any]] = []
+        for result in results:
+            if isinstance(result, Exception):
+                self._logger.warning('Ошибка анализа чанка: %s', result)
+                continue
+            if isinstance(result, dict):
+                valid.append(result)
+        return valid
+
+    async def _llm_analyze(
+        self,
+        html: str,
+        competitor: str,
+        expected_fields: list[str],
+    ) -> AdapterConfig:
+        """Анализ структуры через LLM (один запрос)."""
+        client = self._get_client()
+        prompt = self._build_analysis_prompt(html, competitor, expected_fields)
+
+        response = await client.chat.completions.create(
+            model=self._model,
+            messages=[{'role': 'user', 'content': prompt}],
+            temperature=0.0,
+            max_tokens=4096,
+        )
+        content = response.choices[0].message.content
+        data = self._parse_json(content)
+
+        return self._to_adapter_config(data, expected_fields)
+
+    async def _llm_analyze_chunk(
+        self,
+        chunk: Chunk,
+        competitor: str,
+        expected_fields: list[str],
+    ) -> dict[str, Any]:
+        """Анализ структуры одного чанка через LLM."""
+        client = self._get_client()
+        prompt = self._build_chunk_prompt(chunk, competitor, expected_fields)
+
+        response = await client.chat.completions.create(
+            model=self._model,
+            messages=[{'role': 'user', 'content': prompt}],
+            temperature=0.0,
+            max_tokens=4096,
+        )
+        content = response.choices[0].message.content
+        data = self._parse_json(content)
+
+        # Нормализуем результат чанка: selectors + schema + confidence.
+        return {
+            'selectors': data.get('selectors', {}),
+            'schema': data.get('schema', {}),
+            'confidence': data.get('confidence', 0.0),
+            'metadata': data.get('metadata', {}),
+        }
+
+    def _build_analysis_prompt(
+        self,
+        html: str,
+        competitor: str,
+        expected_fields: list[str],
+    ) -> str:
+        """Строит промпт для анализа структуры страницы."""
+        return (
+            'Ты — эксперт по анализу HTML-страниц и извлечению '
+            'структурированных данных.\n\n'
+            '## Задача:\n'
+            'Проанализируй HTML-код страницы и определи CSS-селекторы '
+            'для извлечения данных.\n\n'
+            '## Входные данные:\n'
+            f'- Конкурент: {competitor}\n'
+            f'- Ожидаемые поля: {expected_fields}\n'
+            f'- HTML: {html[: self._max_chunk_size]}\n\n'
+            '## Требования:\n'
+            '1. Найди контейнер, который содержит список элементов '
+            '(новости, вакансии, товары)\n'
+            '2. Для каждого поля определи CSS-селектор\n'
+            '3. Определи схему данных (типы полей)\n'
+            '4. Найди пагинацию (если есть)\n\n'
+            '## Ответь ТОЛЬКО в формате JSON:\n'
+            '{\n'
+            '    "selectors": {\n'
+            '        "container": "article, .news-item, .vacancy-card, '
+            '.product-item, .post",\n'
+            '        "title": "h1, h2, h3, .title, .post-title, '
+            '.vacancy-name, .item-title",\n'
+            '        "text": ".content, .description, .post-content, '
+            '.vacancy-description, .item-description",\n'
+            '        "published_at": ".date, time, .published, '
+            '.publish-date, .item-date",\n'
+            '        "region": ".region, .location, .city, .address",\n'
+            '        "media_name": ".source, .media, .publisher, '
+            '.site-name",\n'
+            '        "url": "a[href]"\n'
+            '    },\n'
+            '    "schema": {\n'
+            '        "title": "string",\n'
+            '        "text": "string",\n'
+            '        "published_at": "string",\n'
+            '        "region": "string",\n'
+            '        "url": "string",\n'
+            '        "media_name": "string"\n'
+            '    },\n'
+            '    "confidence": 0.85,\n'
+            '    "metadata": {\n'
+            '        "has_pagination": true,\n'
+            '        "pagination_selector": "a.next, .pagination .next, '
+            '.pager-next",\n'
+            '        "items_per_page": 20\n'
+            '    }\n'
+            '}\n\n'
+            '## Правила:\n'
+            '1. Селекторы должны быть максимально специфичными, но '
+            'устойчивыми к изменениям\n'
+            '2. Используй data-атрибуты если они есть (они более стабильны)\n'
+            '3. Для контейнера используй тег + класс (например, '
+            'article.news-item)\n'
+            '4. Для полей используй классы с описательными названиями\n'
+            '5. Если поле не найдено, оставь пустую строку\n'
+            '6. Confidence — уверенность в извлечении (0.0-1.0)\n'
+            '7. Если есть пагинация — укажи селектор для кнопки "далее"'
+        )
+
+    def _build_chunk_prompt(
+        self,
+        chunk: Chunk,
+        competitor: str,
+        expected_fields: list[str],
+    ) -> str:
+        """Строит промпт для анализа одного чанка."""
+        return (
+            'Ты — эксперт по анализу HTML-страниц и извлечению '
+            'структурированных данных.\n\n'
+            '## Задача:\n'
+            'Проанализируй фрагмент HTML-страницы и определи CSS-селекторы '
+            'для извлечения данных.\n\n'
+            '## Входные данные:\n'
+            f'- Конкурент: {competitor}\n'
+            f'- Ожидаемые поля: {expected_fields}\n'
+            f'- Фрагмент HTML (часть {chunk.index}):\n'
+            f'{chunk.content}\n\n'
+            '## Требования:\n'
+            '1. Найди контейнер, который содержит список элементов\n'
+            '2. Для каждого поля определи CSS-селектор\n'
+            '3. Определи схему данных (типы полей)\n\n'
+            '## Ответь ТОЛЬКО в формате JSON:\n'
+            '{\n'
+            '    "selectors": {\n'
+            '        "container": "",\n'
+            '        "title": "",\n'
+            '        "text": "",\n'
+            '        "published_at": "",\n'
+            '        "region": "",\n'
+            '        "media_name": "",\n'
+            '        "url": "a[href]"\n'
+            '    },\n'
+            '    "schema": {},\n'
+            '    "confidence": 0.0,\n'
+            '    "metadata": {}\n'
+            '}\n\n'
+            '## Правила:\n'
+            '1. Извлекай ТОЛЬКО из этого фрагмента\n'
+            '2. Если поле не найдено, оставь пустую строку\n'
+            '3. Confidence — уверенность в извлечении (0.0-1.0)'
+        )
+
+    def _to_adapter_config(
+        self,
+        data: dict[str, Any],
+        expected_fields: list[str],
+    ) -> AdapterConfig:
+        """Формирует AdapterConfig из данных анализа."""
+        selectors = data.get('selectors', {})
+        schema = data.get('schema', {})
+
+        if not isinstance(selectors, dict):
+            selectors = {}
+        if not isinstance(schema, dict):
+            schema = {}
+
+        # Нормализация селекторов: только строковые значения.
+        selectors = {
+            k: (v if isinstance(v, str) else '') for k, v in selectors.items()
+        }
+
+        # Если схема пустая — заполняем из ожидаемых полей.
+        if not schema:
+            schema = dict.fromkeys(expected_fields, 'string')
+
+        # Confidence из данных анализа (0.0-1.0).
+        confidence = data.get('confidence', 0.0)
+        if not isinstance(confidence, int | float):
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, float(confidence)))
+
+        return AdapterConfig(
+            source_name='adaptive',
+            base_url='',
+            expected_schema=schema,
+            selectors=selectors,
+            confidence=confidence,
+            adaptive=True,
+            auto_save=True,
+        )
+
+    def _heuristic_analyze(
+        self,
+        html: str,
+        expected_fields: list[str],
+    ) -> AdapterConfig:
+        """Эвристический fallback-анализ структуры.
+
+        Возвращает схему из ожидаемых полей и пустые селекторы (кроме
+        ``url`` — ``a[href]``), чтобы парсер мог использовать эвристику
+        по ссылкам.
+        """
+        return AdapterConfig(
+            source_name='adaptive',
+            base_url='',
+            expected_schema=dict.fromkeys(expected_fields, 'string'),
+            selectors={'url': 'a[href]'},
+            adaptive=True,
+            auto_save=True,
+        )
+
+    @staticmethod
+    def _parse_json(content: str) -> dict[str, Any]:
+        """Извлекает JSON из ответа LLM (устойчив к markdown-обёртке)."""
+        content = content.strip()
+        if content.startswith('```'):
+            content = content.strip('`')
+            if content.startswith('json'):
+                content = content[4:]
+
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback: извлекаем первый JSON-объект из текста.
+        start = content.find('{')
+        end = content.rfind('}')
+        if start != -1 and end > start:
+            try:
+                return json.loads(content[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+        return {}
+
+
+class AIAgent(_BaseLLMClient):
+    """
+    ИИ-агент принятия решений для адаптивного сбора.
+
+    Использует LLM для:
+    - выбора оптимальной стратегии обхода по классификации источника;
+    - анализа результатов парсинга и корректировки адаптера.
+    """
+
+    def __init__(
+        self,
+        model: str | None = None,
+        logger: logging.Logger | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ):
+        super().__init__(
+            model=model,
+            logger=logger,
+            base_url=base_url,
+            api_key=api_key,
+        )
+
+    async def choose_strategy(
+        self,
+        classification: SourceClassification,
+    ) -> StrategyType:
+        """
+        Выбирает стратегию обхода на основе классификации источника.
+
+        Если LLM не настроен, использует эвристику по классификации.
+        """
+        if not _has_llm_config():
+            return self._heuristic_strategy(classification)
+
+        try:
+            return await self._llm_choose_strategy(classification)
+        except Exception as e:
+            self._logger.warning('Ошибка выбора стратегии агентом: %s', e)
+            return self._heuristic_strategy(classification)
+
+    async def _llm_choose_strategy(
+        self,
+        classification: SourceClassification,
+    ) -> StrategyType:
+        """Выбор стратегии через LLM."""
+        client = self._get_client()
+        prompt = (
+            'Выбери стратегию обхода для источника.\n'
+            f'Классификация: {classification.model_dump_json()}\n'
+            'Доступные стратегии: FAST, CRAWL4AI, BROWSER, WAYBACK, '
+            'STEALTH, HITL\n'
+            'Верни JSON: {"strategy": "..."}'
+        )
+        response = await client.chat.completions.create(
+            model=self._model,
+            messages=[{'role': 'user', 'content': prompt}],
+            temperature=0.0,
+        )
+        content = response.choices[0].message.content
+        data = LLMClient._parse_json(content)
+        strategy = data.get('strategy', '').upper()
+        try:
+            return StrategyType(strategy)
+        except ValueError:
+            return self._heuristic_strategy(classification)
+
+    @staticmethod
+    def _heuristic_strategy(
+        classification: SourceClassification,
+    ) -> StrategyType:
+        """Эвристический выбор стратегии по классификации."""
+        if classification.has_captcha or classification.has_antibot:
+            return StrategyType.STEALTH
+        if classification.is_spa:
+            return StrategyType.BROWSER
+        return StrategyType.FAST
+
+    async def analyze_result(
+        self,
+        html: str,
+        items: list[dict[str, Any]],
+        source_name: str,
+    ) -> dict[str, Any]:
+        """
+        Анализирует результат парсинга и возвращает рекомендации.
+
+        Возвращает словарь с рекомендациями по улучшению адаптера.
+        """
+        if not _has_llm_config():
+            return {'recommendation': 'no_llm', 'confidence': 0.5}
+
+        try:
+            client = self._get_client()
+            prompt = (
+                'Проанализируй результат парсинга.\n'
+                f'Источник: {source_name}\n'
+                f'Количество элементов: {len(items)}\n'
+                f'Примеры: {json.dumps(items[:3], ensure_ascii=False)}\n'
+                'Верни JSON: {"recommendation": "...", "confidence": 0.0}'
+            )
+            response = await client.chat.completions.create(
+                model=self._model,
+                messages=[{'role': 'user', 'content': prompt}],
+                temperature=0.0,
+            )
+            content = response.choices[0].message.content
+            return LLMClient._parse_json(content)
+        except Exception as e:
+            self._logger.warning('Ошибка анализа результата агентом: %s', e)
+            return {'recommendation': 'error', 'confidence': 0.0}

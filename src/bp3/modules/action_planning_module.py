@@ -1,36 +1,44 @@
-from core.enums import PriorityLevel
 from src.bp3.models_llm import BaseModule, ProjectContext
 
 ACTION_RULES = {
     'надзорная санкция и юридический риск': (
-        PriorityLevel.p1,
+        'p1',
         'срок 48 часов',
         'Юристы',
     ),
-    'репутационный риск': (PriorityLevel.p1, 'срок 48 часов', 'PR'),
-    'pr-активность конкурента': (PriorityLevel.p2, 'срок 1 неделя', 'PR'),
+    'репутационный риск': ('p1', 'срок 48 часов', 'PR'),
+    'pr-активность конкурента': ('p2', 'срок 1 неделя', 'PR'),
     'системная проблема (возможность для входа)': (
-        PriorityLevel.p2,
+        'p2',
         'срок 1 неделя',
         'Аналитика',
     ),
     'признание качества и конкурсы': (
-        PriorityLevel.p3,
+        'p3',
         'отслеживать',
         'Маркетинг',
     ),
-    'косвенное упоминание': (PriorityLevel.p3, 'отслеживать', 'Аналитика'),
-    'информационный шум': (PriorityLevel.p4, 'игнорировать', None),
+    'косвенное упоминание': ('p3', 'отслеживать', 'Аналитика'),
+    'информационный шум': ('p4', 'игнорировать', None),
 }
 UNKNOWN_CATEGORY_RULE = (
-    PriorityLevel.p2,
+    'p2',
     'категорию добавить в базу',
     'Аналитика',
 )
 
 
 class ActionPlanningModule(BaseModule):
+    """Правило-based назначение приоритета/срока/отдела по категории события.
+
+    Без LLM — чистый словарь `ACTION_RULES`, категория → (приоритет, срок,
+    отдел). Неизвестная или отсутствующая категория берёт
+    `UNKNOWN_CATEGORY_RULE`.
+    """
+
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Для каждой категоризированной новости заполнить
+        priority/deadline/department."""
         categorized_news = ctx.category_news or []
 
         priority_list = []

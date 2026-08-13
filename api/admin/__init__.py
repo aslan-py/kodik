@@ -51,12 +51,16 @@ _bootstrap_env()
 from fastadmin import fastapi_app as admin_app  # noqa: E402
 
 # Импорт ради побочного эффекта: каждый модуль регистрирует свои ModelAdmin
-# через @register, без этого админка окажется пустой.
+# через @register, без этого админка окажется пустой. Порядок — алфавитный
+# (ruff isort пересортирует любой другой), реальную позицию раздела
+# «Пайплайн» в сайдбаре смотрим по факту (см. design.md изменения
+# add-pipeline-reparse-and-admin-ui, Open Questions).
 from api.admin import (  # noqa: E402, F401
     alerting,
     normalization,
     parsing,
     pipeline,
+    pipeline_control,
     users,
     workflow,
 )

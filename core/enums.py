@@ -89,6 +89,15 @@ class RejectReason(enum.StrEnum):
 # ============================================================================
 
 
+class SourceSearchDepth(enum.StrEnum):
+    """Глубина поиска новых источников во внешнем поисковом API."""
+
+    advanced = 'advanced'
+    basic = 'basic'
+    fast = 'fast'
+    ultra_fast = 'ultra-fast'
+
+
 class PriorityLevel(enum.StrEnum):
     """Приоритет события по четырёхуровневой шкале ТЗ.
 

@@ -136,7 +136,7 @@ ipython_config.py
 __pypackages__/
 
 # Celery stuff
-celerybeat-schedule
+celerybeat-schedule*
 celerybeat.pid
 
 # SageMath parsed files
@@ -210,7 +210,16 @@ next-env.d.ts
 /data/
 src/bp1/data/html_pages/*
 src/bp1/data/raw/*
+src/bp1/data/profiles/*
+
+# ── Тестовые HTML-слепки внешних сайтов (могут содержать ИНН/перс. данные) ──
+src/bp1/collectors/kad_arbitr_rpa/tests_site/html/*
+src/bp1/collectors/kad_arbitr_rpa/tests_data/*
 SPECIFICATION.md
 ai_prompt_adaptive.md
 Правила.md
+vibe/
 src/bp1/data/
+testik
+run_test.py
+.agents

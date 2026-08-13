@@ -1,28 +1,32 @@
-import os
 import time
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
 from tavily import TavilyClient
 
+from core.config import settings
 from src.bp3.models_llm import BaseModule, ProjectContext
 
-load_dotenv()
-
-tavily_api_key = os.getenv('TAVILY_API_KEY')
-if not tavily_api_key:
-    raise ValueError('TAVILY_API_KEY не задан')
-
-client = TavilyClient(api_key=tavily_api_key)
+client = TavilyClient(api_key=settings.tavily_api_key)
 
 
 class SourceFinderModule(BaseModule):
+    """Ищет новые домены-источники по КАЖДОМУ конкуренту через Tavily.
+
+    Не зависит от текущей пачки новостей (`ctx.news`) — перебирает всех
+    конкурентов из справочника (`ctx.competitors`), независимо от того,
+    сколько новостей обработано в этом прогоне. Найденные домены попадают
+    в `ctx.domains_to_add` (`{competitor_id: {'sources': [...]}}`) —
+    дальше `SaveResultsModule` кладёт их в `source_candidate` (BP-7).
+    """
+
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """На каждого конкурента — один поиск Tavily, исключая уже
+        известные домены (`ctx.domains`); сбой по одному конкуренту не
+        прерывает остальных."""
         exclude_domains = ctx.domains or []
         companies = ctx.competitors or []
 
-        company_sources: dict[int, list[dict]] = {}
-        all_urls = []
+        company_data = {}
 
         for comp in companies:
             company_id, name = next(iter(comp.items()))
@@ -33,41 +37,40 @@ class SourceFinderModule(BaseModule):
                 response = client.search(
                     query=f'Найди новые источники новостей о компании {name}',
                     topic='news',
-                    max_results=10,
-                    search_depth='basic',
-                    time_range='week',
+                    max_results=settings.bp3_search_max_results,
+                    search_depth=settings.bp3_search_depth.value,
+                    time_range=settings.bp3_search_time_range,
                     exclude_domains=exclude_domains,
                     include_answer=False,
                     include_raw_content=False,
                 )
                 results = response.get('results', [])
-                sources = [
-                    {'url': item['url'], 'score': item.get('score')}
-                    for item in results
-                ]
-                company_sources[company_id] = sources
+                sources = []
+                for item in results:
+                    url = item['url']
+                    score = item.get('score')
 
-                for src in sources:
-                    all_urls.append(src['url'])
+                    parsed = urlparse(url)
+                    host = parsed.netloc.lower()
+                    if host.startswith('www.'):
+                        host = host[4:]
+                    sources.append(
+                        {
+                            'url': url,
+                            'score': score,
+                            'domain': host,
+                        }
+                    )
+
+                company_data[company_id] = {
+                    'sources': sources,
+                }
 
             except Exception as e:
                 print(f'Ошибка при поиске для {name} (ID={company_id}): {e}')
-                company_sources[company_id] = []
+                company_data[company_id] = {'sources': []}
 
             time.sleep(1)
 
-        ctx.company_sources = company_sources
-        #        if all_urls:
-        #            ctx.urls = list(set(all_urls))
-        domains = []
-        for url in all_urls:
-            parsed = urlparse(url)
-            host = parsed.netloc.lower()
-            if host.startswith('www.'):
-                host = host[4:]
-            domains.append(host)
-
-        domains_to_add = list(set(domains))
-        ctx.domains_to_add = domains_to_add
-
+        ctx.domains_to_add = company_data
         return ctx

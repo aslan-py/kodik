@@ -3,7 +3,9 @@
 Методы (по потоку конвейера):
     select_pending_events   → события витрины под проверку детектором
     load_event_types        → активные типы + ключевые слова (для detect)
-    load_routing_rules      → активные правила по (тип, приоритет)
+    load_routing_rules      → активные правила, двумя группами: по (тип,
+                                приоритет) и по одному приоритету
+                                (`RoutingRuleGroups`)
     load_channels             → справочник channel_id -> name (доставка)
     load_users                → справочник user_id -> User (контакты)
     insert_alerts            → запись пачки alert (ON CONFLICT DO NOTHING),
@@ -16,6 +18,7 @@
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy import RowMapping, or_, select
@@ -25,6 +28,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.enums import AlertStatus, PriorityLevel
 from src.bp4.models import ShowcaseEvent
 from src.bp5.models import Alert, Channel, EventType, RoutingRule, User
+
+
+@dataclass
+class RoutingRuleGroups:
+    """Активные правила маршрутизации, сгруппированные для детектора.
+
+    Два независимых словаря — правило с указанным типом события ищется
+    только в `by_type`, правило без типа (срабатывает на любой тип нужного
+    приоритета) — только в `by_priority`. Раздельные ключи вместо одного
+    прохода с `event_type_id IS NULL OR event_type_id = ...` — тот же выбор,
+    что и раньше: справочники грузятся один раз на прогон, без запроса на
+    каждое событие (см. openspec/changes/add-priority-only-routing/design.md,
+    Decisions).
+    """
+
+    by_type: dict[tuple[int, PriorityLevel], list[RoutingRule]] = field(
+        default_factory=dict
+    )
+    by_priority: dict[PriorityLevel, list[RoutingRule]] = field(
+        default_factory=dict
+    )
 
 
 class Bp5Crud:
@@ -66,24 +90,25 @@ class Bp5Crud:
         )
         return result.scalars().all()
 
-    async def load_routing_rules(
-        self,
-    ) -> dict[tuple[int, PriorityLevel], list[RoutingRule]]:
-        """Активные правила, сгруппированные по (event_type_id, priority).
-
-        Такая группировка — прямое попадание в то, как их использует
-        детектор: нашёл тип и приоритет события → взял готовый список
-        правил без отдельного запроса на каждое событие.
+    async def load_routing_rules(self) -> RoutingRuleGroups:
+        """Активные правила, сгруппированные для детектора — см.
+        `RoutingRuleGroups`. Правило с `event_type_id` попадает в `by_type`
+        по ключу (тип, приоритет); правило без типа — в `by_priority` по
+        ключу приоритет. Один запрос на весь прогон, без обращения к БД
+        на каждое событие.
         """
         result = await self.session.execute(
             select(RoutingRule).where(RoutingRule.is_active)
         )
-        grouped: dict[tuple[int, PriorityLevel], list[RoutingRule]] = {}
+        groups = RoutingRuleGroups()
         for rule in result.scalars():
-            grouped.setdefault((rule.event_type_id, rule.priority), []).append(
-                rule
-            )
-        return grouped
+            if rule.event_type_id is not None:
+                groups.by_type.setdefault(
+                    (rule.event_type_id, rule.priority), []
+                ).append(rule)
+            else:
+                groups.by_priority.setdefault(rule.priority, []).append(rule)
+        return groups
 
     async def load_channels(self) -> dict[int, str]:
         """Справочник channel_id -> name. Нет relationship к Channel в

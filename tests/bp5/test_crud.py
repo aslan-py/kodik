@@ -19,6 +19,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from core.config import settings
 from core.enums import (
@@ -205,6 +206,22 @@ async def routing_rule(session, event_type, user, channel):
     return rule
 
 
+@pytest.fixture
+async def routing_rule_by_priority(session, user, channel):
+    """Правило БЕЗ типа события — срабатывает на любое событие П1,
+    независимо от заголовка (add-priority-only-routing)."""
+    rule = RoutingRule(
+        event_type_id=None,
+        priority=PriorityLevel.p1,
+        user_id=user.id,
+        channel_id=channel.id,
+        mode=DeliveryMode.instant,
+    )
+    session.add(rule)
+    await session.flush()
+    return rule
+
+
 async def make_showcase(
     session,
     raw_item,
@@ -342,10 +359,23 @@ async def test_load_routing_rules_grouped_by_type_and_priority(
     session, routing_rule
 ):
     crud = Bp5Crud(session)
-    grouped = await crud.load_routing_rules()
+    groups = await crud.load_routing_rules()
     key = (routing_rule.event_type_id, routing_rule.priority)
-    assert key in grouped
-    assert routing_rule.id in [r.id for r in grouped[key]]
+    assert key in groups.by_type
+    assert routing_rule.id in [r.id for r in groups.by_type[key]]
+    assert groups.by_priority == {}
+
+
+async def test_load_routing_rules_groups_rule_without_type_by_priority(
+    session, routing_rule_by_priority
+):
+    crud = Bp5Crud(session)
+    groups = await crud.load_routing_rules()
+    assert routing_rule_by_priority.priority in groups.by_priority
+    assert routing_rule_by_priority.id in [
+        r.id for r in groups.by_priority[routing_rule_by_priority.priority]
+    ]
+    assert groups.by_type == {}
 
 
 # ============================================================================
@@ -632,6 +662,204 @@ async def test_sync_alerts_is_idempotent(
     await session.flush()
     assert second['pending'] == 0
     assert second['alerts'] == 0
+
+
+async def test_no_match_marks_checked_and_not_repicked(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    routing_rule,
+):
+    """Ни тип, ни правило по приоритету не подошли — событие помечается
+    проверенным и повторный прогон его не поднимает (openspec/changes/
+    add-priority-only-routing, spec.md: 'Событие без распознанного типа
+    при отсутствии правил по приоритету')."""
+    sc = await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title='Обычная новость без триггеров',
+    )
+    first = await sync_alerts(session)
+    await session.flush()
+    assert first['alerts'] == 0
+
+    crud = Bp5Crud(session)
+    pending = await crud.select_pending_events()
+    assert sc.id not in [e.id for e in pending]
+
+
+# ============================================================================
+#  sync_alerts — правила по приоритету (add-priority-only-routing)
+# ============================================================================
+
+
+async def test_priority_only_rule_matches_unrecognized_title(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    routing_rule_by_priority,
+    mock_send_email,
+):
+    """Заголовок не содержит ключевых слов ни одного типа, но правило по
+    приоритету заведено — алерт всё равно создаётся, тип в журнале пуст."""
+    sc = await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title='Заголовок без единого ключевого слова из справочника',
+    )
+    summary = await sync_alerts(session)
+    await session.flush()
+
+    assert summary['matched'] == 0
+    assert summary['alerts'] == 1
+    alert = await session.scalar(
+        select(Alert).where(Alert.showcase_event_id == sc.id)
+    )
+    assert alert is not None
+    assert alert.event_type_id is None
+    assert alert.status == AlertStatus.sent
+    mock_send_email.assert_awaited_once()
+
+
+async def test_typed_and_priority_rule_overlap_single_delivery(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    routing_rule,
+    mock_send_email,
+):
+    """Типовое правило и правило по приоритету с ТЕМ ЖЕ получателем и
+    каналом — ровно одна доставка, в журнале запись с типом (типовое
+    правило точнее объясняет срабатывание, см. pipeline.py::
+    merge_rule_overlap)."""
+    session.add(
+        RoutingRule(
+            event_type_id=None,
+            priority=PriorityLevel.p1,
+            user_id=routing_rule.user_id,
+            channel_id=routing_rule.channel_id,
+            mode=DeliveryMode.instant,
+        )
+    )
+    await session.flush()
+
+    sc = await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title=f'Новость про {event_type.keywords[0]}',
+    )
+    summary = await sync_alerts(session)
+    await session.flush()
+
+    assert summary['alerts'] == 1
+    alert = await session.scalar(
+        select(Alert).where(Alert.showcase_event_id == sc.id)
+    )
+    assert alert.event_type_id == event_type.id
+    mock_send_email.assert_awaited_once()
+
+
+async def test_typed_and_priority_rule_different_recipients_both_alert(
+    session,
+    raw_item,
+    competitor,
+    category,
+    department,
+    event_type,
+    routing_rule,
+    channel_telegram,
+    mock_send_email,
+    mock_send_telegram,
+):
+    """Наложение с РАЗНЫМИ получателями (typo и по приоритету) — по алерту
+    на каждого, ничего не схлопывается."""
+    other_user = User(
+        full_name='Второй Получатель',
+        department_id=department.id,
+        email=f'{uuid4().hex[:8]}@test.ru',
+        telegram_id=uuid4().int % 1_000_000_000,
+        password_hash='test-hash',
+    )
+    session.add(other_user)
+    await session.flush()
+    session.add(
+        RoutingRule(
+            event_type_id=None,
+            priority=PriorityLevel.p1,
+            user_id=other_user.id,
+            channel_id=channel_telegram.id,
+            mode=DeliveryMode.instant,
+        )
+    )
+    await session.flush()
+
+    sc = await make_showcase(
+        session,
+        raw_item,
+        competitor,
+        category,
+        department,
+        title=f'Новость про {event_type.keywords[0]}',
+    )
+    summary = await sync_alerts(session)
+    await session.flush()
+
+    assert summary['alerts'] == 2
+    alerts = (
+        (
+            await session.execute(
+                select(Alert).where(Alert.showcase_event_id == sc.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {a.user_id for a in alerts} == {routing_rule.user_id, other_user.id}
+
+
+async def test_duplicate_priority_only_rule_rejected(session, user, channel):
+    """Два правила БЕЗ типа с тем же (приоритет, канал, получатель) —
+    частичный уникальный индекс uq_routing_rule_no_type_priority_channel_user
+    отвергает дубль (обычный UNIQUE его бы не поймал: NULL != NULL)."""
+    session.add(
+        RoutingRule(
+            event_type_id=None,
+            priority=PriorityLevel.p1,
+            user_id=user.id,
+            channel_id=channel.id,
+            mode=DeliveryMode.instant,
+        )
+    )
+    await session.flush()
+
+    session.add(
+        RoutingRule(
+            event_type_id=None,
+            priority=PriorityLevel.p1,
+            user_id=user.id,
+            channel_id=channel.id,
+            mode=DeliveryMode.digest,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await session.flush()
 
 
 # ============================================================================

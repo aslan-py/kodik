@@ -7,6 +7,7 @@
 env.py трогать не нужно.
 """
 
+import core.pipeline  # noqa: F401 — PipelineControlMarker
 import src.bp1  # Trigger, Competitor, Source, SearchTask, RawItem
 import src.bp2  # Region, BlackDomain, StopWord, TopicLimit, NormalizedItem
 import src.bp3  # Category, Department, CategorizedEvent

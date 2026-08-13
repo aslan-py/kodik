@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from src.bp3.models_llm import CommentActionResponse, LLMModule, ProjectContext
+from src.bp3.utils import clear_p4_comments_actions
 
 PROMPT_PATH = (
     Path(__file__).parent.parent / 'prompts' / 'comment_action_prompt.txt'
@@ -9,11 +10,21 @@ PROMPT_PATH = (
 
 
 class CommentActionModule(LLMModule):
+    """LLM-шаг: комментарий и рекомендация по действию для каждой новости.
+
+    Использует уже собранные категорию/приоритет/срок/отдел/тональность как
+    контекст промпта.
+    """
+
     def __init__(self, llm):
+        """Обернуть LLM в structured output по схеме `CommentActionResponse`."""
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(CommentActionResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Собрать контекст по каждой новости и одним вызовом LLM получить
+        комментарий+действие на всю пачку; при сбое LLM — заглушка вместо
+        падения пайплайна."""
         categorized_news = ctx.category_news or []
         if not categorized_news:
             ctx.comments = []
@@ -80,4 +91,8 @@ class CommentActionModule(LLMModule):
                 {'id': item.get('id'), 'actions': 'Требуется ручной анализ'}
                 for item in categorized_news
             ]
+            pass
+
+        clear_p4_comments_actions(ctx.comments, ctx.actions, priority_dict)
+
         return ctx

@@ -13,6 +13,7 @@ from src.bp5.pipeline import (
     build_email_content,
     build_telegram_content,
     detect_event_type,
+    merge_rule_overlap,
 )
 
 
@@ -121,6 +122,49 @@ def test_showcase_event_id_and_type_id_carried_over():
     )
     assert rows[0]['showcase_event_id'] == 42
     assert rows[0]['event_type_id'] == 7
+
+
+def test_unmatched_type_gives_empty_event_type_in_rows():
+    """matched_type_id=None (правило по приоритету, тип не распознан) —
+    строка алерта пишется без типа, а не с подставленным значением."""
+    rows = build_alert_rows(
+        make_event(),
+        matched_type_id=None,
+        rules=[rule(10, 1, DeliveryMode.instant)],
+    )
+    assert rows[0]['event_type_id'] is None
+
+
+# --- merge_rule_overlap ---
+
+
+def test_merge_keeps_both_when_no_overlap():
+    typed = [rule(10, 1, DeliveryMode.instant)]
+    by_priority = [rule(11, 2, DeliveryMode.digest)]
+    merged = merge_rule_overlap(typed, by_priority)
+    assert {(r.user_id, r.channel_id) for r in merged} == {(10, 1), (11, 2)}
+
+
+def test_merge_drops_priority_rule_duplicate_of_typed():
+    """Тот же (user_id, channel_id) в обоих списках — остаётся типовое."""
+    typed_rule = rule(10, 1, DeliveryMode.instant)
+    priority_rule = rule(10, 1, DeliveryMode.digest)
+    merged = merge_rule_overlap([typed_rule], [priority_rule])
+    assert merged == [typed_rule]
+
+
+def test_merge_empty_typed_returns_priority_rules_as_is():
+    priority_rules = [rule(10, 1, DeliveryMode.instant)]
+    assert merge_rule_overlap([], priority_rules) == priority_rules
+
+
+def test_merge_empty_priority_returns_typed_as_is():
+    typed_rules = [rule(10, 1, DeliveryMode.instant)]
+    assert merge_rule_overlap(typed_rules, []) == typed_rules
+
+
+def test_merge_both_empty_returns_empty():
+    assert merge_rule_overlap([], []) == []
 
 
 # --- build_email_content ---

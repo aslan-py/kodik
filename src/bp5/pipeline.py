@@ -2,14 +2,17 @@
 
 Берёт новые/изменившиеся строки showcase_event, ищет среди них значимые
 события по ключевым словам (event_type), маршрутизирует по матрице
-(routing_rule: тип + приоритет → конкретный получатель + канал + режим)
-и пишет журнал доставок (alert).
+(routing_rule: (тип + приоритет) ИЛИ приоритет → конкретный получатель +
+канал + режим) и пишет журнал доставок (alert).
 
 Порядок шагов:
 
   1. отобрать события под проверку — select_pending_events (crud)
-  2. найти совпавший тип по keywords — detect_event_type
-  3. найти правила для (тип, приоритет) — load_routing_rules (crud)
+  2. найти совпавший тип по keywords — detect_event_type (может не найтись —
+     это больше не повод пропустить событие, см. ниже)
+  3. найти подходящие правила — load_routing_rules (crud): по (тип,
+     приоритет), если тип распознан, ПЛЮС по одному приоритету; наложение
+     схлопывается — см. _merge_rule_overlap
   4. собрать строки alert — build_alert_rows
   5. записать пачкой (ON CONFLICT DO NOTHING) — insert_alerts (crud)
   5.5. доставить instant+(email|telegram) из РЕАЛЬНО вставленных строк —
@@ -18,9 +21,22 @@
   6. пометить все проверенные — mark_checked (crud), НЕЗАВИСИМО от результата
 
 Порог значимости — не хардкод «только П1/П2»: значим тот, для кого в
-routing_rule нашлась строка на пару (тип, приоритет). Правило «расширение»
-осознанно заведено на П3 — подтверждает, что порог живёт в справочнике,
-а не в коде (см. src/bp5/BP5_README.md).
+routing_rule нашлась строка. Правило «расширение» осознанно заведено на
+П3 — подтверждает, что порог живёт в справочнике, а не в коде (см.
+src/bp5/BP5_README.md). Правило БЕЗ типа события (`event_type_id IS NULL`)
+срабатывает на любое событие нужного приоритета независимо от заголовка —
+выражает базовое требование ТЗ «слать все события приоритета П1», которое
+через ключевые слова не выразить (см.
+openspec/changes/add-priority-only-routing). Событие, для которого тип НЕ
+распознан, больше не отбрасывается сразу: оно всё равно проверяется на
+правила по приоритету — алерт может создаться и без распознанного типа.
+
+Счётчик `matched` в сводке прогона — по-прежнему число событий, для которых
+detect_event_type нашёл тип (как и до этого изменения). Он НЕ означает
+«создан алерт»: событие может matched=True и не дать алерта (нет правила ни
+по типу, ни по приоритету), и наоборот — matched=False, но алерт создастся
+по правилу без типа. Это два независимых сигнала: «распознан тип» и
+«отправлен алерт» (последний — в `alerts`).
 
 Доставка: email/telegram + instant отправляются по-настоящему через
 core.mail/core.telegram — пойманное исключение переводит alert в failed
@@ -89,14 +105,21 @@ def detect_event_type(
 
 def build_alert_rows(
     event: ShowcaseEvent,
-    matched_type_id: int,
+    matched_type_id: int | None,
     rules: Sequence[RoutingRule],
 ) -> list[dict]:
-    """Правила для (тип, приоритет) → строки под запись в alert.
+    """Подошедшие правила → строки под запись в alert.
 
     Одна строка правила — одна строка алерта: несколько получателей и/или
-    каналов на пару (тип, приоритет) дают несколько строк alert, это и
-    есть множественная доставка одного события (ТЗ п. BP-5).
+    каналов на одно событие дают несколько строк alert, это и есть
+    множественная доставка одного события (ТЗ п. BP-5).
+
+    matched_type_id пишется в КАЖДУЮ строку как есть, независимо от того,
+    какое конкретно правило её породило (с типом или по приоритету): если
+    тип распознан — это полезная информация в журнале в любом случае; если
+    не распознан (None) — запись честно остаётся без типа, а не с
+    подставленным значением (см. design.md изменения
+    add-priority-only-routing, Decisions).
 
     priority снимаем с САМОГО события (не с правила): это «приоритет на
     момент алерта», а правило меняется независимо от факта.
@@ -118,6 +141,29 @@ def build_alert_rows(
         }
         for rule in rules
     ]
+
+
+def merge_rule_overlap(
+    typed_rules: Sequence[RoutingRule],
+    priority_rules: Sequence[RoutingRule],
+) -> list[RoutingRule]:
+    """Схлопнуть наложение правила по типу и правила по приоритету.
+
+    Если на одно событие сработали и правило с указанным типом, и правило
+    без типа с тем же получателем и каналом — остаётся только типовое: оно
+    точнее объясняет, почему сработал алерт. Полагаться на UNIQUE(событие,
+    канал, получатель) в самом alert нельзя — какая из двух строк уцелеет,
+    определялось бы порядком вставки в пачке, а от этого зависит тип,
+    записанный в журнал (см. design.md изменения add-priority-only-routing,
+    Decisions).
+    """
+    typed_pairs = {(rule.user_id, rule.channel_id) for rule in typed_rules}
+    extra = [
+        rule
+        for rule in priority_rules
+        if (rule.user_id, rule.channel_id) not in typed_pairs
+    ]
+    return [*typed_rules, *extra]
 
 
 # ============================================================================
@@ -192,15 +238,23 @@ async def sync_alerts(session: AsyncSession, *, deliver: bool = True) -> dict:
     for event in pending:
         checked_ids.append(event.id)
 
-        # Шаг 2 — найти совпавший тип по keywords
+        # Шаг 2 — найти совпавший тип по keywords. Не найден — событие
+        # больше НЕ отбрасывается здесь: оно всё ещё может подойти под
+        # правило по приоритету (шаг 3).
         matched_type_id = detect_event_type(event.title, event_types)
-        if matched_type_id is None:
-            continue
-        matched += 1
+        if matched_type_id is not None:
+            matched += 1
 
-        # Шаг 3 — найти правила для (тип, приоритет)
+        # Шаг 3 — найти подходящие правила: по (тип, приоритет), если тип
+        # распознан, плюс по одному приоритету; наложение схлопывается.
         priority = PRIORITY_FROM_DISPLAY[event.priority]
-        rules = routing_rules.get((matched_type_id, priority), [])
+        typed_rules = (
+            routing_rules.by_type.get((matched_type_id, priority), [])
+            if matched_type_id is not None
+            else []
+        )
+        priority_rules = routing_rules.by_priority.get(priority, [])
+        rules = merge_rule_overlap(typed_rules, priority_rules)
         if not rules:
             continue
 

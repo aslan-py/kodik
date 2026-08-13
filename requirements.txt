@@ -31,18 +31,29 @@ aiogram>=3.0,<4.0         # отправка telegram-алертов (BP-5)
 # ===== Server =====
 uvicorn>=0.24,<1.0        # ASGI-сервер для FastAPI
 
+# ===== HTTP / HTTP-клиент =====
+httpx>=0.27,<1.0          # HTTP-клиент (AI-ассистент BP-6: ai_assistant.py)
+
 # ===== Cache & Message Broker =====
 redis>=5.0,<6.0           # клиент Redis (синхронный, для Celery)
 
 # ===== Task Queue =====
 celery>=5.3,<6.0          # распределённая очередь задач
+flower>=2.0,<3.0          # веб-панель мониторинга Celery воркеров/задач
 
 # ===== Browser Automation =====
 # ВНИМАНИЕ: pip ставит только библиотеку. Сами браузеры (бинарники ~150 МБ)
 # качаются отдельной командой, положить их в requirements нельзя:
-#     python -m playwright install chromium
+#     python -m playwright install
 # Без неё RPA-сборщики и src/run_pipeline.py падают при старте браузера.
 playwright>=1.40,<2.0     # браузерная автоматизация (RPA-сборщики)
+
+# ===== HTML Parsing =====
+beautifulsoup4>=4.12,<5.0 # парсинг HTML (BP-1 Adaptive: classifier/parser/llm)
+
+# ===== LLM & AI-краулинг (BP-1 Adaptive) =====
+openai>=1.0.0             # OpenAI SDK (llm.py: AsyncOpenAI)
+crawl4ai>=0.4.0           # AI-краулинг (engines.py: Crawl4AIStrategy)
 
 # ===== File I/O =====
 aiofiles>=23.0,<26.0      # асинхронная работа с файлами

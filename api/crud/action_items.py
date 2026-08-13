@@ -6,6 +6,7 @@ api/service/action_items.py) — здесь только запросы и flush
 """
 
 from collections.abc import Sequence
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +35,8 @@ class ActionItemCRUD:
         task: str | None = None,
         assigned_user_id: int | None = None,
         showcase_event_id: int | None = None,
+        deadline: date | None = None,
+        priority: str | None = None,
     ) -> Sequence[ActionItem]:
         """Список задач с опциональными фильтрами (все — AND).
 
@@ -52,6 +55,13 @@ class ActionItemCRUD:
             stmt = stmt.where(ActionItem.assigned_user_id == assigned_user_id)
         if showcase_event_id is not None:
             stmt = stmt.where(ActionItem.showcase_event_id == showcase_event_id)
+        if deadline is not None:
+            stmt = stmt.where(ActionItem.deadline == deadline)
+        if priority is not None:
+            stmt = stmt.join(
+                ShowcaseEvent,
+                ActionItem.showcase_event_id == ShowcaseEvent.id,
+            ).where(ShowcaseEvent.priority == priority)
         result = await self.session.execute(stmt)
         return result.scalars().all()
 

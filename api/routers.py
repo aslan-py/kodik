@@ -19,6 +19,7 @@ from api.endpoints import (
     competitor_router,
     department_router,
     event_type_router,
+    filter_options_router,
     normalized_item_router,
     raw_item_router,
     region_router,
@@ -42,6 +43,9 @@ main_router.include_router(
 )
 main_router.include_router(
     action_items_router, prefix='/action-items', tags=['План действий']
+)
+main_router.include_router(
+    filter_options_router, prefix='/filter-options', tags=['Варианты фильтров']
 )
 
 # --- Администрирование (парсинг, BP-1) ---

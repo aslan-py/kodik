@@ -256,6 +256,42 @@ class TestActionItemCRUD:
 
         assert {i.showcase_event_id for i in items} == {event_b.id}
 
+    async def test_list_all_filters_by_deadline_and_priority(self, session):
+        department = await make_department(session)
+        event_a = await make_showcase_event(session, title='A')
+        event_b = await make_showcase_event(session, title='B')
+        event_b.priority = 'П2'
+        crud = ActionItemCRUD(session)
+        item_a = await crud.create(
+            ActionItemCreate(
+                showcase_event_id=event_a.id,
+                task='A',
+                department_id=department.id,
+                deadline=date(2026, 8, 13),
+            )
+        )
+        await crud.create(
+            ActionItemCreate(
+                showcase_event_id=event_b.id,
+                task='B',
+                department_id=department.id,
+                deadline=date(2026, 8, 14),
+            )
+        )
+
+        by_deadline = await crud.list_all(deadline=date(2026, 8, 13))
+        by_priority = await crud.list_all(priority='П1')
+        combined = await crud.list_all(
+            department_id=department.id,
+            status=ActionStatus.open,
+            deadline=date(2026, 8, 13),
+            priority='П1',
+        )
+
+        assert {item.id for item in by_deadline} == {item_a.id}
+        assert {item.id for item in by_priority} == {item_a.id}
+        assert {item.id for item in combined} == {item_a.id}
+
     async def test_update_changes_fields(self, session):
         department = await make_department(session)
         event = await make_showcase_event(session)
@@ -274,6 +310,42 @@ class TestActionItemCRUD:
 
 
 class TestListItems:
+    async def test_new_filters_keep_forced_viewer_department(self, session):
+        own_department = await make_department(session)
+        other_department = await make_department(session)
+        viewer = await make_user(
+            session, role=UserRole.viewer, department_id=own_department.id
+        )
+        own_event = await make_showcase_event(session, title='Own filtered')
+        other_event = await make_showcase_event(session, title='Other filtered')
+        crud = ActionItemCRUD(session)
+        own_item = await crud.create(
+            ActionItemCreate(
+                showcase_event_id=own_event.id,
+                task='Own',
+                department_id=own_department.id,
+                deadline=date(2026, 8, 13),
+            )
+        )
+        await crud.create(
+            ActionItemCreate(
+                showcase_event_id=other_event.id,
+                task='Other',
+                department_id=other_department.id,
+                deadline=date(2026, 8, 13),
+            )
+        )
+
+        items = await ActionItemService(session).list_items(
+            viewer,
+            department_id=other_department.id,
+            status_filter=ActionStatus.open,
+            deadline=date(2026, 8, 13),
+            priority='П1',
+        )
+
+        assert {item.id for item in items} == {own_item.id}
+
     async def test_viewer_sees_only_own_department(self, session):
         own_department = await make_department(session)
         other_department = await make_department(session)

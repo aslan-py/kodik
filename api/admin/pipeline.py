@@ -1,4 +1,4 @@
-"""Раздел «Данные конвейера» — только просмотр (BP-1, BP-2, BP-3, BP-5, BP-7).
+"""Раздел «Финальные таблицы» — данные BP-1—BP-7 по порядку этапов.
 
 Слои данных, которые пишет сам конвейер. Правка руками здесь запрещена
 (`ReadOnlyModelAdmin`), причины по таблицам:
@@ -18,7 +18,7 @@
 
 from fastadmin import register
 
-from api.admin.base import MENU_PIPELINE, ReadOnlyModelAdmin
+from api.admin.base import MENU_FINAL_TABLES, ReadOnlyModelAdmin
 from core.database import AsyncSessionLocal
 from src.bp1.models import RawItem
 from src.bp2.models import NormalizedItem
@@ -29,7 +29,7 @@ from src.bp7.models import SourceCandidate
 
 @register(RawItem, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class RawItemAdmin(ReadOnlyModelAdmin):
-    menu_section = MENU_PIPELINE
+    menu_section = MENU_FINAL_TABLES
     verbose_name = 'Сырьё парсинга'
     verbose_name_plural = 'Сырьё (BP-1)'
 
@@ -63,7 +63,7 @@ class RawItemAdmin(ReadOnlyModelAdmin):
 
 @register(NormalizedItem, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class NormalizedItemAdmin(ReadOnlyModelAdmin):
-    menu_section = MENU_PIPELINE
+    menu_section = MENU_FINAL_TABLES
     verbose_name = 'Нормализованное событие'
     verbose_name_plural = 'Нормализация (BP-2)'
 
@@ -111,7 +111,7 @@ class NormalizedItemAdmin(ReadOnlyModelAdmin):
 
 @register(CategorizedEvent, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class CategorizedEventAdmin(ReadOnlyModelAdmin):
-    menu_section = MENU_PIPELINE
+    menu_section = MENU_FINAL_TABLES
     verbose_name = 'Размеченное событие'
     verbose_name_plural = 'Разметка LLM (BP-3)'
 
@@ -159,7 +159,7 @@ class CategorizedEventAdmin(ReadOnlyModelAdmin):
 
 @register(Alert, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class AlertAdmin(ReadOnlyModelAdmin):
-    menu_section = MENU_PIPELINE
+    menu_section = MENU_FINAL_TABLES
     verbose_name = 'Уведомление'
     verbose_name_plural = 'Уведомления (BP-5)'
 
@@ -209,7 +209,7 @@ class AlertAdmin(ReadOnlyModelAdmin):
 
 @register(SourceCandidate, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class SourceCandidateAdmin(ReadOnlyModelAdmin):
-    menu_section = MENU_PIPELINE
+    menu_section = MENU_FINAL_TABLES
     verbose_name = 'Кандидат в источники'
     verbose_name_plural = 'Кандидаты (BP-7)'
 

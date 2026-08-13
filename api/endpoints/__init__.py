@@ -8,6 +8,7 @@ from api.endpoints.channel import router as channel_router
 from api.endpoints.competitor import router as competitor_router
 from api.endpoints.department import router as department_router
 from api.endpoints.event_type import router as event_type_router
+from api.endpoints.filter_options import router as filter_options_router
 from api.endpoints.normalized_item import router as normalized_item_router
 from api.endpoints.raw_item import router as raw_item_router
 from api.endpoints.region import router as region_router
@@ -32,6 +33,7 @@ __all__ = [
     'competitor_router',
     'department_router',
     'event_type_router',
+    'filter_options_router',
     'normalized_item_router',
     'raw_item_router',
     'region_router',

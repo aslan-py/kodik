@@ -146,8 +146,8 @@ services:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
     command: >
-      sh -c 'test -n "$$FLOWER_BASIC_AUTH" ||
-      (echo "FLOWER_BASIC_AUTH is required" && exit 1);
+      sh -c 'test -n "$$FLOWER_BASIC_AUTH" || {
+      echo "FLOWER_BASIC_AUTH is required"; exit 1; };
       celery -A core.celery_app:app flower --port=5555
       --basic_auth="$$FLOWER_BASIC_AUTH"'
     ports:

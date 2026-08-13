@@ -1,20 +1,38 @@
 "use client";
 
 import { Button } from "@/components/ui/Button";
-import { Checkbox } from "@/components/ui/Checkbox/Checkbox";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/hooks/useAuth";
 import { ResetPassword } from "@/components/auth/ResetPassword";
 import { useState } from "react";
+import Link from "next/link";
+import { ToastViewport } from "../ui/Notification/toast";
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function LoginForm() {
-  const [email, setEmail] = useState("admin@example.com");
+  const [email, setEmail] = useState("admin123@example.com");
   const [password, setPassword] = useState("12345Admin");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showReset, setShowReset] = useState(false);
+  const [touched, setTouched] = useState<{ email: boolean; password: boolean }>({
+    email: false,
+    password: false,
+  });
 
   const { login } = useAuth();
+
+  const emailError = email && !EMAIL_REGEX.test(email) ? "Введите корректный email" : "";
+  const passwordError =
+    password && password.length < 8
+      ? "Пароль должен быть не меньше 8 символов"
+      : password && !/[A-ZА-ЯЁ]/.test(password)
+        ? "Пароль должен содержать заглавную букву"
+        : "";
+  const showEmailError = touched.email ? (emailError ? emailError : "") : "";
+  const showPasswordError = touched.password ? (passwordError ? passwordError : "") : "";
+  const isValid = !emailError && !passwordError && !!email && !!password;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,7 +54,7 @@ export default function LoginForm() {
   return (
     <div className="w-full max-w-110">
       <p className="text-3xl font-semibold mb-6">Вход в рабочее пространство</p>
-      <span>{error}</span>
+      <ToastViewport />
       <form autoComplete="off" className="" onSubmit={handleSubmit}>
         <Input
           id="emailLogin"
@@ -45,7 +63,8 @@ export default function LoginForm() {
           value={email}
           placeholder="you@company.com"
           onChange={setEmail}
-          error=""
+          error={showEmailError}
+          inputProps={{ onBlur: () => setTouched((t) => ({ ...t, email: true })) }}
           className="mb-6"
         />
         <Input
@@ -55,10 +74,11 @@ export default function LoginForm() {
           label="Пароль"
           placeholder="Введите пароль"
           onChange={setPassword}
-          error=""
+          error={showPasswordError}
+          inputProps={{ onBlur: () => setTouched((t) => ({ ...t, password: true })) }}
           className="mb-6"
         />
-        <div className="flex justify-between items-center mb-6">
+        <div className="flex justify-end items-center mb-6">
           {/* <Checkbox
             id="agree"
             checked={agree}
@@ -79,6 +99,7 @@ export default function LoginForm() {
         </div>
         <Button
           loading={loading}
+          disabled={!isValid}
           className="btn inline h-9 text-sm font-medium"
           fullWidth
           variant="primary"
@@ -86,24 +107,16 @@ export default function LoginForm() {
         >
           Войти
         </Button>
-      </form>
-      {/* <Modal isOpen={success} onClose={() => setSuccess(false)}>
-        <div className="m-auto max-w-100 rounded-xl bg-white p-8 text-center shadow-lg">
-          <p className="text-lg font-medium text-(--color-ink)">
-            Регистрация прошла успешно, обратитесь к администратору для доступа
-            к сервису
-          </p>
-          <Button
-            className="btn mt-6 h-9 text-sm font-medium"
-            fullWidth
-            variant="primary"
-            onClick={() => setSuccess(false)}
-          >
-            Ок
-          </Button>
+        <div className="text-[13px] mt-6 flex justify-center gap-1">
+        <p className="text-(--color-secondary)">Нет аккаунта?</p>
+        <Link
+          href="/registration"
+          className="text-(--color-accent)"
+        >
+          Зарегистрироваться
+        </Link>
         </div>
-      </Modal> */}
-
+      </form>
       <ResetPassword isOpen={showReset} onClose={() => setShowReset(false)} />
     </div>
   );

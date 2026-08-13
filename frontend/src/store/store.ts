@@ -2,6 +2,7 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { rootReducer } from "./rootReducer";
 import { baseApi } from "@/api/baseApi";
+import "@/api/monitoringApi"; // регистрирует эндпоинты триггеров и конкурентов
 
 export const makeStore = () =>
   configureStore({

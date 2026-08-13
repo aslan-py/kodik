@@ -37,7 +37,6 @@ export default function MyTaskPage() {
         tasks={tasks}
         columns={columns}
         onOpen={(task) => router.push(`/myTask/${task.id}`)}
-        visibleFilters={["status", "createdAt", "deadline", "period"]}
       />
     </div>
   );

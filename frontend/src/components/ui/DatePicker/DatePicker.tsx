@@ -29,6 +29,7 @@ import { ru } from "date-fns/locale";
 import { Input } from "@/components/ui/Input/Input";
 
 import styles from "./DatePicker.module.css";
+import { Icon } from "../Icon";
 
 type DateTimePickerProps = {
   value?: Date;
@@ -198,22 +199,23 @@ export function DateTimePicker({
             }}
           >
             <div className={styles.header}>
-              <button
-                type="button"
-                onClick={() => setCurrentMonth((m) => subMonths(m, 1))}
-                disabled={currentMonth <= today}
-              >
-                ←
-              </button>
-
               <span>{format(currentMonth, "LLLL yyyy", { locale: ru })}</span>
+              <div className={styles.arrows}>
+                <button
+                  type="button"
+                  onClick={() => setCurrentMonth((m) => subMonths(m, 1))}
+                  disabled={currentMonth <= today}
+                >
+                  <Icon className="rotate-180" name="arrow-right"></Icon>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setCurrentMonth((m) => addMonths(m, 1))}
-              >
-                →
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentMonth((m) => addMonths(m, 1))}
+                >
+                  <Icon name="arrow-right"></Icon>
+                </button>
+              </div>
             </div>
 
             <div className={styles.quick}>

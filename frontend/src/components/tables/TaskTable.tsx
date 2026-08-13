@@ -2,81 +2,67 @@
 
 import { Table, TableColumn } from "@/components/ui/Table/Table";
 import { ActionItem } from "@/api/actionApi";
-import { useFilteredTasks } from "@/hooks/useFilteredTask";
-import { FilterKey, TaskFilters } from "../filters/TaskFilters/TaskFilters";
+
+import { FilterBar } from "../filters/FilterBar/FilterBar";
+import type { FilterConfig } from "@/hooks/filters/types";
+import type { FilterOption } from "@/types/types";
 
 type TaskTableProps = {
   tasks: ActionItem[];
   columns: TableColumn<ActionItem>[];
   onOpen?: (task: ActionItem) => void;
-  visibleFilters?: FilterKey[];
-};
 
-const defaultVisibleFilters: FilterKey[] = [
-  "status",
-  "department",
-  "createdAt",
-  "updatedAt",
-  "deadline",
-  "period",
-];
+  configs?: FilterConfig[];
+  filterValues?: Record<string, string>;
+  onFilterChange?: (key: string, value: string) => void;
+  searchQuery?: string;
+  onSearchChange?: (value: string) => void;
+  dateFrom?: string;
+  dateTo?: string;
+  onDateFromChange?: (value: string) => void;
+  onDateToChange?: (value: string) => void;
+  dictOptions?: Record<string, FilterOption[]>;
+  filtersKey?: string;
+};
 
 export default function TaskTable({
   tasks,
   columns,
   onOpen,
-  visibleFilters = defaultVisibleFilters,
+  configs,
+  filterValues,
+  onFilterChange,
+  searchQuery,
+  onSearchChange,
+  dateFrom = "",
+  dateTo = "",
+  onDateFromChange = () => {},
+  onDateToChange = () => {},
+  dictOptions,
+  filtersKey,
 }: TaskTableProps) {
-  const {
-    filteredTasks,
-    statusOptions,
-    departmentOptions,
-    statusFilter,
-    setStatusFilter,
-    departmentFilter,
-    setDepartmentFilter,
-    createdAtFilter,
-    setCreatedAtFilter,
-    updatedAtFilter,
-    setUpdatedAtFilter,
-    deadlineFilter,
-    setDeadlineFilter,
-    dateFrom,
-    setDateFrom,
-    dateTo,
-    setDateTo,
-  } = useFilteredTasks(tasks);
-
-  const show = (key: FilterKey) => visibleFilters.includes(key);
-
   return (
     <>
-      <TaskFilters
-        statusFilter={statusFilter}
-        onStatusChange={show("status") ? setStatusFilter : undefined}
-        statusOptions={statusOptions}
-        departmentFilter={departmentFilter}
-        onDepartmentChange={
-          show("department") ? setDepartmentFilter : undefined
-        }
-        departmentOptions={departmentOptions}
-        createdAtFilter={createdAtFilter}
-        onCreatedAtChange={show("createdAt") ? setCreatedAtFilter : undefined}
-        updatedAtFilter={updatedAtFilter}
-        onUpdatedAtChange={show("updatedAt") ? setUpdatedAtFilter : undefined}
-        deadlineFilter={deadlineFilter}
-        onDeadlineChange={show("deadline") ? setDeadlineFilter : undefined}
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        onDateFromChange={show("period") ? setDateFrom : undefined}
-        onDateToChange={show("period") ? setDateTo : undefined}
-      />
+      {configs && (
+        <FilterBar
+          configs={configs}
+          filterValues={filterValues ?? {}}
+          onFilterChange={onFilterChange ?? (() => {})}
+          searchQuery={searchQuery ?? ""}
+          onSearchChange={onSearchChange ?? (() => {})}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={onDateFromChange}
+          onDateToChange={onDateToChange}
+          dictOptions={dictOptions}
+        />
+      )}
       <Table
-        data={filteredTasks}
+        data={tasks}
         columns={columns}
         pageSize={10}
         getRowKey={(item) => item.id}
-        resetPaginationKey={`${statusFilter}-${dateFrom}-${dateTo}`}
+        resetPaginationKey={filtersKey}
         onRowClick={onOpen}
       />
     </>

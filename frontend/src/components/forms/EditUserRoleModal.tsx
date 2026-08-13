@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { FormModal } from "@/components/ui/FormModal/FormModal";
-import { AuthUser, Permission } from "@/store/authSlice";
+import { AuthUser, Permission, selectUser, setUser } from "@/store/authSlice";
 import { ROLE_OPTIONS } from "@/constants/roles";
 import { useUpdateRoleUserMutation } from "@/api/usersApi";
+import { useAppDispatch, useAppSelector } from "@/hooks/storeHooks";
+import { baseApi } from "@/api/baseApi";
 
 type EditUserRoleModalProps = {
   user: AuthUser | null;
@@ -16,6 +18,10 @@ export function EditUserRoleModal({ user, onClose }: EditUserRoleModalProps) {
   const [error, setError] = useState("");
 
   const [updateRole, { isLoading }] = useUpdateRoleUserMutation();
+  const dispatch = useAppDispatch();
+  const currentUser = useAppSelector(selectUser);
+
+  const isEditingSelf = !!user && !!currentUser && user.id === currentUser.id;
 
   useEffect(() => {
     if (user) {
@@ -28,7 +34,13 @@ export function EditUserRoleModal({ user, onClose }: EditUserRoleModalProps) {
     if (!user || !role) return;
     setError("");
     try {
-      await updateRole({ id: user.id, role }).unwrap();
+      const result = await updateRole({ id: user.id, role }).unwrap();
+
+      if (currentUser && user.id === currentUser.id) {
+        dispatch(setUser({ user: result }));
+        dispatch(baseApi.util.resetApiState());
+      }
+
       onClose();
     } catch (err: unknown) {
       const message =
@@ -45,23 +57,29 @@ export function EditUserRoleModal({ user, onClose }: EditUserRoleModalProps) {
       onClose={onClose}
       title="Изменение роли пользователя"
       subtitle={user ? `${user.full_name} · ${user.email}` : undefined}
-      onSubmit={handleSave}
+      onSubmit={isEditingSelf ? undefined : handleSave}
       loading={isLoading}
       error={error}
-      height={320}
+      height={isEditingSelf ? 160 : 320}
     >
-      <select
-        id="userRole"
-        value={role}
-        onChange={(e) => setRole(e.target.value as Permission)}
-        className="w-full rounded-lg border border-(--color-border) px-3 py-2 text-sm"
-      >
-        {ROLE_OPTIONS.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      {isEditingSelf ? (
+        <p className="text-sm text-(--color-muted)">
+          Вы не можете изменить роль самому себе.
+        </p>
+      ) : (
+        <select
+          id="userRole"
+          value={role}
+          onChange={(e) => setRole(e.target.value as Permission)}
+          className="w-full rounded-lg border border-(--color-border) px-3 py-2 text-sm"
+        >
+          {ROLE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      )}
     </FormModal>
   );
 }

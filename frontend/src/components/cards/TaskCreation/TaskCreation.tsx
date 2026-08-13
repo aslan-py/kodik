@@ -19,7 +19,6 @@ import { AuthUser } from "@/store/authSlice";
 import { useGetAllUsersQuery } from "@/api/usersApi";
 import { usePermission } from "@/hooks/useAuth";
 
-
 const STATUS_VALUES = ["open", "in_progress", "done"] as const;
 const statusOptions = STATUS_VALUES.map((value) => ({
   label: statusLabel(value),
@@ -35,6 +34,7 @@ type TaskCreationProps = {
   onSuccess?: (created: ActionItem) => void;
   onError?: () => void;
   onLoadingChange?: (loading: boolean) => void;
+  onCancel?: () => void;
 };
 
 type FormErrors = {
@@ -53,6 +53,7 @@ export function TaskCreation({
   onSuccess,
   onError,
   onLoadingChange,
+  onCancel,
 }: TaskCreationProps) {
   const isAdmin = usePermission(["analyst", "admin"]);
 
@@ -258,6 +259,7 @@ export function TaskCreation({
       id="task-creation-form"
       className="space-y-4 text-sm"
       onSubmit={handleSubmit}
+      autoComplete={"false"}
     >
       <p className="font-medium">
         {isEditing ? "Редактирование задачи" : "Создание задачи"}
@@ -341,6 +343,7 @@ export function TaskCreation({
               inputProps={{
                 onFocus: handleAssigneeFocus,
                 onBlur: handleAssigneeBlur,
+                autoComplete: "off",
               }}
               placeholder={
                 searchDepartmentId == null
@@ -384,8 +387,13 @@ export function TaskCreation({
               clearError("deadline");
             }}
           />
-          {(!isEditing || isAdmin) && (
-            <Button variant="secondary" className="max-w-35" fullWidth onClick={() => setDate(parseDate(incidentDeadline))}>
+          {!isEditing && isAdmin && (
+            <Button
+              variant="secondary"
+              className="max-w-35"
+              fullWidth
+              onClick={() => setDate(parseDate(incidentDeadline))}
+            >
               Как в анализе
             </Button>
           )}
@@ -414,15 +422,22 @@ export function TaskCreation({
         )}
       </div>
 
-      <Button type="submit" disabled={isLoading} className="w-full">
-        {isLoading
-          ? isEditing
-            ? "Сохранение..."
-            : "Создание..."
-          : isEditing
-            ? "Сохранить"
-            : "Создать задачу"}
-      </Button>
+      <div className="flex justify-end gap-2">
+        {isEditing && (
+          <Button type="button" onClick={onCancel}>
+            Отмена
+          </Button>
+        )}
+        <Button type="submit" disabled={isLoading}>
+          {isLoading
+            ? isEditing
+              ? "Сохранение..."
+              : "Создание..."
+            : isEditing
+              ? "Сохранить"
+              : "Создать задачу"}
+        </Button>
+      </div>
     </form>
   );
 }

@@ -14,13 +14,11 @@ import { Icon } from "@/components/ui/Icon/Icon";
 import { SelectItem } from "./SelectItem";
 
 import styles from "./select.module.css";
+import { FilterOption } from "@/types/types";
 
-type Option = {
-  label: string;
-  value: string;
-};
 
-type SelectProps = {
+
+type SelectProps<T extends string = string> = {
   label?: string;
   className?: string;
   direction?: "down" | "up";
@@ -28,16 +26,16 @@ type SelectProps = {
   buttonIconClassName?: string;
   buttonContent?: ReactNode;
   children?: ReactNode | ((setOpen: (open: boolean) => void) => ReactNode);
-  value?: string;
+  value?: T;
   placeholder?: string;
-  options?: Option[];
-  onChange?: (value: string) => void;
+  options?: FilterOption<T>[];
+  onChange?: (value: T) => void;
   disabled?: boolean;
   searchable?: boolean;
   searchPlaceholder?: string;
 };
 
-export function Select({
+export function Select<T extends string = string>({
   label,
   className = "",
   direction = "down",
@@ -52,7 +50,7 @@ export function Select({
   disabled = false,
   searchable = false,
   searchPlaceholder = "Поиск...",
-}: SelectProps) {
+}: SelectProps<T>) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -103,7 +101,7 @@ export function Select({
 
   const resolvedContent = buttonContent ?? selectedLabel ?? placeholder;
 
-  const selectOption = (option: Option) => {
+  const selectOption = (option: FilterOption<T>) => {
     onChange?.(option.value);
     setOpen(false);
   };

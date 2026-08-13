@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
-import { Card, CardHeaderButton } from "@/components/ui/Card/Card";
-import { Icon } from "@/components/ui/Icon/Icon";
+import { Card} from "@/components/ui/Card/Card";
 import { Divider } from "@/components/ui/Divider";
 import { CardHeader } from "@/components/cards/CardHeader";
 import { RelatedTask } from "@/components/cards/RelatedTask";
@@ -11,12 +10,14 @@ import { useGetActionItemByIdQuery } from "@/api/actionApi";
 import { useGetShowcaseByIdQuery } from "@/api/showcaseApi";
 import { useGetAllUsersQuery } from "@/api/usersApi";
 import { formatDateWithTime, toDisplayDate, toDotDate } from "@/helpers/date";
-import { statusLabel } from "@/helpers/status";
 import Loader from "@/app/loading";
 import { TaskCreation } from "../TaskCreation";
 import { usePermission } from "@/hooks/useAuth";
-import { useDepartmentName } from "@/hooks/useDepartamentName";
+
 import { Notification } from "@/components/ui/Notification";
+import styles from "./CardTask.module.css";
+import { useDepartmentsMap } from "@/hooks/useDepartament";
+import { labelFromMap } from "@/hooks/useLabelMap";
 
 export type CardTaskProps = {
   taskId: number | null;
@@ -24,11 +25,6 @@ export type CardTaskProps = {
   onClose: () => void;
   onOpenIncident?: (incidentId: number) => void; // теперь опционален
 };
-
-function DepartmentLabel({ departmentId }: { departmentId: number }) {
-  const name = useDepartmentName(departmentId);
-  return <span>{name}</span>;
-}
 
 type NotificationState = {
   type: "success" | "error";
@@ -58,6 +54,8 @@ export function CardTask({
       skip: !task?.assigned_user_id,
     },
   );
+  const departmentsMap = useDepartmentsMap();
+
   const [isEditing, setIsEditing] = useState(false);
   const canAdmin = usePermission(["analyst", "admin"]);
 
@@ -116,13 +114,38 @@ export function CardTask({
     return (
       <CardHeader
         priority={incident?.priority ?? ""}
-        status={statusLabel(task.status)}
+        tonality={incident?.tonality ?? ""}
         dateLabel="Создана"
         dateValue={formatDateWithTime(task.created_at)}
         title={task.task}
-        tags={
-          [incident?.competitor, incident?.category].filter(Boolean) as string[]
-        }
+        //  tags={[
+        //           <span key="object">
+        //             <span className={styles.label}>Объект</span>{" "}
+        //             <span className={styles.value}>{incident.competitor}<span>
+        //           </span>,
+        //           <span key="category">
+        //             <span className={styles.label}>Категория</span>{" "}
+        //             <span className={styles.value}>{incident.category}</span>
+        //           </span>,
+        //           <span key="region">
+        //             <span className={styles.label}>Регион</span>{" "}
+        //             <span className={styles.value}>{incident.region}</span>
+        //           </span>,
+        //         ]}
+        tags={[
+          incident?.competitor && (
+            <span key="competitor">
+              <span className={styles.label}>Конкурент </span>
+              <span className={styles.value}>{incident.competitor}</span>
+            </span>
+          ),
+          incident?.category && (
+            <span key="competitor">
+              <span className={styles.label}>Категория </span>
+              <span className={styles.value}>{incident.category}</span>
+            </span>
+          ),
+        ].filter(Boolean)}
       />
     );
   }, [task, incident]);
@@ -164,11 +187,12 @@ export function CardTask({
           initialData={task}
           onSuccess={() => setIsEditing(false)}
           onError={() => setIsEditing(false)}
+          onCancel={() => setIsEditing(false)}
         />
       </Card>
     );
   }
-
+ const departmentName = labelFromMap(departmentsMap, task.department_id);
   // ── Режим просмотра ──
   return (
     <Card
@@ -205,7 +229,7 @@ export function CardTask({
           Ответственный отдел
         </p>
         <p className="text-xs text-(--color-ink)">
-          <DepartmentLabel departmentId={task.department_id} />
+          {departmentName}
         </p>
       </div>
       {task.assigned_user_id ? (

@@ -6,6 +6,7 @@ import type { Permission } from "@/store/authSlice";
 import EditSettingsUserMe from "@/components/forms/EditSettingsUserMe";
 import { useAuth } from "@/hooks/useAuth";
 import { getInitials } from "@/helpers/user";
+import { NotificationModal } from "../modal/NotificationModal";
 
 const ROLE_LABELS: Record<Permission, string> = {
   pending: "На рассмотрении",
@@ -31,6 +32,7 @@ export default function UserSidebarProfile() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const { logout } = useAuth();
+  const [success, setSuccess] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -45,7 +47,10 @@ export default function UserSidebarProfile() {
         buttonIconClassName=""
         direction="up"
         buttonContent={
-          <UserInfo name={currentUser?.full_name ?? ""} role={currentUser ? ROLE_LABELS[currentUser.role] : ""} />
+          <UserInfo
+            name={currentUser?.full_name ?? ""}
+            role={currentUser ? ROLE_LABELS[currentUser.role] : ""}
+          />
         }
       >
         {(setOpen) => (
@@ -73,6 +78,12 @@ export default function UserSidebarProfile() {
       <EditSettingsUserMe
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        onSuccess={() => setSuccess(true)}
+      />
+      <NotificationModal
+        isOpen={success}
+        onClose={() => setSuccess(false)}
+        text="Вы успешно изменили свои данные!"
       />
     </div>
   );

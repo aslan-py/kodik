@@ -128,7 +128,7 @@ export function Input({
             onClick={onClick}
             aria-invalid={!!error}
             aria-describedby={error ? `${id}-error` : undefined}
-            className={inputClass}
+            className={`${inputClass} ${error ? styles.errorInput : ''}`}
             {...inputProps}
           />
         )}

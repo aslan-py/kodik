@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { CardTask } from "@/components/cards/CardTask";
+import { TaskWithIncident } from "@/components/cards/TaskWithIncident/TaskWithIncident";
 
 export default function MyTaskModalPage() {
   const params = useParams<{ id: string }>();
@@ -9,11 +10,9 @@ export default function MyTaskModalPage() {
   const id = Number(params.id);
 
   return (
-    <CardTask
-      taskId={Number.isFinite(id) ? id : null}
-      isOpen
-      onClose={() => router.back()}
-      onOpenIncident={(incidentId) => router.push(`/incidents/${incidentId}`)}
-    />
+    <TaskWithIncident
+          taskId={Number.isFinite(id) ? id : null}
+          onClose={() => router.back()}
+        />
   );
 }

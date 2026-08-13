@@ -4,7 +4,7 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Icon } from "@/components/ui/Icon/Icon";
 import styles from "./select.module.css";
 
-type SelectItemProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> & {
+type SelectItemProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type" | "onClick"> & {
   active?: boolean;
   onClick: () => void;
   children: ReactNode;

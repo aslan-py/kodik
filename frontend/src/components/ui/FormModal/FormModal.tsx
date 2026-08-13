@@ -12,7 +12,7 @@ type FormModalProps = {
   subtitle?: string;
   children: ReactNode;
   submitLabel?: string;
-  onSubmit: () => void;
+  onSubmit?: () => void;
   loading?: boolean;
   error?: string;
   width?: number;
@@ -61,16 +61,18 @@ export function FormModal({
             <p className="mt-2 text-sm text-(--color-error)">{error}</p>
           )}
 
-          <Button
-            variant="primary"
-            size="medium"
-            fullWidth
-            className="mt-3"
-            loading={loading}
-            onClick={onSubmit}
-          >
-            {submitLabel}
-          </Button>
+          {onSubmit && (
+            <Button
+              variant="primary"
+              size="medium"
+              fullWidth
+              className="mt-3"
+              loading={loading}
+              onClick={onSubmit}
+            >
+              {submitLabel}
+            </Button>
+          )}
         </div>
       </div>
     </Modal>

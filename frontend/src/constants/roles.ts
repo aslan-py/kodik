@@ -1,4 +1,4 @@
-export type FilterOption = { label: string; value: string };
+import { FilterOption } from "@/types/types";
 
 export const ROLE_OPTIONS: FilterOption[] = [
   { label: "Ожидает подтверждения", value: "pending" },

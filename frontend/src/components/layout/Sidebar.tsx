@@ -12,10 +12,10 @@ const baseItems = [{ href: "/incidents", label: "События" }];
 const viewerItems = [{ href: "/myTask", label: "Мои задачи" }];
 
 const adminSubItems = [
-  { href: "monitoring", label: "Мониторинг" },
-  { href: "filtring", label: "Фильтрация" },
-  { href: "classification", label: "Классификация" },
-  { href: "users", label: "Пользователи" },
+  { href: "/monitoring", label: "Мониторинг" },
+  { href: "/filtring", label: "Фильтрация" },
+  { href: "/classification", label: "Классификация" },
+  { href: "/users", label: "Пользователи" },
 ];
 
 export default function Sidebar() {
@@ -33,7 +33,9 @@ export default function Sidebar() {
     ...(canAdmin || canAnalyst ? [{ href: "/task", label: "Задачи" }] : []),
   ];
 
-  const isAdminActive = adminSubItems.some((item) => pathname === item.href);
+  const isAdminActive = adminSubItems.some((item) =>
+    pathname.startsWith(item.href),
+  );
 
   return (
     <aside
@@ -124,7 +126,7 @@ export default function Sidebar() {
             </li>
           )}
           <Divider></Divider>
-          <li >
+          <li>
             <Link
               href={process.env.NEXT_PUBLIC_ANALYTICS_URL ?? "#"}
               target="_blank"
@@ -133,7 +135,7 @@ export default function Sidebar() {
               title={isCollapsed ? "Аналитика" : undefined}
             >
               {isCollapsed ? "А" : "Аналитика"}
-            <Icon name="open-source" className="text-[#9A9EA4]"></Icon>
+              <Icon name="open-source" className="text-[#9A9EA4]"></Icon>
             </Link>
           </li>
         </ul>

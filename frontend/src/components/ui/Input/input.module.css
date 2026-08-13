@@ -73,3 +73,10 @@
   font-size: 12px;
   color: var(--color-muted);
 }
+.error {
+  font-size: 12px;
+  color: var(--color-status-negative);
+}
+.errorInput {
+  border: 1px solid var(--color-status-negative);
+}

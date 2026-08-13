@@ -1,9 +1,27 @@
-export default function DashboardPage() {
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/hooks/useAuth";
+import Loader from "@/app/loading";
+
+function HomeContent() {
+  const { user } = useAuth();
+  const { logout } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (user && user.role !== "pending") {
+      router.replace("/filtring/common");
+    }
+  }, [user, router]);
+  return <Loader />;
+}
+
+export default function HomePage() {
   return (
-    <div className="flex flex-1 flex-col p-8">
-      <h1 className="text-2xl font-semibold ">
-        Дашборд
-      </h1>
-    </div>
+    <>
+      <HomeContent />
+    </>
   );
 }

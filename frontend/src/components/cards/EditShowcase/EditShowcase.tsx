@@ -16,10 +16,10 @@ import {
   type Tonality,
 } from "@/api/showcaseApi";
 import {
-  priorityOptions,
-  tonalityOptions,
+  PRIORITY_OPTIONS as priorityOptions,
+  TONALITY_OPTIONS as tonalityOptions,
   matchOptionValue,
-} from "@/constants/showcaseEnums";
+} from "@/types/types";
 import { formatDate } from "@/helpers/date";
 
 export type EditShowcaseProps = {

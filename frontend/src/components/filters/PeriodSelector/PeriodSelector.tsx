@@ -1,17 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { formatDate, formatShort, parseISODate } from "@helpers/date";
+import { useMemo } from "react";
+import { formatDate, formatShort, parseISODate, getPresetRange, type PeriodPreset } from "@helpers/date";
 import { Select, SelectItem } from "@/components/ui/Select";
 import { DateTimePicker } from "@/components/ui/DatePicker/DatePicker";
-
-type PeriodOption =
-  | "today"
-  | "7days"
-  | "30days"
-  | "thisMonth"
-  | "lastMonth"
-  | "custom";
+type PeriodOption = PeriodPreset | "custom"
 
 type PeriodSelectorProps = {
   dateFrom: string;
@@ -29,41 +22,6 @@ const periodOptions: { value: PeriodOption; label: string }[] = [
   { value: "custom", label: "Произвольный период" },
 ];
 
-function getPresetRange(
-  period: Exclude<PeriodOption, "custom">,
-  now: Date,
-): { from: string; to: string } {
-  const today = formatDate(now);
-
-  switch (period) {
-    case "today":
-      return { from: today, to: today };
-
-    case "7days": {
-      const from = new Date(now);
-      from.setDate(from.getDate() - 6);
-      return { from: formatDate(from), to: today };
-    }
-
-    case "30days": {
-      const from = new Date(now);
-      from.setDate(from.getDate() - 29);
-      return { from: formatDate(from), to: today };
-    }
-
-    case "thisMonth": {
-      const from = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { from: formatDate(from), to: today };
-    }
-
-    case "lastMonth": {
-      const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const to = new Date(now.getFullYear(), now.getMonth(), 0);
-      return { from: formatDate(from), to: formatDate(to) };
-    }
-  }
-}
-
 const PRESET_ORDER: Exclude<PeriodOption, "custom">[] = [
   "today",
   "7days",
@@ -78,10 +36,7 @@ export function PeriodSelector({
   onDateFromChange,
   onDateToChange,
 }: PeriodSelectorProps) {
-  const [isCustom, setIsCustom] = useState(false);
-
   const currentPeriod = useMemo((): PeriodOption => {
-    if (isCustom) return "custom";
     if (!dateFrom && !dateTo) return "custom";
 
     const now = new Date();
@@ -91,21 +46,18 @@ export function PeriodSelector({
     });
 
     return matched ?? "custom";
-  }, [dateFrom, dateTo, isCustom]);
+  }, [dateFrom, dateTo]);
 
   const handlePeriodChange = (value: PeriodOption) => {
-    if (value === "custom") {
-      setIsCustom(true);
-      const range = getPresetRange("thisMonth", new Date());
-      onDateFromChange(range.from);
-      onDateToChange(range.to);
-      return;
-    }
-
-    setIsCustom(false);
-    const range = getPresetRange(value, new Date());
+    const range = value === "custom"
+      ? getPresetRange("thisMonth", new Date())
+      : getPresetRange(value, new Date());
     onDateFromChange(range.from);
     onDateToChange(range.to);
+    if (value !== "custom") {
+      // "Произвольный период" не закрывает дропдаун — под ним
+      // сразу должны появиться поля ввода дат
+    }
   };
 
   const dateLabel = useMemo(() => {
@@ -142,8 +94,6 @@ export function PeriodSelector({
                 active={opt.value === currentPeriod}
                 onClick={() => {
                   handlePeriodChange(opt.value);
-                  // "Произвольный период" не закрывает дропдаун — под ним
-                  // сразу должны появиться поля ввода дат
                   if (opt.value !== "custom") setOpen(false);
                 }}
               >

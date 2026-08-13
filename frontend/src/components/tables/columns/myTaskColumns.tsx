@@ -25,7 +25,7 @@ export function useMyTaskColumns(): TableColumn<ActionItem>[] {
     {
       key: "assigned_user_id",
       header: "Исполнитель",
-      render: (item) => <span className="block text-(--color-ink)">{item.assigned_user_id}</span>,
+      render: (item) => <span className="block text-(--color-ink)">Id исполниеля: {item.assigned_user_id ? item.assigned_user_id : "-"}</span>,
     },
     {
       key: "status",

@@ -1,18 +1,21 @@
-// @/hooks/useDepartmentName.ts
+// @/hooks/useDepartments.ts
+// ! убрать из проектта отсавить useDepartamen
 import { useGetDepartmentsQuery } from "@/api/adminSourceApi";
 import { useMemo } from "react";
+import { useLabelFor, useLabelMap } from "./useLabelMap";
 
-
-export function useDepartmentsMap() {
+export function useDepartmentOptions() {
   const { data: departments = [] } = useGetDepartmentsQuery();
-
-  return useMemo(() => {
-    return new Map(departments.map((d) => [d.id, d.name]));
-  }, [departments]);
+  return useMemo(
+    () => departments.map((d) => ({ label: d.name, value: d.id })),
+    [departments],
+  );
 }
 
-export function useDepartmentName(departmentId: number | null | undefined): string {
-  const departmentsMap = useDepartmentsMap();
-  if (departmentId == null) return "—";
-  return departmentsMap.get(departmentId) ?? "—";
+export function useDepartmentsMap() {
+  return useLabelMap(useDepartmentOptions());
+}
+
+export function useDepartmentName(departmentId: number | null | undefined) {
+  return useLabelFor(useDepartmentOptions(), departmentId);
 }

@@ -9,20 +9,17 @@ import {
 } from "@/api/actionApi";
 import { Divider } from "@/components/ui/Divider";
 import { TaskCreation } from "@/components/cards/TaskCreation";
-import { Attributes } from "@/components/cards/Attributes";
 import { RelatedTask } from "@/components/cards/RelatedTask";
-import { CommentHistory } from "@/components/cards/CommentHistory";
 import { Sources } from "@/components/cards/Sources";
 import { Notification } from "@/components/ui/Notification";
 import { CardHeader } from "@/components/cards/CardHeader";
 import type { Showcase } from "@/api/showcaseApi";
-import { Card, CardHeaderButton } from "@/components/ui/Card/Card";
-import { Icon } from "@/components/ui/Icon/Icon";
-import { statusLabel } from "@/helpers/status";
+import { Card } from "@/components/ui/Card/Card";
 import { hasAccess, selectUser } from "@/store/authSlice";
 import styles from "./CardIncident.module.css";
-import { formatDateWithTime, toDisplayDate, toDotDate } from "@/helpers/date";
+import { toDisplayDate, toDotDate } from "@/helpers/date";
 import { EditShowcase } from "../EditShowcase/EditShowcase";
+import { useDepartmentName } from "@/hooks/useDepartament";
 
 export type CardIncidentProps = {
   incident: Showcase | null;
@@ -63,6 +60,7 @@ export function CardIncident({
   );
   const relatedTask = relatedTasks[0] ?? null;
   const hasTask = !!relatedTask;
+  const nameDepartment = useDepartmentName(relatedTask?.department_id);
 
   useEffect(() => {
     return () => {
@@ -127,31 +125,36 @@ export function CardIncident({
     );
   }, []);
 
-
   const header = useMemo(() => {
     if (!incident) return null;
 
     return (
       <CardHeader
         priority={incident.priority}
-        status="Новое"
+        tonality={incident.tonality}
         dateLabel="Опубликовано"
         dateValue={toDisplayDate(incident.published_at)}
         title={incident.title}
         tags={[
-          <span key="object">
-            <span className={styles.label}>Объект</span>{" "}
-            <span className={styles.value}>{incident.competitor}</span>
-          </span>,
-          <span key="category">
-            <span className={styles.label}>Категория</span>{" "}
-            <span className={styles.value}>{incident.category}</span>
-          </span>,
-          <span key="region">
-            <span className={styles.label}>Регион</span>{" "}
-            <span className={styles.value}>{incident.region}</span>
-          </span>,
-        ]}
+          incident?.competitor && (
+            <span key="object">
+              <span className={styles.label}>Объект</span>{" "}
+              <span className={styles.value}>{incident.competitor}</span>
+            </span>
+          ),
+          incident?.category && (
+            <span key="category">
+              <span className={styles.label}>Категория</span>{" "}
+              <span className={styles.value}>{incident.category}</span>
+            </span>
+          ),
+          incident?.region && (
+            <span key="region">
+              <span className={styles.label}>Регион</span>{" "}
+              <span className={styles.value}>{incident.region}</span>
+            </span>
+          ),
+        ].filter(Boolean)}
       />
     );
   }, [incident]);
@@ -160,12 +163,7 @@ export function CardIncident({
 
   if (isEditing && canEditShowcase) {
     return (
-      <Card
-        isOpen={isOpen}
-        onClose={onClose}
-        header={header}
-       
-      >
+      <Card isOpen={isOpen} onClose={onClose} header={header}>
         <EditShowcase
           showcase={incident}
           onSuccess={handleShowcaseUpdateSuccess}
@@ -249,8 +247,7 @@ export function CardIncident({
       {hasTask && relatedTask ? (
         <>
           <RelatedTask
-            title={relatedTask.task}
-            details={`${statusLabel(relatedTask.status)}${relatedTask.deadline ? ` · до ${relatedTask.deadline.slice(0, 10)}` : ""}`}
+            relatedTask={relatedTask}
             onClick={() => onOpenTask?.(relatedTask.id)}
           />
           <Divider />

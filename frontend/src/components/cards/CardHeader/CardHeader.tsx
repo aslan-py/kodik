@@ -1,12 +1,12 @@
 "use client";
 
 import { Divider } from "@/components/ui/Divider";
-import { statusClass, priorityClass } from "@/helpers/status";
+import { tonalityClass, priorityClass } from "@/helpers/status";
 import { ReactNode } from "react";
 
 export type CardHeaderProps = {
   priority: string;
-  status: string;
+  tonality: string;
   dateLabel: string;
   dateValue: string;
   title: string;
@@ -15,7 +15,7 @@ export type CardHeaderProps = {
 
 export function CardHeader({
   priority,
-  status,
+  tonality,
   dateLabel,
   dateValue,
   title,
@@ -26,7 +26,7 @@ export function CardHeader({
       <div className="flex flex-col">
         <p className="flex gap-2.5 mb-3.5 items-center">
           <span className={priorityClass(priority)}>{priority}</span>
-          {status ? <span className={statusClass(status)}>{status}</span> : null}
+          {tonality ? <span className={tonalityClass(tonality)}>{tonality}</span> : null}
           <span className="text-xs text-(--color-muted)">
             {dateLabel} {dateValue}
           </span>

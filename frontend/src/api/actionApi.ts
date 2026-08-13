@@ -9,7 +9,7 @@ export type ActionItem = {
   assigned_user_id?: number | null;
   deadline?: string | null;
   expected_result: string | null;
-  status: string; // "new" | "in_progress" | "done"
+  status: string; // "open" | "in_progress" | "done"
   created_at: string;
   updated_at: string;
 };

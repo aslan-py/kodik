@@ -10,9 +10,14 @@ import { useEditMeMutation } from "@/api/usersApi";
 type SettingsModalProps = {
   isOpen: boolean;
   onClose: () => void;
+  onSuccess?: () => void;
 };
 
-export default function EditSettingsUserMe({ isOpen, onClose }: SettingsModalProps) {
+export default function EditSettingsUserMe({
+  isOpen,
+  onClose,
+  onSuccess,
+}: SettingsModalProps) {
   const user = useAppSelector(selectUser);
   const dispatch = useAppDispatch();
 
@@ -67,6 +72,7 @@ export default function EditSettingsUserMe({ isOpen, onClose }: SettingsModalPro
       const result = await editMe(body).unwrap();
       dispatch(setUser({ user: result }));
       onClose();
+      onSuccess?.(); // вызываем после успешного закрытия
     } catch (err: unknown) {
       const message =
         err instanceof Object && "data" in err

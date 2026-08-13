@@ -1,34 +1,30 @@
 "use client";
 
-import { Select } from "@/components/ui/Select";
+import { Select } from "@/components/ui/Select/Select";
+import { FilterOption } from "@/types/types";
 
-type Option = {
+
+type SelectFilterProps<T extends string> = {
   label: string;
-  value: string;
-};
-
-type SelectFilterProps = {
-  label?: string;
-  /** Подпись для варианта "показать всё", например «Все статусы». Если не передана, используется «Все». */
   allLabel?: string;
-  value: string;
-  options: Option[];
-  onChange: (value: string) => void;
+  value: T | "";
+  options: FilterOption<T>[];
+  onChange: (value: T | "") => void;
   className?: string;
 };
 
-export function SelectFilter({
+export function SelectFilter<T extends string>({
   label,
   allLabel = "Все",
   value,
   options,
   onChange,
   className = "",
-}: SelectFilterProps) {
-  const allOption: Option = { label: allLabel, value: "" };
+}: SelectFilterProps<T>) {
+  const allOption: FilterOption<T | ""> = { label: allLabel, value: "" };
 
   return (
-    <Select
+    <Select<T | "">
       label={label}
       className={className}
       value={value}

@@ -14,6 +14,14 @@ export function statusClass(status: string): string {
   return "status-task status-task-open";
 }
 
+/** Маппинг тональности для CSS-класса */
+export function tonalityClass(tonality: string): string {
+  if (tonality === "позитивная") return "tonality tonality-positive";
+  if (tonality === "нейтральная") return "tonality tonality-neutral";
+  if (tonality === "нерелевантная") return "tonality tonality-spam";
+  return "tonality tonality-negative";
+}
+
 /** Маппинг приоритетов для CSS-класса */
 export function priorityClass(priority: string): string {
   if (priority === "П1") return "priority priority-accent";

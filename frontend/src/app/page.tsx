@@ -20,33 +20,16 @@ export const ALL_ROLES: Permission[] = [
 
 function HomeContent() {
   const { user } = useAuth();
-  const { logout } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (user && user.role !== "pending") {
       router.replace("/incidents");
     }
+    if (user && user.role === "pending") {
+      router.replace("/pending");
+    }
   }, [user, router]);
-
-  if (user?.role === "pending") {
-    return (
-      <div className="flex flex-col gap-4 min-h-screen w-full items-center justify-center p-6 text-center">
-        <p className="text-sm text-(--color-muted)">
-          Ваша роль ещё не назначена администратором. Доступ к разделам появится
-          после изменения роли в системе.
-        </p>
-        <Button
-          className="block"
-          onClick={() => {
-            logout();
-          }}
-        >
-          Выйти из аккаунта
-        </Button>
-      </div>
-    );
-  }
 
   // не-pending: показываем лоадер, пока useEffect переводит на /incidents,
   // чтобы не было пустого (белого) кадра после входа

@@ -1,8 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
-import { ProtectedRoute } from "@/components/protected-route/protected-route";
+import { AuthGroupGuard } from "@/components/auth/AuthGroupGuard";
 
 export default function AuthLayout({
   children,
@@ -10,10 +9,10 @@ export default function AuthLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ProtectedRoute onlyUnAuth>
+    <AuthGroupGuard>
       <div className="flex h-full w-full">
         {/* Левая часть — форма */}
-        <div className="flex-1 flex-col overflow-y-auto flex min-h-full justify-between p-6 bg-(--color-light) sm:pl-24">
+        <div className="grow shrink-0 w-full xl:basis-[720px] xl:max-w-[720px] flex-col overflow-y-auto flex min-h-full justify-between p-6 bg-(--color-light) sm:pl-24">
           <div className="flex items-start justify-between">
             <div className="font-semibold text-xl">
               Kodik+
@@ -21,20 +20,6 @@ export default function AuthLayout({
                 Конкурентная разведка
               </span>
             </div>
-            <nav className="flex gap-4 text-sm">
-              <Link
-                href="/login"
-                className="text-(--color-secondary) hover:underline"
-              >
-                Вход
-              </Link>
-              <Link
-                href="/registration"
-                className="text-(--color-secondary) hover:underline"
-              >
-                Регистрация
-              </Link>
-            </nav>
           </div>
           <div className="flex-1 flex items-center">{children}</div>
           <p className="text-xs text-(--color-muted)">
@@ -43,7 +28,7 @@ export default function AuthLayout({
         </div>
 
         {/* Правая часть — декоративная панель (скрыта на xl и ниже) */}
-        <div className="hidden xl:flex w-[45%] bg-[#EEF4FF] relative overflow-hidden flex-col justify-end">
+        <div className="hidden xl:flex w-full bg-[#EEF4FF] relative overflow-hidden flex-col justify-end">
           <div className="pl-16 pb-60 z-10">
             <p className="text-4xl font-semibold mb-3.5">
               Вся картина рынка — в одном месте
@@ -64,6 +49,6 @@ export default function AuthLayout({
           />
         </div>
       </div>
-    </ProtectedRoute>
+    </AuthGroupGuard>
   );
 }

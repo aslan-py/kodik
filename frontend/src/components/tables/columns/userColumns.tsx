@@ -3,11 +3,14 @@
 import { TableColumn } from "@/components/ui/Table/Table";
 
 import { ROLE_LABELS } from "@/constants/roles";
+import { useDepartmentsMap } from "@/hooks/useDepartamentName";
 import { AuthUser } from "@/store/authSlice";
 
 export function useUserColumns(
   onEdit: (user: AuthUser) => void,
 ): TableColumn<AuthUser>[] {
+   const departmentsMap = useDepartmentsMap();
+
   return [
     {
       key: "full_name",
@@ -22,13 +25,16 @@ export function useUserColumns(
     {
       key: "department",
       header: "Отдел",
-      render: (user) => user.department_id ?? "—",
+      render: (user) =>
+        user.department_id != null
+          ? (departmentsMap.get(user.department_id) ?? "—")
+          : "—",
     },
     {
       key: "telegram_username",
       header: "Telegram",
       render: (user) =>
-        user.telegram_id ? `@${user.telegram_id}` : "—",
+        user.telegram_id ? `${user.telegram_id}` : "—",
     },
     {
       key: "is_active",

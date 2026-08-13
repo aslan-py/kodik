@@ -7,8 +7,9 @@
   position: absolute;
   z-index: 10000;
   width: 360px;
-  padding: 16px;
-  background: var(--color-surface, #ffffff);
+  padding: 14px;
+  
+  background: #FFFFFF;
   border: 1px solid var(--color-border, #e5e7eb);
   border-radius: 16px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
@@ -30,13 +31,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
+  height: 24px;
 }
 
 .header span {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-text, #111827);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-strong, #41464D);
   text-transform: capitalize;
 }
 
@@ -47,13 +49,14 @@
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  border: 1px solid var(--color-border, #e5e7eb);
   background: transparent;
-  color: var(--color-text, #111827);
+  color: var(--color-muted, #9A9EA4);
   cursor: pointer;
   transition: 0.2s;
 }
-
+.arrows {
+  display: flex;
+}
 .header button:hover {
   background: var(--color-hover, #f3f4f6);
 }
@@ -70,19 +73,19 @@
 /* быстрые кнопки */
 
 .quick {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+ display: flex;
   gap: 8px;
   margin-bottom: 16px;
 }
 
 .quick button {
-  height: 34px;
-  padding: 0 8px;
+  height: 30px;
+  padding: 6px 8px;
+  width: auto;
+  flex: 0 0 auto;
   border-radius: 8px;
-  border: 1px solid var(--color-border, #e5e7eb);
-  background: var(--color-background, #fff);
-  color: var(--color-text, #374151);
+  background:  #F1F3F7;
+  color: #747A84;
   font-size: 13px;
   cursor: pointer;
   transition: 0.2s;
@@ -111,10 +114,13 @@
 .popup :global(.rdp-weekdays) {
   margin-bottom: 6px;
 }
+.popup :global(.rdp-month_grid) {
+  width: 100%;
+}
 
 .popup :global(.rdp-weekday) {
-  width: 42px;
-  height: 32px;
+  width: 30px;
+  height: 20px;
   color: var(--color-muted, #9ca3af);
   font-size: 12px;
   font-weight: 500;
@@ -131,20 +137,23 @@
 
 .popup :global(.rdp-day_button:hover) {
   background: var(--color-hover, #518bff);
+  color: white;
+
 }
 
-.popup :global(.rdp-today:not(.rdp-selected)) {
-  border: 1px solid var(--color-primary, #2563eb);
+.popup :global(.rdp-today:not(.rdp-selected button)) {
+  /* background: var(--color-border, #2563eb); */
 }
 
-.popup :global(.rdp-selected) {
+.popup :global(.rdp-selected button) {
   background: var(--color-primary, #2563eb);
   color: white;
   font-weight: 600;
 }
 
-.popup :global(.rdp-selected:hover) {
+.popup :global(.rdp-selected:hover button) {
   background: var(--color-primary-hover, #1d4ed8);
+  color: white;
 }
 
 .popup :global(.rdp-disabled button) {
@@ -163,9 +172,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--color-border, #e5e7eb);
+  margin-top: 10px;
 }
 
 .time span {

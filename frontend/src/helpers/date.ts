@@ -121,3 +121,35 @@ export function formatDeadline(deadline: string): string {
   if (diffDays > 2 && diffDays <= 7) return `Через ${diffDays} дней`;
   return toDisplayDate(deadline);
 }
+export type PeriodPreset =
+  | "today" | "7days" | "30days" | "thisMonth" | "lastMonth";
+
+export function getPresetRange(
+  period: PeriodPreset,
+  now: Date = new Date(),
+): { from: string; to: string } {
+  const today = formatDate(now);
+  switch (period) {
+    case "today":
+      return { from: today, to: today };
+    case "7days": {
+      const from = new Date(now);
+      from.setDate(from.getDate() - 6);
+      return { from: formatDate(from), to: today };
+    }
+    case "30days": {
+      const from = new Date(now);
+      from.setDate(from.getDate() - 29);
+      return { from: formatDate(from), to: today };
+    }
+    case "thisMonth": {
+      const from = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { from: formatDate(from), to: today };
+    }
+    case "lastMonth": {
+      const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const to = new Date(now.getFullYear(), now.getMonth(), 0);
+      return { from: formatDate(from), to: formatDate(to) };
+    }
+  }
+}

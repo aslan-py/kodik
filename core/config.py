@@ -209,11 +209,16 @@ class Settings(BaseSettings):
 
     # ===== BP-1 Adaptive (релевантность и обогащение, финальный этап) =====
     # Режим фильтрации релевантности: 'off' | 'filter' | 'rank'.
-    bp1_relevance_mode: str = 'off'
+    # 'rank' (не 'filter') — по умолчанию: BP-1 отвечает за сырой сбор
+    # (Bronze Layer), а не за решение, что из собранного оставить —
+    # это задача этапа нормализации (BP-2, Silver Layer). 'rank' только
+    # сортирует/размечает оценку relevance в extra, ничего не отбрасывает
+    # (Шаг 15 плана рефакторинга, kodik/src/bp1/REFACTORING_PLAN.md).
+    bp1_relevance_mode: str = 'rank'
     # Порог релевантности (0.0-1.0) для режима 'filter'.
     bp1_relevance_threshold: float = 0.6
     # Включает LLM-обогащение событий структурированными полями.
-    bp1_enrichment_enabled: bool = False
+    bp1_enrichment_enabled: bool = True
 
     # ===== BP-1 Adaptive (сетевые ограничения) =====
     # parse_timeout_ms / max_concurrent_tasks — общие для классического

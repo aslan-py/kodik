@@ -90,23 +90,53 @@ async def list_tasks():
             print()
 
 
+async def _clear_task_redis_keys(session, redis) -> tuple[list[str], int]:
+    """Удаляет ключи дедупликации BP-1, привязанные к существующим задачам.
+
+    В отличие от прежней реализации (``redis.keys('*')`` + фильтр
+    ``k.isdigit()``), не сканирует Redis целиком и не угадывает "наши"
+    ключи по формату — ``KEYS *`` блокирует инстанс Redis на время
+    полной выборки, а числовой формат ключа (``RawDataService._redis_key``,
+    см. ``storage.py``) не отличим от произвольного стороннего числового
+    ключа, если тот же Redis делят другие системы. Вместо этого берёт
+    список реальных ``SearchTask.id`` из БД и удаляет ровно
+    соответствующие им ключи.
+
+    Возвращает ``(candidate_keys, deleted_count)``: список ключей,
+    привязанных к существующим задачам, и число фактически удалённых
+    (``redis.delete()`` не удаляет то, чего не было — например, для задачи,
+    которая ещё ни разу не собиралась успешно).
+    """
+    from sqlalchemy import select
+
+    from src.bp1.models import SearchTask
+    from src.bp1.storage import RawDataService
+
+    service = RawDataService(session=session, redis_client=redis)
+    result = await session.execute(select(SearchTask.id))
+    task_keys = [service._redis_key(task_id) for (task_id,) in result.all()]
+
+    if not task_keys:
+        return [], 0
+
+    deleted = await redis.delete(*task_keys)
+    return task_keys, deleted
+
+
 async def clear_redis():
-    """Очистить Redis от ключей задач."""
+    """Очистить Redis от ключей дедупликации задач BP-1."""
+    from core.database import AsyncSessionLocal
     from core.redis_client import redis_client
 
     redis = await redis_client.get_client()
+    async with AsyncSessionLocal() as session:
+        task_keys, deleted = await _clear_task_redis_keys(session, redis)
 
-    # Получаем все ключи, которые выглядят как ID задач
-    keys = await redis.keys('*')
-    task_keys = [k for k in keys if k.isdigit()]
-
+    print()
     if task_keys:
-        deleted = await redis.delete(*task_keys)
-        print()
         print(f'Удалено ключей: {deleted}')
         print(f'Ключи: {task_keys}')
     else:
-        print()
         print('Нет ключей для удаления')
 
     await redis_client.close()

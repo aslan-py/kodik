@@ -16,6 +16,7 @@ from ...schemas import (
     ExtendedSiteClassification,
     SiteType,
     SourceClassification,
+    SourceType,
     StrategyType,
     TechnicalFeatures,
 )
@@ -86,9 +87,41 @@ def heuristic_classify(
     )
 
 
-def heuristic_strategy(classification: SourceClassification) -> StrategyType:
-    """Эвристический выбор стратегии по классификации."""
-    if classification.has_captcha or classification.has_antibot:
+def heuristic_strategy(
+    classification: SourceClassification,
+    *,
+    escalate_captcha_to_hitl: bool = False,
+) -> StrategyType:
+    """Эвристический выбор стратегии по классификации источника.
+
+    Единая реализация для ``SourceClassifier._pick_strategy`` (первичная
+    категоризация источника) и ``AIAgent`` (фолбэк, когда LLM недоступен) —
+    раньше эти два места дублировали почти одинаковую, но расходящуюся
+    логику по отдельности.
+
+    Приоритет: API-источник -> FAST, CAPTCHA -> HITL/STEALTH (см.
+    ``escalate_captcha_to_hitl``), антибот-защита -> STEALTH,
+    SPA-приложение -> BROWSER, иначе -> FAST.
+
+    Args:
+        classification: Классификация источника.
+        escalate_captcha_to_hitl: При CAPTCHA сразу рекомендовать HITL
+            вместо STEALTH. Включено у ``SourceClassifier`` (HITL —
+            обоснованная стартовая точка деградации для источника с уже
+            известной CAPTCHA). Выключено по умолчанию — таким было
+            поведение ``AIAgent``-фолбэка до объединения, и он намеренно
+            не эскалирует к участию человека без реального решения LLM
+            (см. ``test_agent_choose_strategy_heuristic_captcha``).
+    """
+    if classification.source_type == SourceType.API:
+        return StrategyType.FAST
+    if classification.has_captcha:
+        return (
+            StrategyType.HITL
+            if escalate_captcha_to_hitl
+            else StrategyType.STEALTH
+        )
+    if classification.has_antibot:
         return StrategyType.STEALTH
     if classification.is_spa:
         return StrategyType.BROWSER

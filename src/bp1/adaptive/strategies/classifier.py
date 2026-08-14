@@ -13,6 +13,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
+from ..processing._llm.heuristics import heuristic_strategy
 from ..schemas import (
     BusinessFeatures,
     ExtendedSiteClassification,
@@ -488,17 +489,22 @@ class SourceClassifier:
         has_captcha: bool,
         is_spa: bool,
     ) -> StrategyType:
-        """Выбирает оптимальную стратегию обхода."""
-        if source_type == SourceType.API:
-            return StrategyType.FAST
+        """Выбирает оптимальную стратегию обхода.
 
-        if has_captcha:
-            return StrategyType.HITL
-
-        if has_antibot:
-            return StrategyType.STEALTH
-
-        if is_spa:
-            return StrategyType.BROWSER
-
-        return StrategyType.FAST
+        Тонкая обёртка над общей эвристикой ``heuristic_strategy``
+        (``processing/_llm/heuristics.py``), которая используется и здесь,
+        и как fallback в ``AIAgent`` — раньше логика была задублирована в
+        двух местах. При CAPTCHA рекомендуется сразу HITL
+        (``escalate_captcha_to_hitl=True``): для только что
+        классифицированного источника это обоснованная стартовая точка
+        деградации, в отличие от AIAgent-фолбэка (см. docstring
+        ``heuristic_strategy``).
+        """
+        classification = SourceClassification(
+            source_name='',
+            source_type=source_type,
+            has_antibot=has_antibot,
+            has_captcha=has_captcha,
+            is_spa=is_spa,
+        )
+        return heuristic_strategy(classification, escalate_captcha_to_hitl=True)

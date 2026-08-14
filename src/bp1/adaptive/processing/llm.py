@@ -90,11 +90,8 @@ def _has_llm_config() -> bool:
     return has_llm_config()
 
 
-# Промпты, сохранённые для обратной совместимости (при необходимости).
-from ._llm.prompts import (  # noqa: E402,F401
-    SELECTOR_EXTRACTION_PROMPT_V2,
-    SITE_CLASSIFICATION_PROMPT_V2,
-)
+# Промпт, сохранённый для обратной совместимости (при необходимости).
+from ._llm.prompts import SITE_CLASSIFICATION_PROMPT_V2  # noqa: E402,F401
 
 
 class _BaseLLMClient(BaseLLMClient):

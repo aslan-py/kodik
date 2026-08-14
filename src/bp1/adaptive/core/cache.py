@@ -13,10 +13,10 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from core.config import settings
 
+from ..hostname import try_extract_host
 from ..schemas import AdapterState, ProbedUrl, SourceClassification
 
 # TTL адаптера по умолчанию — 7 дней (в секундах).
@@ -39,26 +39,15 @@ def _canonical_source_name(source_name: str) -> str:
     голый домен (``lenta.ru``) или с ``www``. Чтобы адаптер, классификация и
     профиль находились независимо от формы ввода, ключ приводится к единому
     hostname. Если значение не похоже на корректный источник/URL — возвращается
-    исходная строка без изменений (fallback).
+    исходная строка без изменений (fallback: ключ кэша не должен ронять
+    пайплайн на невалидном вводе).
 
-    Логика продублирована из ``integration.sources.extract_host`` намеренно,
-    чтобы избежать циклического импорта (``sources`` импортирует ``cache``).
+    Разбор hostname — общий с ``integration.sources.extract_host``
+    (``adaptive.hostname.try_extract_host``); здесь остаётся только
+    контракт «не бросать исключение, а откатиться на исходную строку».
     """
-    value = (source_name or '').strip()
-    if not value or any(ch.isspace() for ch in value):
-        return source_name
-    try:
-        host = urlsplit(
-            value if '://' in value else f'https://{value}'
-        ).hostname
-        if not host:
-            return source_name
-    except Exception:
-        return source_name
-    host = host.lower()
-    if host.startswith('www.'):
-        host = host[4:]
-    return host
+    host = try_extract_host(source_name)
+    return host if host is not None else source_name
 
 
 class UnifiedCache:

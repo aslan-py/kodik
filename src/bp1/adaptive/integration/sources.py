@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.cache import UnifiedCache
+from ..hostname import try_extract_host
 from ..schemas import (
     SiteType,
     SourceClassification,
@@ -32,19 +33,14 @@ def extract_host(url_or_domain: str) -> str:
     """Возвращает hostname в нижнем регистре без ведущего ``www.``.
 
     Принимает и полный URL (``https://www.lenta.ru/news/1``), и голый домен
-    (``lenta.ru``). Для не-URL поднимает ``ValueError``.
+    (``lenta.ru``). Для не-URL поднимает ``ValueError`` (в отличие от
+    ``core.cache._canonical_source_name``, здесь невалидный ввод должен
+    быть виден пользователю, а не тихо проглочен как ключ кэша). Разбор
+    hostname — общий с ``core.cache`` (``adaptive.hostname.try_extract_host``).
     """
-    value = url_or_domain.strip()
-    if not value or any(ch.isspace() for ch in value):
+    host = try_extract_host(url_or_domain)
+    if host is None:
         raise ValueError('Некорректная ссылка на сайт')
-    if '://' not in value:
-        value = f'https://{value}'
-    host = urlsplit(value).hostname
-    if not host:
-        raise ValueError('Некорректная ссылка на сайт')
-    host = host.lower()
-    if host.startswith('www.'):
-        host = host[4:]
     return host
 
 

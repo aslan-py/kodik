@@ -16,9 +16,12 @@ from src.bp1.adaptive.processing.parser import (
     _to_absolute,
 )
 from src.bp1.adaptive.schemas import (
+    ExtendedSiteClassification,
+    SiteType,
     SourceClassification,
     StrategyResult,
     StrategyType,
+    TechnicalFeatures,
 )
 
 from .constants import (
@@ -262,6 +265,72 @@ async def test_parse_detects_antibot_from_real_html_no_prior_cache(
     assert classification is not None
     assert classification.has_antibot is True
     assert classification.recommended_strategy == StrategyType.STEALTH.value
+
+
+@pytest.mark.asyncio
+async def test_parse_enriches_classification_via_llm(monkeypatch):
+    """Шаг 10: classify_with_llm подключён к первому прогону по источнику.
+
+    LLM детектирует антибот-защиту, которую эвристика (по ключевым словам
+    в обычном _HTML без явных маркеров) не увидела бы — после первого
+    parse() (адаптер ещё не создан) has_antibot в кэше становится True.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    redis = _FakeRedis()
+    parser = AdaptiveParser(redis_client=redis)
+    parser._orchestrator = _FakeOrchestrator()  # обычный _HTML, без маркеров
+
+    async def _fake_classify_with_llm(html, url, headers=None):
+        return ExtendedSiteClassification(
+            source_name=url,
+            site_type=SiteType.NEWS,
+            confidence=0.9,
+            technical_features=TechnicalFeatures(has_antibot=True),
+        )
+
+    parser._llm_client.classify_with_llm = _fake_classify_with_llm
+
+    result = await parser.parse(
+        url=EXAMPLE_URL,
+        source_name=EXAMPLE_SOURCE_NAME,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+    assert result.status == PARSER_STATUS_OK
+
+    classification = await parser._cache.get_classification(EXAMPLE_SOURCE_NAME)
+    assert classification is not None
+    assert classification.has_antibot is True
+
+
+@pytest.mark.asyncio
+async def test_parse_llm_classify_failure_does_not_break_parse(monkeypatch):
+    """Сбой LLM-категоризации не роняет parse() и не портит уже
+    определённую эвристикой классификацию."""
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    redis = _FakeRedis()
+    parser = AdaptiveParser(redis_client=redis)
+    parser._orchestrator = _FakeOrchestrator()
+
+    async def _failing_classify_with_llm(html, url, headers=None):
+        raise RuntimeError('LLM timeout')
+
+    parser._llm_client.classify_with_llm = _failing_classify_with_llm
+
+    result = await parser.parse(
+        url=EXAMPLE_URL,
+        source_name=EXAMPLE_SOURCE_NAME,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+    # parse() не падает, несмотря на сбой LLM.
+    assert result.status == PARSER_STATUS_OK
+
+    classification = await parser._cache.get_classification(EXAMPLE_SOURCE_NAME)
+    # Классификация всё равно есть (создана эвристикой в Шагах 8-9),
+    # просто без LLM-уточнения.
+    assert classification is not None
+    assert classification.has_antibot is False
 
 
 def test_parse_items_with_selectors():

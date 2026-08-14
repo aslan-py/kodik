@@ -404,6 +404,15 @@ class AdaptiveParser:
             )
             await self._cache.set_adapter(source_name, adapter)
 
+            # 3.1 Уточняем категоризацию через LLM (Шаг 10 плана
+            #     рефакторинга, REFACTORING_PLAN.md — N1). Вызывается
+            #     только на первом (адаптер ещё не создан) прогоне по
+            #     источнику — не на каждом parse(), чтобы не платить
+            #     задержку LLM повторно.
+            await self._enrich_classification_with_llm(
+                source_name=source_name, url=url, html=html
+            )
+
         # 4. Сохраняем скачанную HTML-страницу результата поиска на диск.
         #    Копируем в bp1_html_dir (settings.bp1_data_root/html_pages) и
         #    кладём путь в extra.file_path, откуда его забирает runner.py
@@ -566,6 +575,78 @@ class AdaptiveParser:
             has_antibot,
             has_captcha,
             is_spa,
+        )
+
+    async def _enrich_classification_with_llm(
+        self, source_name: str, url: str, html: str
+    ) -> None:
+        """Уточняет закэшированную классификацию через LLM (Шаг 10, N1).
+
+        ``LLMClient.classify_with_llm()`` — самый детальный инструмент
+        категоризации пакета (20 типов сайта, бизнес- и технические
+        признаки, промпт ``SITE_CLASSIFICATION_PROMPT_V2``), но раньше не
+        вызывался из боевого конвейера ни разу — только из ручного
+        smoke-теста. Использует другую доменную схему
+        (``ExtendedSiteClassification``), чем ``SourceClassification``,
+        которая реально управляет выбором стратегии, поэтому сливаем
+        осторожно:
+
+        - ``source_type`` НЕ трогаем: ``to_source_classification()``
+          всегда возвращает ``SourceType.UNKNOWN`` — это ограничение
+          конвертера (``ExtendedSiteClassification`` не хранит
+          ``SourceType``), а не сигнал от LLM, который можно доверять
+          больше эвристики.
+        - ``has_antibot``/``has_captcha``/``is_spa`` только усиливаются
+          (``False -> True``), как и в ``_reconcile_classification``
+          (Шаг 9) — неуверенный или ошибочный LLM-ответ не должен отменить
+          уже подтверждённую эвристикой/стратегией защиту.
+        - ``recommended_strategy`` НЕ трогаем: это эмпирический факт
+          (реально сработавшая стратегия, Шаг 8), предсказание LLM до
+          попытки не может быть надёжнее уже подтверждённого результата.
+
+        Не пробрасывает исключения: сбой LLM (таймаут, невалидный ответ)
+        не должен ронять сбор — при ошибке классификация остаётся такой,
+        какой её оставили эвристика/Шаг 8-9.
+        """
+        try:
+            extended = await self._llm_client.classify_with_llm(html, url)
+        except Exception as exc:  # pragma: no cover - зависит от LLM
+            self._logger.warning(
+                'Ошибка LLM-категоризации источника %s: %s', source_name, exc
+            )
+            return
+
+        llm_derived = extended.to_source_classification()
+        current = await self._cache.get_classification(source_name)
+        base = current or llm_derived
+
+        has_antibot = base.has_antibot or llm_derived.has_antibot
+        has_captcha = base.has_captcha or llm_derived.has_captcha
+        is_spa = base.is_spa or llm_derived.is_spa
+
+        changed = (
+            current is None
+            or base.has_antibot != has_antibot
+            or base.has_captcha != has_captcha
+            or base.is_spa != is_spa
+        )
+        if not changed:
+            return
+
+        updated = base.model_copy(
+            update={
+                'has_antibot': has_antibot,
+                'has_captcha': has_captcha,
+                'is_spa': is_spa,
+            }
+        )
+        await self._cache.set_classification(source_name, updated)
+        self._logger.info(
+            'Классификация %s уточнена через LLM (site_type=%s, '
+            'confidence=%.2f)',
+            source_name,
+            extended.site_type.value,
+            extended.confidence,
         )
 
     # ------------------------------------------------------------------

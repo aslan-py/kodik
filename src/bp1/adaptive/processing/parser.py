@@ -376,6 +376,35 @@ class AdaptiveParser:
 
         html = strategy_result.data
 
+        # 2.1 Персистентно обновляем классификацию по факту успешной
+        #     стратегии (Шаг 8 плана рефакторинга, REFACTORING_PLAN.md).
+        #     Раньше recommended_strategy кэшировался один раз при первой
+        #     классификации и не обновлялся, даже если реально сработала
+        #     другая, более "тяжёлая" стратегия (например, STEALTH вместо
+        #     закэшированного FAST) — каждый повторный запуск по источнику
+        #     заново проходил всю лестницу деградации (FAST -> CRAWL4AI ->
+        #     BROWSER -> ...), прежде чем дойти до рабочей стратегии.
+        #     Обновляем только уже существующую классификацию — создание
+        #     классификации "с нуля" по факту первого успеха относится к
+        #     Шагу 9, который меняет сам порядок классификации/фетча.
+        actual_strategy = strategy_result.strategy
+        if (
+            classification is not None
+            and classification.recommended_strategy != actual_strategy.value
+        ):
+            updated_classification = classification.model_copy(
+                update={'recommended_strategy': actual_strategy.value}
+            )
+            await self._cache.set_classification(
+                source_name, updated_classification
+            )
+            self._logger.info(
+                'Классификация %s обновлена по факту успеха: %s -> %s',
+                source_name,
+                classification.recommended_strategy,
+                actual_strategy.value,
+            )
+
         # 3. Если адаптера нет — анализируем структуру и генерируем адаптер.
         if adapter is None:
             config = await self._llm_client.analyze_structure(

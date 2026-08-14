@@ -15,7 +15,11 @@ from src.bp1.adaptive.processing.parser import (
     _parse_items,
     _to_absolute,
 )
-from src.bp1.adaptive.schemas import StrategyResult, StrategyType
+from src.bp1.adaptive.schemas import (
+    SourceClassification,
+    StrategyResult,
+    StrategyType,
+)
 
 from .constants import (
     COMPETITOR,
@@ -110,6 +114,107 @@ async def test_parse_failed_fetch_returns_error():
     )
     assert result.status == PARSER_STATUS_ERROR
     assert NETWORK_ERROR in (result.error or '')
+
+
+class _FakeRedis:
+    """Фейковый Redis-клиент для тестов (хранилище в памяти)."""
+
+    def __init__(self):
+        self._store: dict[str, str] = {}
+
+    async def get(self, key: str):
+        return self._store.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None):
+        self._store[key] = value
+
+    async def delete(self, key: str):
+        self._store.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_parse_updates_cached_classification_on_real_strategy(
+    monkeypatch,
+):
+    """Шаг 8: успешная стратегия персистентно обновляет классификацию.
+
+    Источник закэширован с recommended_strategy=FAST, но реально
+    fetch_with_degradation возвращает успех через STEALTH (например,
+    классификация была неточной или устарела) — после parse() кэш должен
+    отражать реально сработавшую стратегию, а не устаревшую.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    redis = _FakeRedis()
+    parser = AdaptiveParser(redis_client=redis)
+
+    await parser._cache.set_classification(
+        EXAMPLE_SOURCE_NAME,
+        SourceClassification(
+            source_name=EXAMPLE_SOURCE_NAME,
+            recommended_strategy=StrategyType.FAST.value,
+        ),
+    )
+
+    class _StealthOrchestrator:
+        async def fetch_with_degradation(self, url: str, **kwargs):
+            return StrategyResult(
+                strategy=StrategyType.STEALTH,
+                success=True,
+                data=_HTML,
+                content_length=len(_HTML),
+            )
+
+    parser._orchestrator = _StealthOrchestrator()
+
+    result = await parser.parse(
+        url=EXAMPLE_URL,
+        source_name=EXAMPLE_SOURCE_NAME,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+    assert result.status == PARSER_STATUS_OK
+    assert result.strategy_used == StrategyType.STEALTH
+
+    updated = await parser._cache.get_classification(EXAMPLE_SOURCE_NAME)
+    assert updated is not None
+    assert updated.recommended_strategy == StrategyType.STEALTH.value
+
+
+@pytest.mark.asyncio
+async def test_parse_no_cache_write_when_strategy_unchanged(monkeypatch):
+    """Если реальная стратегия совпадает с закэшированной — лишней
+    записи в кэш не происходит (set вызывается только при расхождении)."""
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    redis = _FakeRedis()
+    parser = AdaptiveParser(redis_client=redis)
+
+    await parser._cache.set_classification(
+        EXAMPLE_SOURCE_NAME,
+        SourceClassification(
+            source_name=EXAMPLE_SOURCE_NAME,
+            recommended_strategy=StrategyType.FAST.value,
+        ),
+    )
+
+    calls: list[str] = []
+    original_set = parser._cache.set_classification
+
+    async def _tracking_set(source_name, classification, **kwargs):
+        calls.append(classification.recommended_strategy)
+        return await original_set(source_name, classification, **kwargs)
+
+    parser._cache.set_classification = _tracking_set
+    parser._orchestrator = _FakeOrchestrator()  # возвращает FAST
+
+    await parser.parse(
+        url=EXAMPLE_URL,
+        source_name=EXAMPLE_SOURCE_NAME,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+    # set_classification не вызывался повторно — стратегия не изменилась
+    # (единственный вызов был в подготовке теста, до подмены).
+    assert calls == []
 
 
 def test_parse_items_with_selectors():

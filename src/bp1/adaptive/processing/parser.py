@@ -331,35 +331,52 @@ class AdaptiveParser:
         #    (AIAgent.choose_strategy), что позволяет в ряде стратегий/случаев
         #    обращаться к LLM. При недоступности LLM или невалидном ответе
         #    агент возвращает эвристику.
+        #
+        #    classification — то, что реально было в кэше ДО этого вызова
+        #    (или None). Именно это значение уходит ниже в
+        #    _reconcile_classification/_enrich_classification_with_llm —
+        #    от него зависит, была ли классификация закэширована раньше.
+        #    Подменять его "слепой" классификацией здесь нельзя: тогда
+        #    "classification is None" перестанет означать "ничего не было
+        #    в кэше", и первый успешный прогон перестанет туда писать.
         start_with: StrategyType | None = None
         classification = await self._cache.get_classification(source_name)
-        if classification is not None:
-            try:
-                start_with = StrategyType(classification.recommended_strategy)
-            except ValueError:
-                start_with = None
+
+        # Шаг 11 плана рефакторинга (N4): раньше агент консультировался
+        # только если классификация уже была в кэше — на первом (холодном)
+        # прогоне по источнику агент не участвовал вообще. Строим для него
+        # отдельный, не кэшируемый здесь вход: при отсутствии кэша —
+        # "слепая" (без HTML) эвристическая классификация по имени/URL.
+        # Даже без HTML агент получает source_name/URL в промпте и может
+        # опознать конкретный известный сайт по своим знаниям о мире.
+        agent_input = classification
+        if agent_input is None:
+            agent_input = await self._classifier.classify(
+                source_name=source_name, source_url=url
+            )
+
+        try:
+            start_with = StrategyType(agent_input.recommended_strategy)
+        except ValueError:
+            start_with = None
         # LLM-агент уточняет стратегию обхода по классификации (fallback —
         # эвристика при недоступности LLM). Это ключевая точка, где реально
-        # вызывается LLM в боевом конвейере. Если классификация ещё не
-        # рассчитана (нет в кэше) — агент не вызываем и используем дефолт.
-        if classification is not None:
-            try:
-                agent_strategy = await self._agent.choose_strategy(
-                    classification
-                )
-                if agent_strategy is not None:
-                    start_with = agent_strategy
-                    self._logger.info(
-                        'Агент выбрал стратегию %s для %s (LLM-решение)',
-                        agent_strategy.value,
-                        source_name,
-                    )
-            except Exception as exc:  # pragma: no cover - зависит от LLM
-                self._logger.warning(
-                    'Ошибка выбора стратегии агентом для %s: %s',
+        # вызывается LLM в боевом конвейере.
+        try:
+            agent_strategy = await self._agent.choose_strategy(agent_input)
+            if agent_strategy is not None:
+                start_with = agent_strategy
+                self._logger.info(
+                    'Агент выбрал стратегию %s для %s (LLM-решение)',
+                    agent_strategy.value,
                     source_name,
-                    exc,
                 )
+        except Exception as exc:  # pragma: no cover - зависит от LLM
+            self._logger.warning(
+                'Ошибка выбора стратегии агентом для %s: %s',
+                source_name,
+                exc,
+            )
 
         strategy_result = await self._orchestrator.fetch_with_degradation(
             url,

@@ -333,6 +333,38 @@ async def test_parse_llm_classify_failure_does_not_break_parse(monkeypatch):
     assert classification.has_antibot is False
 
 
+@pytest.mark.asyncio
+async def test_parse_agent_consulted_on_cold_start(monkeypatch):
+    """Шаг 11: агент консультируется и без предварительной классификации
+    в кэше (холодный старт), а не только когда она уже была закэширована.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    redis = _FakeRedis()
+    parser = AdaptiveParser(redis_client=redis)
+    parser._orchestrator = _FakeOrchestrator()
+    assert await parser._cache.get_classification(EXAMPLE_SOURCE_NAME) is None
+
+    calls: list[SourceClassification] = []
+    original_choose = parser._agent.choose_strategy
+
+    async def _tracking_choose(classification):
+        calls.append(classification)
+        return await original_choose(classification)
+
+    parser._agent.choose_strategy = _tracking_choose
+
+    result = await parser.parse(
+        url=EXAMPLE_URL,
+        source_name=EXAMPLE_SOURCE_NAME,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+    assert result.status == PARSER_STATUS_OK
+    # Агент вызван ровно один раз, даже без предварительного кэша.
+    assert len(calls) == 1
+    assert calls[0].source_name == EXAMPLE_SOURCE_NAME
+
+
 def test_parse_items_with_selectors():
     """_parse_items извлекает поля по селекторам адаптера."""
     html = """

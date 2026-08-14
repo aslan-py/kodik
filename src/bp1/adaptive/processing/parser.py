@@ -381,6 +381,11 @@ class AdaptiveParser:
         strategy_result = await self._orchestrator.fetch_with_degradation(
             url,
             start_with=start_with,
+            # Шаг 12 плана рефакторинга (N10): та же классификация, что
+            # выбрала start_with (реальная из кэша либо слепая — Шаг 11),
+            # сужает перебор до заведомо небесполезных стратегий вместо
+            # полного круга по _DEGRADATION_ORDER.
+            classification=agent_input,
             source_name=source_name,
         )
         if not strategy_result.success or not strategy_result.data:

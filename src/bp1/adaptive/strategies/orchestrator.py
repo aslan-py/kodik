@@ -12,10 +12,11 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from core.config import settings
 
-from ..schemas import StrategyResult, StrategyType
+from ..schemas import SourceClassification, StrategyResult, StrategyType
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,58 @@ _DEGRADATION_ORDER = (
     StrategyType.STEALTH,
     StrategyType.HITL,
 )
+
+# Таблица «классификация -> допустимое подмножество _DEGRADATION_ORDER»
+# (Шаг 12 плана рефакторинга, REFACTORING_PLAN.md — N10). Раньше классификация
+# влияла только на то, С КАКОЙ стратегии начинать (``start_with``) — сам
+# перебор всё равно проходил через все 6 стратегий по кругу, включая
+# заведомо бесполезные для уже подтверждённой защиты (например, CRAWL4AI не
+# умеет обходить антибот — ни один запрос через него не решит челлендж).
+# Первое подходящее правило побеждает; порядок стратегий внутри значения —
+# тот же, что и в _DEGRADATION_ORDER (сама последовательность деградации не
+# меняется, меняется только то, какие стратегии в принципе рассматриваются).
+_ALLOWED_STRATEGIES_TABLE: tuple[
+    tuple[Callable[[SourceClassification], bool], tuple[StrategyType, ...]],
+    ...,
+] = (
+    # CAPTCHA: FAST/CRAWL4AI/BROWSER не решают челлендж — сразу тяжёлые.
+    (
+        lambda c: c.has_captcha,
+        (StrategyType.STEALTH, StrategyType.WAYBACK, StrategyType.HITL),
+    ),
+    # Антибот без SPA: CRAWL4AI не создан для обхода антибот-защиты (нет
+    # собственного stealth-слоя) — пропускаем его, остальное пробуем.
+    (
+        lambda c: c.has_antibot and not c.is_spa,
+        (
+            StrategyType.FAST,
+            StrategyType.BROWSER,
+            StrategyType.WAYBACK,
+            StrategyType.STEALTH,
+            StrategyType.HITL,
+        ),
+    ),
+)
+
+
+def _allowed_strategies(
+    classification: SourceClassification | None,
+) -> tuple[StrategyType, ...]:
+    """Допустимое подмножество ``_DEGRADATION_ORDER`` для классификации.
+
+    Возвращает полный ``_DEGRADATION_ORDER``, если классификация
+    отсутствует или не подпадает ни под одно правило таблицы —
+    деградация ведёт себя как раньше (пробует всё по порядку). WAYBACK и
+    HITL никогда не исключаются ни одним правилом: это универсальные
+    стратегии «последней надежды», не завязанные на конкретный механизм
+    защиты.
+    """
+    if classification is not None:
+        for predicate, allowed in _ALLOWED_STRATEGIES_TABLE:
+            if predicate(classification):
+                return allowed
+    return _DEGRADATION_ORDER
+
 
 # User-Agent по умолчанию для HTTP-стратегий.
 _DEFAULT_USER_AGENT = (
@@ -394,6 +447,7 @@ class AgenticOrchestrator:
         self,
         url: str,
         start_with: StrategyType | None = None,
+        classification: SourceClassification | None = None,
         **kwargs,
     ) -> StrategyResult:
         """
@@ -404,27 +458,37 @@ class AgenticOrchestrator:
         3. Если CRAWL4AI не сработал → BROWSER (Playwright)
         4. Если BROWSER не сработал → WAYBACK (Internet Archive)
         5. Если все стратегии не сработали → HITL (человек)
+
+        ``classification`` (Шаг 12 плана рефакторинга, N10) сужает перебор
+        до подмножества ``_allowed_strategies()`` — заведомо бесполезные
+        для уже подтверждённой защиты стратегии (например, CRAWL4AI при
+        известном антиботе) не пробуются вовсе, а не просто откладываются
+        на потом. При ``classification=None`` (или когда классификация не
+        подпадает ни под одно правило таблицы) поведение не меняется —
+        используется полный ``_DEGRADATION_ORDER``, как раньше.
         """
+        base_order = _allowed_strategies(classification)
+
         start_index = 0
         if start_with is not None:
             try:
-                start_index = _DEGRADATION_ORDER.index(start_with)
+                start_index = base_order.index(start_with)
             except ValueError:
                 start_index = 0
             # start_with задаёт лишь начало перебора: проходим от start_with
             # до конца цепочки, а затем «догоняем» стратегии из начала,
             # не повторяя уже пройденные. Так при провале STEALTH будут
-            # испробованы HITL и остальные стратегии (BROWSER/WAYBACK/FAST/
-            # CRAWL4AI), а не только STEALTH → HITL.
-            trailing = _DEGRADATION_ORDER[start_index:]
+            # испробованы HITL и остальные допустимые стратегии, а не
+            # только STEALTH → HITL.
+            trailing = base_order[start_index:]
             leading = tuple(
-                t for t in _DEGRADATION_ORDER[:start_index] if t not in trailing
+                t for t in base_order[:start_index] if t not in trailing
             )
             # Оба слагаемых — tuple, чтобы не получить
             # "can only concatenate tuple (not 'list') to tuple".
             order = trailing + leading
         else:
-            order = _DEGRADATION_ORDER
+            order = base_order
 
         for strategy_type in order:
             strategy = self._strategies.get(strategy_type)

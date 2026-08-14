@@ -567,9 +567,16 @@ class AIAgent(BaseLLMClient):
     ) -> list[dict[str, Any]]:
         """Пакетный скоринг релевантности элементов относительно конкурента.
 
-        Если LLM настроен — отправляет все элементы одним запросом и получает
-        per-item оценку ``0.0-1.0``. Иначе (или при сбое LLM) — использует
-        детерминированный лексический скоринг ``heuristic_relevance_score``.
+        Если LLM настроен — делит элементы на пачки по
+        ``constants.RELEVANCE_BATCH_SIZE`` (Шаг 14 плана рефакторинга,
+        REFACTORING_PLAN.md — N7) и обрабатывает их параллельно
+        (``run_limited``). Раньше весь список уходил в LLM одним запросом:
+        при росте числа элементов ответ рисковал упереться в
+        ``RELEVANCE_MAX_TOKENS`` и обрезаться — ``parse_json`` тихо
+        возвращал ``{}``, и на эвристику откатывался ВЕСЬ список, а не
+        только "лишние" элементы. Батчирование ограничивает деградацию
+        одной пачкой: сбой/усечение LLM-ответа для одной пачки не портит
+        оценку остальных.
 
         Args:
             items: Собранные элементы ``(title, url, text)``.
@@ -579,7 +586,8 @@ class AIAgent(BaseLLMClient):
 
         Returns:
             Список словарей ``{"index", "score", "relevant"}`` той же длины,
-            что и ``items``.
+            что и ``items``, с ``index`` — сквозным по всему исходному
+            списку (не по пачке).
         """
         if not items:
             return []
@@ -587,9 +595,47 @@ class AIAgent(BaseLLMClient):
         if not _has_llm_config():
             return self._heuristic_relevance(items, competitor, trigger, inn)
 
+        batch_size = constants.RELEVANCE_BATCH_SIZE
+        batches: list[tuple[int, list[dict[str, Any]]]] = []
+        offset = 0
+        for start in range(0, len(items), batch_size):
+            batch = items[start : start + batch_size]
+            batches.append((offset, batch))
+            offset += len(batch)
+
+        if len(batches) > 1:
+            self._logger.info(
+                'Скоринг релевантности: %d элементов -> %d пачек по %d',
+                len(items),
+                len(batches),
+                batch_size,
+            )
+
+        batch_results = await run_limited(
+            batches,
+            lambda entry: self._score_relevance_batch(
+                entry, competitor, trigger, inn
+            ),
+            constants.DEFAULT_PARALLEL_WORKERS,
+            self._logger,
+            'Ошибка обработки пачки релевантности: %s',
+        )
+        return [score for batch in batch_results for score in batch]
+
+    async def _score_relevance_batch(
+        self,
+        entry: tuple[int, list[dict[str, Any]]],
+        competitor: str,
+        trigger: str,
+        inn: str | None,
+    ) -> list[dict[str, Any]]:
+        """Скорит одну пачку элементов, возвращая сквозные (не локальные)
+        индексы. Сбой LLM для этой пачки деградирует на эвристику только
+        для неё — перехватывается здесь, наружу не пробрасывается."""
+        batch_offset, batch = entry
         try:
             prompt = prompt_builders.build_relevance_prompt(
-                items, competitor, trigger
+                batch, competitor, trigger
             )
             content = await self._complete(
                 prompt,
@@ -599,13 +645,24 @@ class AIAgent(BaseLLMClient):
             data = parse_json(content or '') if content else {}
             response = RelevanceResponse(**data)
             if not response.items:
-                return self._heuristic_relevance(
-                    items, competitor, trigger, inn
+                local_scores = self._heuristic_relevance(
+                    batch, competitor, trigger, inn
                 )
-            return mappers.to_relevance_scores(items, response)
+            else:
+                local_scores = mappers.to_relevance_scores(batch, response)
         except Exception as e:
-            self._logger.warning('Ошибка LLM-скоринга релевантности: %s', e)
-            return self._heuristic_relevance(items, competitor, trigger, inn)
+            self._logger.warning(
+                'Ошибка LLM-скоринга релевантности пачки (offset=%d): %s',
+                batch_offset,
+                e,
+            )
+            local_scores = self._heuristic_relevance(
+                batch, competitor, trigger, inn
+            )
+        return [
+            {**score, 'index': score['index'] + batch_offset}
+            for score in local_scores
+        ]
 
     @staticmethod
     def _heuristic_relevance(

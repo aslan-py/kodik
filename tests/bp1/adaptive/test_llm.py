@@ -1,5 +1,6 @@
 """Тесты для LLMClient и AIAgent (llm.py)."""
 
+import re
 import sys
 from types import ModuleType
 
@@ -33,6 +34,7 @@ from .constants import (
     SELECTOR_TITLE_VALUE,
     SELECTOR_URL_VALUE,
     TEST_API_KEY,
+    TRIGGER,
 )
 
 
@@ -447,3 +449,110 @@ async def test_classify_with_llm_real_path(monkeypatch):
     assert result.business_features.has_payment is True
     assert result.complexity_score == 0.6
     assert result.recommended_strategy == 'BROWSER'
+
+
+# ============================================================================
+# Шаг 14: батчирование score_relevance (N7)
+# ============================================================================
+
+
+def _batch_size_from_prompt(prompt: str) -> int:
+    """Число элементов, реально переданных в промпт (по вхождениям
+    "index": N в JSON-пейлоаде).
+
+    RELEVANCE_PROMPT сам по себе содержит один пример ``"index": 0`` в
+    инструкции для модели ("Верни ТОЛЬКО JSON: ...") — вычитаем его,
+    чтобы считать только элементы пейлоада.
+    """
+    return len(re.findall(r'"index":\s*\d+', prompt)) - 1
+
+
+@pytest.mark.asyncio
+async def test_score_relevance_batches_large_list(monkeypatch):
+    """Список из 50 элементов делится на пачки — все получают оценку,
+    индексы сквозные по всему исходному списку (не по пачке)."""
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
+    agent = AIAgent()
+    items = [{'title': f'Новость {i}', 'text': 'текст'} for i in range(50)]
+
+    calls: list[str] = []
+
+    async def _fake_complete(prompt, **kwargs):
+        calls.append(prompt)
+        batch_len = _batch_size_from_prompt(prompt)
+        items_json = ', '.join(
+            f'{{"index": {i}, "score": 0.9, "relevant": true}}'
+            for i in range(batch_len)
+        )
+        return f'{{"items": [{items_json}]}}'
+
+    agent._complete = _fake_complete
+
+    scores = await agent.score_relevance(items, COMPETITOR, TRIGGER)
+
+    assert len(scores) == 50
+    # 50 элементов / RELEVANCE_BATCH_SIZE=15 -> 4 пачки (15, 15, 15, 5).
+    assert len(calls) == 4
+    assert sorted(s['index'] for s in scores) == list(range(50))
+    assert all(s['relevant'] for s in scores)
+
+
+@pytest.mark.asyncio
+async def test_score_relevance_batch_failure_isolated(monkeypatch):
+    """Усечённый/невалидный LLM-ответ для одной пачки деградирует на
+    эвристику только для неё — остальные пачки не теряют LLM-оценку."""
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
+    agent = AIAgent()
+    # 20 элементов -> пачки [0:15] и [15:20] (15 и 5 элементов).
+    items = [
+        {'title': f'{COMPETITOR} упоминание {i}', 'text': 'текст'}
+        for i in range(20)
+    ]
+
+    async def _fake_complete(prompt, **kwargs):
+        batch_len = _batch_size_from_prompt(prompt)
+        if batch_len == 5:
+            # Вторая (последняя, меньшая) пачка — "обрезанный" ответ.
+            return 'not valid json {{{'
+        items_json = ', '.join(
+            f'{{"index": {i}, "score": 0.1, "relevant": false}}'
+            for i in range(batch_len)
+        )
+        return f'{{"items": [{items_json}]}}'
+
+    agent._complete = _fake_complete
+
+    scores = await agent.score_relevance(items, COMPETITOR, '')
+
+    assert len(scores) == 20
+    first_batch = [s for s in scores if s['index'] < 15]
+    assert len(first_batch) == 15
+    assert all(s['score'] == 0.1 for s in first_batch)
+
+    second_batch = [s for s in scores if s['index'] >= 15]
+    assert len(second_batch) == 5
+    # Эвристика: конкурент дословно упомянут в title -> высокий score,
+    # а не молчаливая деградация всего списка (как было бы без Шага 14).
+    assert all(s['score'] > 0.1 for s in second_batch)
+
+
+@pytest.mark.asyncio
+async def test_score_relevance_single_batch_unchanged_behavior(monkeypatch):
+    """Список короче RELEVANCE_BATCH_SIZE — одна пачка, поведение как до
+    батчирования (один LLM-запрос)."""
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
+    agent = AIAgent()
+    items = [{'title': 'Новость', 'text': 'текст'}]
+
+    calls: list[str] = []
+
+    async def _fake_complete(prompt, **kwargs):
+        calls.append(prompt)
+        return '{"items": [{"index": 0, "score": 0.8, "relevant": true}]}'
+
+    agent._complete = _fake_complete
+
+    scores = await agent.score_relevance(items, COMPETITOR, TRIGGER)
+
+    assert len(calls) == 1
+    assert scores == [{'index': 0, 'score': 0.8, 'relevant': True}]

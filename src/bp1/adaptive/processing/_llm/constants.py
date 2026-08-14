@@ -36,6 +36,13 @@ TEMPERATURE_GENERATIVE = 0.2
 RELEVANCE_MAX_TOKENS = 2048
 TEMPERATURE_RELEVANCE = 0.0
 DEFAULT_RELEVANCE_THRESHOLD = 0.6
+# Максимум элементов в одном LLM-запросе скоринга релевантности (Шаг 14
+# плана рефакторинга, N7). Весь список одним запросом рисковал упереться
+# в RELEVANCE_MAX_TOKENS при росте числа элементов — ответ обрезался,
+# parse_json тихо отдавал {}, и на эвристику откатывался весь список, а
+# не только "лишние" элементы. 15 — по ~130 токенов ответа на элемент
+# (index/score/relevant) укладывается в RELEVANCE_MAX_TOKENS с запасом.
+RELEVANCE_BATCH_SIZE = 15
 
 # Обогащение события (Фича 3).
 ENRICHMENT_MAX_TOKENS = 2048

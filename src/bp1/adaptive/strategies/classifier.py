@@ -13,6 +13,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
+from ..hostname import KNOWN_REGISTRY_DOMAINS
 from ..processing._llm.heuristics import heuristic_strategy
 from ..schemas import (
     BusinessFeatures,
@@ -138,15 +139,8 @@ _ANTIBOT_MARKERS = (
 # Домены, которые являются API-эндпоинтами.
 _API_DOMAINS = ('api.', 'api-', '.api.')
 
-# Домены государственных реестров.
-_REGISTRY_DOMAINS = (
-    'fedresurs.ru',
-    'fips.ru',
-    'zakupki.gov.ru',
-    'kad.arbitr.ru',
-    'nalog.ru',
-    'egrul.nalog.ru',
-)
+# Домены государственных реестров — общий список, adaptive/hostname.py.
+_REGISTRY_DOMAINS = KNOWN_REGISTRY_DOMAINS
 
 # Известные источники с их характеристиками защиты.
 # Используется, когда headers/html недоступны (классификация по имени/URL).

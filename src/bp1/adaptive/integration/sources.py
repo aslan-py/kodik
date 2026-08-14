@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.cache import UnifiedCache
-from ..hostname import try_extract_host
+from ..hostname import KNOWN_REGISTRY_DOMAINS, try_extract_host
 from ..schemas import (
     SiteType,
     SourceClassification,
@@ -159,14 +159,8 @@ def build_search_url(source_name: str, search_param: str) -> str:
 # Домены государственных реестров/органов, где поиск даёт положительный ответ
 # именно по ИНН. Дублирует классификацию (SourceType.REGISTRY), но добавляет
 # надёжный fallback для неизвестных госдоменов без скачивания страницы.
-_REGISTRY_INN_DOMAINS = (
-    'fedresurs.ru',
-    'fips.ru',
-    'zakupki.gov.ru',
-    'kad.arbitr.ru',
-    'nalog.ru',
-    'egrul.nalog.ru',
-)
+# Общий список — adaptive/hostname.py::KNOWN_REGISTRY_DOMAINS.
+_REGISTRY_INN_DOMAINS = KNOWN_REGISTRY_DOMAINS
 
 # Типы сайтов, где предпочтителен поиск по ИНН (госреестры/госорганы).
 _INN_SITE_TYPES = frozenset({SiteType.GOVERNMENT, SiteType.LEGAL})

@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 from core.config import settings
 
+from ..hostname import KNOWN_REGISTRY_DOMAINS, try_extract_host
 from ..schemas import SourceClassification, StrategyResult, StrategyType
 
 logger = logging.getLogger(__name__)
@@ -142,7 +143,8 @@ def _ssl_unverified_context():
     недоверенные сертификаты, из-за чего ``urllib.request`` бросает
     ``CERTIFICATE_VERIFY_FAILED`` и FAST-стратегия ложно падает. Контекст без
     верификации используется как fallback (аналогично ``ignore_https_errors``
-    в браузерных стратегиях).
+    в браузерных стратегиях) — но не для любого домена, см.
+    ``_is_trusted_self_signed_domain`` (Шаг 13 плана рефакторинга, N11).
     """
     import ssl
 
@@ -150,6 +152,25 @@ def _ssl_unverified_context():
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
+
+
+def _is_trusted_self_signed_domain(url: str) -> bool:
+    """True, если домен URL — из списка известных доменов с
+    самоподписанными/недоверенными TLS-сертификатами (Шаг 13, N11).
+
+    Раньше ``_fetch_sync`` при ЛЮБОЙ ошибке (включая
+    ``CERTIFICATE_VERIFY_FAILED``) молча повторял запрос без проверки
+    сертификата — риск MITM для произвольного домена, а не только для
+    заведомо доверенных гос.порталов, для которых этот фолбэк изначально
+    и задумывался. Ограничиваем его ``KNOWN_REGISTRY_DOMAINS`` — тем же
+    списком, что использует ``SourceClassifier`` для детекции
+    ``SourceType.REGISTRY`` и ``SearchParamResolver`` для выбора ИНН как
+    поискового параметра.
+    """
+    host = try_extract_host(url)
+    return host is not None and any(
+        domain in host for domain in KNOWN_REGISTRY_DOMAINS
+    )
 
 
 def _fetch_sync(url: str, timeout_ms: int, user_agent: str) -> str:
@@ -166,9 +187,17 @@ def _fetch_sync(url: str, timeout_ms: int, user_agent: str) -> str:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode('utf-8', errors='replace')
     except Exception:
-        # SSL/сертификат недоверенный — повторяем без верификации, чтобы
-        # не ронять FAST-стратегию на гос.порталах с самоподписанными
-        # сертификатами.
+        if not _is_trusted_self_signed_domain(url):
+            # Домен вне списка известных гос.порталов — TLS-ошибка
+            # (или любая другая) остаётся ошибкой. FastStrategy падает,
+            # деградация переходит дальше (BROWSER/STEALTH), где
+            # ``ignore_https_errors=True`` уже осознанно применяется на
+            # уровне контекста браузера, а не глобального SSL-контекста
+            # Python.
+            raise
+        # Известный гос.портал с самоподписанным/недоверенным
+        # сертификатом — повторяем без верификации, чтобы не ронять
+        # FAST-стратегию на нём.
         with urllib.request.urlopen(
             req, timeout=timeout, context=_ssl_unverified_context()
         ) as resp:

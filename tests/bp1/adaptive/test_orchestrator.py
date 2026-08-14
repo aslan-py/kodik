@@ -1,5 +1,8 @@
 """1Тесты для AgenticOrchestrator."""
 
+import ssl
+import urllib.request
+
 import pytest
 
 from src.bp1.adaptive.schemas import (
@@ -13,6 +16,8 @@ from src.bp1.adaptive.strategies.orchestrator import (
     BaseStrategy,
     WaybackStrategy,
     _allowed_strategies,
+    _fetch_sync,
+    _is_trusted_self_signed_domain,
 )
 
 from .constants import (
@@ -294,3 +299,68 @@ async def test_fetch_with_degradation_start_with_excluded_falls_back():
     assert result.success is False
     assert StrategyType.CRAWL4AI not in order
     assert order[0] == StrategyType.FAST
+
+
+# ============================================================================
+# Шаг 13: ограничение fallback без верификации TLS (N11)
+# ============================================================================
+
+
+def test_is_trusted_self_signed_domain():
+    """Только известные гос.порталы считаются доверенными для fallback
+    без верификации TLS."""
+    assert _is_trusted_self_signed_domain('https://fedresurs.ru/x') is True
+    assert _is_trusted_self_signed_domain('https://www.nalog.ru/y') is True
+    assert _is_trusted_self_signed_domain('https://example.com') is False
+    assert _is_trusted_self_signed_domain('not a url') is False
+
+
+class _FakeResponse:
+    """Фейковый ответ urlopen (контекстный менеджер с .read())."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def test_fetch_sync_untrusted_domain_ssl_error_propagates(monkeypatch):
+    """TLS-ошибка на домене вне известных гос.порталов остаётся
+    ошибкой — fallback без верификации не применяется (раньше применялся
+    для любого домена)."""
+
+    def _raise(*args, **kwargs):
+        raise ssl.SSLCertVerificationError('certificate verify failed')
+
+    monkeypatch.setattr(urllib.request, 'urlopen', _raise)
+
+    with pytest.raises(ssl.SSLCertVerificationError):
+        _fetch_sync('https://example.com', 5000, 'UA')
+
+
+def test_fetch_sync_trusted_domain_retries_without_verification(monkeypatch):
+    """TLS-ошибка на известном гос.портале — fallback без верификации
+    по-прежнему срабатывает (поведение не изменилось для доверенного
+    списка)."""
+    calls: list[dict] = []
+
+    def _urlopen(req, timeout=None, context=None):
+        calls.append({'context': context})
+        if context is None:
+            raise ssl.SSLCertVerificationError('certificate verify failed')
+        return _FakeResponse(b'ok content')
+
+    monkeypatch.setattr(urllib.request, 'urlopen', _urlopen)
+
+    result = _fetch_sync('https://fedresurs.ru/search', 5000, 'UA')
+    assert result == 'ok content'
+    assert len(calls) == 2
+    assert calls[0]['context'] is None
+    assert calls[1]['context'] is not None

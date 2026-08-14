@@ -13,6 +13,23 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+# Домены государственных реестров/органов — единый источник истины.
+# Раньше был продублирован под разными именами в strategies/classifier.py
+# (``_REGISTRY_DOMAINS``, детекция SourceType.REGISTRY) и
+# integration/sources.py (``_REGISTRY_INN_DOMAINS``, source-aware выбор
+# поискового параметра: ИНН для этих доменов). Также используется Шагом 13
+# плана рефакторинга (``strategies/orchestrator.py``, N11) — только эти
+# домены допускают fallback на HTTP-запрос без верификации TLS-сертификата
+# (известные гос.порталы с самоподписанными/невалидными сертификатами).
+KNOWN_REGISTRY_DOMAINS = (
+    'fedresurs.ru',
+    'fips.ru',
+    'zakupki.gov.ru',
+    'kad.arbitr.ru',
+    'nalog.ru',
+    'egrul.nalog.ru',
+)
+
 
 def try_extract_host(value: str) -> str | None:
     """Возвращает hostname в нижнем регистре без ведущего ``www.``.

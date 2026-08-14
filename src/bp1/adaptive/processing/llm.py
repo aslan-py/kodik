@@ -46,6 +46,8 @@ from ._llm.client import BaseLLMClient, default_model, has_llm_config
 from ._llm.json_utils import parse_json
 from ._llm.schemas import (
     ClassificationResponse,
+    EnrichmentResponse,
+    RelevanceResponse,
     ResultAnalysisResponse,
     SelectorExtractionResponse,
     StrategyResponse,
@@ -558,6 +560,120 @@ class AIAgent(BaseLLMClient):
     ) -> StrategyType:
         """Эвристический выбор стратегии по классификации."""
         return heuristics.heuristic_strategy(classification)
+
+    async def score_relevance(
+        self,
+        items: list[dict[str, Any]],
+        competitor: str,
+        trigger: str = '',
+        inn: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Пакетный скоринг релевантности элементов относительно конкурента.
+
+        Если LLM настроен — отправляет все элементы одним запросом и получает
+        per-item оценку ``0.0-1.0``. Иначе (или при сбое LLM) — использует
+        детерминированный лексический скоринг ``heuristic_relevance_score``.
+
+        Args:
+            items: Собранные элементы ``(title, url, text)``.
+            competitor: Название конкурента.
+            trigger: Тема поиска (опционально).
+            inn: ИНН конкурента (опционально).
+
+        Returns:
+            Список словарей ``{"index", "score", "relevant"}`` той же длины,
+            что и ``items``.
+        """
+        if not items:
+            return []
+
+        if not _has_llm_config():
+            return self._heuristic_relevance(items, competitor, trigger, inn)
+
+        try:
+            prompt = prompt_builders.build_relevance_prompt(
+                items, competitor, trigger
+            )
+            content = await self._complete(
+                prompt,
+                temperature=constants.TEMPERATURE_RELEVANCE,
+                max_tokens=constants.RELEVANCE_MAX_TOKENS,
+            )
+            data = parse_json(content or '') if content else {}
+            response = RelevanceResponse(**data)
+            if not response.items:
+                return self._heuristic_relevance(
+                    items, competitor, trigger, inn
+                )
+            return mappers.to_relevance_scores(items, response)
+        except Exception as e:
+            self._logger.warning('Ошибка LLM-скоринга релевантности: %s', e)
+            return self._heuristic_relevance(items, competitor, trigger, inn)
+
+    @staticmethod
+    def _heuristic_relevance(
+        items: list[dict[str, Any]],
+        competitor: str,
+        trigger: str = '',
+        inn: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Эвристический скоринг релевантности (fallback без LLM)."""
+        result: list[dict[str, Any]] = []
+        for i, item in enumerate(items):
+            text = (
+                f'{item.get("title", "")} {item.get("text", "")} '
+                f'{item.get("ex_text", "")}'
+            )
+            score = heuristics.heuristic_relevance_score(
+                text, competitor, trigger, inn
+            )
+            result.append(
+                {
+                    'index': i,
+                    'score': round(score, 3),
+                    'relevant': score >= constants.DEFAULT_RELEVANCE_THRESHOLD,
+                }
+            )
+        return result
+
+    async def enrich_event(
+        self,
+        text: str,
+        competitor: str,
+        trigger: str = '',
+    ) -> dict[str, Any]:
+        """Обогащает текст события структурированными полями через LLM.
+
+        Извлекает из полного текста ``published_at``, ``author``, ``keywords``,
+        ``summary``, ``mentioned_company``, ``mentioned_inn``, ``sentiment``.
+        При недоступности LLM или сбое возвращает пустой словарь.
+
+        Args:
+            text: Полный текст новости.
+            competitor: Название конкурента.
+            trigger: Тема поиска (опционально).
+
+        Returns:
+            Словарь с заполненными полями обогащения (пустые опущены).
+        """
+        if not _has_llm_config():
+            return {}
+
+        try:
+            prompt = prompt_builders.build_enrichment_prompt(
+                text, competitor, trigger
+            )
+            content = await self._complete(
+                prompt,
+                temperature=constants.TEMPERATURE_ENRICHMENT,
+                max_tokens=constants.ENRICHMENT_MAX_TOKENS,
+            )
+            data = parse_json(content or '') if content else {}
+            response = EnrichmentResponse(**data)
+            return mappers.to_enrichment(response)
+        except Exception as e:
+            self._logger.warning('Ошибка LLM-обогащения события: %s', e)
+            return {}
 
     async def analyze_result(
         self,

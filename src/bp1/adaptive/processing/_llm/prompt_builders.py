@@ -120,3 +120,41 @@ def build_result_analysis_prompt(
         item_count=len(items),
         examples=examples,
     )
+
+
+def build_relevance_prompt(
+    items: list[dict[str, Any]],
+    competitor: str,
+    trigger: str,
+) -> str:
+    """Собирает промпт пакетного скоринга релевантности.
+
+    Каждый элемент содержит только ``index``/``title``/``text``, чтобы
+    минимизировать объём токенов в запросе.
+    """
+    payload = [
+        {
+            'index': i,
+            'title': (item.get('title') or '')[:500],
+            'text': (item.get('text') or item.get('ex_text') or '')[:1500],
+        }
+        for i, item in enumerate(items)
+    ]
+    return prompts.RELEVANCE_PROMPT.format(
+        competitor=competitor,
+        trigger=trigger,
+        items=json.dumps(payload, ensure_ascii=False),
+    )
+
+
+def build_enrichment_prompt(
+    text: str,
+    competitor: str,
+    trigger: str,
+) -> str:
+    """Собирает промпт обогащения события структурированными полями."""
+    return prompts.ENRICHMENT_PROMPT.format(
+        competitor=competitor,
+        trigger=trigger,
+        text=text[:HTML_SNIPPET_SIZE],
+    )

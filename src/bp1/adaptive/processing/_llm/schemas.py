@@ -59,3 +59,39 @@ class ResultAnalysisResponse(BaseModel):
 
     recommendation: str = ''
     confidence: float = Field(0.0, ge=0.0, le=1.0)
+
+
+class RelevanceItem(BaseModel):
+    """Оценка релевантности одного элемента относительно конкурента.
+
+    Используется пакетным скорингом (``AIAgent.score_relevance``): все
+    собранные элементы отправляются в один LLM-запрос, который возвращает
+    per-item оценку ``0.0-1.0`` и бинарный флаг ``relevant``.
+    """
+
+    index: int = Field(0, ge=0)
+    score: float = Field(0.0, ge=0.0, le=1.0)
+    relevant: bool = False
+
+
+class RelevanceResponse(BaseModel):
+    """Ответ LLM на пакетный скоринг релевантности."""
+
+    items: list[RelevanceItem] = Field(default_factory=list)
+
+
+class EnrichmentResponse(BaseModel):
+    """Ответ LLM на обогащение события структурированными полями.
+
+    Извлекается из полного текста статьи: дата публикации, автор, ключевые
+    слова, краткое содержание, упомянутая компания/ИНН и тональность. Все
+    поля опциональны — модель может не найти часть из них.
+    """
+
+    published_at: str | None = None
+    author: str | None = None
+    keywords: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    mentioned_company: str | None = None
+    mentioned_inn: str | None = None
+    sentiment: str | None = None

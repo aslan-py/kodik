@@ -32,6 +32,15 @@ TEMPERATURE_EXTRACTION = 0.0
 # Температура для генеративных задач агента (анализ результата).
 TEMPERATURE_GENERATIVE = 0.2
 
+# Скоринг релевантности (Фича 1).
+RELEVANCE_MAX_TOKENS = 2048
+TEMPERATURE_RELEVANCE = 0.0
+DEFAULT_RELEVANCE_THRESHOLD = 0.6
+
+# Обогащение события (Фича 3).
+ENRICHMENT_MAX_TOKENS = 2048
+TEMPERATURE_ENRICHMENT = 0.0
+
 # Настройки сетевого слоя (retry-логика).
 DEFAULT_TIMEOUT_S = 120
 DEFAULT_MAX_RETRIES = 3

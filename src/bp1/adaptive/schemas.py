@@ -313,6 +313,14 @@ class QualityGateLevel(StrEnum):
     CONSISTENCY = 'CONSISTENCY'
 
 
+class RelevanceMode(StrEnum):
+    """Режим фильтрации релевантности (Фича 1)."""
+
+    OFF = 'off'
+    FILTER = 'filter'
+    RANK = 'rank'
+
+
 class QualityGateReport(BaseModel):
     """Отчёт одного уровня Quality Gate."""
 

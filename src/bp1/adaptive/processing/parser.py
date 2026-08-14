@@ -39,6 +39,7 @@ from ..schemas import (
 from ..strategies.orchestrator import AgenticOrchestrator
 from .html_cleaner import HtmlCleaner
 from .llm import AIAgent, LLMClient
+from .relevance import RelevanceFilter
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,13 @@ MAX_CONCURRENT_FETCHES = settings.bp1_max_concurrent_fetches
 # текста (раньше первые 1-2 статьи «съедали» все ресурсы, а остальные падали
 # в сниппет-фолбэк).
 ARTICLE_FETCH_TIMEOUT_SECONDS = settings.bp1_article_fetch_timeout_seconds
+
+# Режим фильтрации релевантности (off/filter/rank) и порог по умолчанию.
+RELEVANCE_MODE = getattr(settings, 'bp1_relevance_mode', 'off')
+RELEVANCE_THRESHOLD = float(getattr(settings, 'bp1_relevance_threshold', 0.6))
+
+# Включает LLM-обогащение событий структурированными полями.
+ENRICHMENT_ENABLED = bool(getattr(settings, 'bp1_enrichment_enabled', False))
 
 # Минимальное количество символов, при котором извлечённый LLM/CSS текст
 # считается полным. Если текст короче — вероятна обрезка, и нужна докачка
@@ -275,6 +283,12 @@ class AdaptiveParser:
         self._agent = AIAgent(logger=logger)
         self._logger = logger or logging.getLogger(__name__)
 
+        # Фильтр семантической релевантности (Фича 1) и обогащение (Фича 3).
+        self._relevance = RelevanceFilter(
+            self._agent, mode=RELEVANCE_MODE, threshold=RELEVANCE_THRESHOLD
+        )
+        self._enrichment_enabled = ENRICHMENT_ENABLED
+
     def bind_redis(self, redis_client: Any) -> None:
         """Привязывает Redis-клиент к кэшу для хранения классификаций."""
         if self._cache.redis is None:
@@ -413,11 +427,35 @@ class AdaptiveParser:
             max_news=DEFAULT_MAX_NEWS,
             initial_html=html,
         )
+
+        # Фича 1: семантическая фильтрация нерелевантных новостей.
+        # Скоринг каждого элемента относительно конкурента/темы с последующей
+        # фильтрацией (filter) или ранжированием (rank). Метрики попадают в
+        # extra для аудита качества.
+        original_news_count = len(news)
+        filtered_news = await self._relevance.apply(
+            news, competitor, trigger, inn=None
+        )
+        relevance_extra = RelevanceFilter.build_extra(
+            original_count=original_news_count,
+            kept_count=len(filtered_news),
+            mode=self._relevance._mode,
+        )
+
+        # Фича 3: LLM-обогащение отфильтрованных событий структурированными
+        # полями (published_at, author, keywords, summary, компания/ИНН).
+        if self._enrichment_enabled and filtered_news:
+            filtered_news = await self._enrich_news(
+                filtered_news, competitor, trigger
+            )
+
         for item in items:
-            item.setdefault('extra', {})['news'] = news
+            extra = item.setdefault('extra', {})
+            extra['news'] = filtered_news
+            extra.update(relevance_extra)
             if file_path:
-                item['extra']['file_path'] = file_path
-            item['extra']['file_saved'] = file_saved
+                extra['file_path'] = file_path
+            extra['file_saved'] = file_saved
 
         # 7. Валидация качества.
         reports = self._quality_gate.validate_all(items)
@@ -560,6 +598,42 @@ class AdaptiveParser:
         news = await self._deep_fetch(candidates, source_name, selectors)
         return news
 
+    async def _enrich_news(
+        self,
+        news: list[dict[str, Any]],
+        competitor: str,
+        trigger: str,
+    ) -> list[dict[str, Any]]:
+        """Обогащает события структурированными полями через LLM (Фича 3).
+
+        Для каждого события с полным текстом (``ex_text``) вызывается
+        ``AIAgent.enrich_event``; извлечённые поля (published_at, author,
+        keywords, summary, mentioned_company/inn, sentiment) добавляются в
+        элемент. При недоступности LLM или сбое элемент остаётся без
+        обогащения (не ломаем конвейер).
+
+        Args:
+            news: Список событий ``(ex_title, ex_url, ex_text, ...)``.
+            competitor: Название конкурента.
+            trigger: Тема поиска.
+
+        Returns:
+            Список событий с добавленным словарём ``ex_enrichment`` (только
+            для тех, где извлечение удалось).
+        """
+        enriched: list[dict[str, Any]] = []
+        for entry in news:
+            text = entry.get('ex_text') or ''
+            if not text:
+                enriched.append(entry)
+                continue
+            data = await self._agent.enrich_event(text, competitor, trigger)
+            if data:
+                entry = dict(entry)
+                entry['ex_enrichment'] = data
+            enriched.append(entry)
+        return enriched
+
     def _max_pages(self, selectors: dict[str, str]) -> int:
         """Ограничение числа страниц из конфигурации (если есть)."""
         # По умолчанию пагинация не ограничена (регулируется лимитом новостей).
@@ -670,9 +744,18 @@ class AdaptiveParser:
                 if len(text) >= MIN_ARTICLE_TEXT_LENGTH:
                     return text, 'css'
 
-        # Этап B: LLM-извлечение (fallback при сбое CSS). Если результат
-        # подозрительно короткий или обрывается без финального знака
-        # препинания — считаем текст обрезанным и пробуем докачать хвост.
+        # Этап B: детерминированное извлечение основного контента
+        # (Фича 2). Использует trafilatura/readability-lxml, если доступен
+        # (опциональная зависимость), чтобы получить полный текст без
+        # затрат токенов LLM. Работает даже без LLM-конфига.
+        readable = _extract_main_content(html)
+        if readable and len(readable) >= MIN_ARTICLE_TEXT_LENGTH:
+            return readable, 'readability'
+
+        # Этап C: LLM-извлечение (fallback при сбое CSS/детерминированного
+        # извлечения). Если результат подозрительно короткий или обрывается
+        # без финального знака препинания — считаем текст обрезанным и
+        # пробуем докачать хвост.
         llm_text = await self._llm_extract_text(html)
         if llm_text and len(llm_text) >= MIN_ARTICLE_TEXT_LENGTH:
             if _looks_truncated(llm_text):
@@ -681,7 +764,7 @@ class AdaptiveParser:
                 )
             return llm_text, 'llm'
 
-        # Этап C: сниппет из очищенного контента.
+        # Этап D: сниппет из очищенного контента.
         snippet = _plain_text(html)
         if snippet:
             return snippet, 'snippet'
@@ -738,6 +821,43 @@ class AdaptiveParser:
         except Exception as e:  # pragma: no cover - зависит от LLM
             self._logger.warning('Ошибка LLM-извлечения текста: %s', e)
             return None
+
+
+def _extract_main_content(html: str) -> str | None:
+    """Детерминированно извлекает основной контент статьи (Фича 2).
+
+    Пытается использовать ``trafilatura`` (или ``readability-lxml``), если
+    они установлены — опциональные зависимости. Это даёт полный текст
+    статьи без затрат токенов LLM и работает даже без LLM-конфига. При
+    отсутствии библиотек возвращает ``None`` (каскад идёт дальше к LLM).
+    """
+    try:
+        import trafilatura  # type: ignore
+
+        extracted = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=False,
+            favor_precision=True,
+        )
+        if extracted and len(extracted) >= MIN_ARTICLE_TEXT_LENGTH:
+            return extracted.strip()
+    except Exception:
+        pass
+
+    try:
+        from readability import Document  # type: ignore
+
+        doc = Document(html)
+        text = doc.summary(html_partial=True)
+        soup = BeautifulSoup(text, 'html.parser')
+        content = soup.get_text(' ', strip=True)
+        if content and len(content) >= MIN_ARTICLE_TEXT_LENGTH:
+            return content
+    except Exception:
+        pass
+
+    return None
 
 
 def _plain_text(html: str) -> str:

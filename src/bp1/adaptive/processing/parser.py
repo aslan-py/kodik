@@ -34,8 +34,11 @@ from ..logger import new_trace_id
 from ..schemas import (
     AdapterState,
     AdaptiveParseResult,
+    SourceClassification,
+    StrategyResult,
     StrategyType,
 )
+from ..strategies.classifier import SourceClassifier
 from ..strategies.orchestrator import AgenticOrchestrator
 from .html_cleaner import HtmlCleaner
 from .llm import AIAgent, LLMClient
@@ -281,6 +284,7 @@ class AdaptiveParser:
         self._quality_gate = DataQualityGate()
         self._llm_client = LLMClient(logger=logger)
         self._agent = AIAgent(logger=logger)
+        self._classifier = SourceClassifier(logger=logger)
         self._logger = logger or logging.getLogger(__name__)
 
         # Фильтр семантической релевантности (Фича 1) и обогащение (Фича 3).
@@ -376,34 +380,15 @@ class AdaptiveParser:
 
         html = strategy_result.data
 
-        # 2.1 Персистентно обновляем классификацию по факту успешной
-        #     стратегии (Шаг 8 плана рефакторинга, REFACTORING_PLAN.md).
-        #     Раньше recommended_strategy кэшировался один раз при первой
-        #     классификации и не обновлялся, даже если реально сработала
-        #     другая, более "тяжёлая" стратегия (например, STEALTH вместо
-        #     закэшированного FAST) — каждый повторный запуск по источнику
-        #     заново проходил всю лестницу деградации (FAST -> CRAWL4AI ->
-        #     BROWSER -> ...), прежде чем дойти до рабочей стратегии.
-        #     Обновляем только уже существующую классификацию — создание
-        #     классификации "с нуля" по факту первого успеха относится к
-        #     Шагу 9, который меняет сам порядок классификации/фетча.
-        actual_strategy = strategy_result.strategy
-        if (
-            classification is not None
-            and classification.recommended_strategy != actual_strategy.value
-        ):
-            updated_classification = classification.model_copy(
-                update={'recommended_strategy': actual_strategy.value}
-            )
-            await self._cache.set_classification(
-                source_name, updated_classification
-            )
-            self._logger.info(
-                'Классификация %s обновлена по факту успеха: %s -> %s',
-                source_name,
-                classification.recommended_strategy,
-                actual_strategy.value,
-            )
+        # 2.1 Обновляем классификацию по факту успешного запроса (Шаги 8-9
+        #     плана рефакторинга, REFACTORING_PLAN.md — N2/N3).
+        await self._reconcile_classification(
+            source_name=source_name,
+            url=url,
+            html=html,
+            classification=classification,
+            strategy_result=strategy_result,
+        )
 
         # 3. Если адаптера нет — анализируем структуру и генерируем адаптер.
         if adapter is None:
@@ -501,6 +486,86 @@ class AdaptiveParser:
             adapter_version=adapter.version,
             elapsed_ms=elapsed,
             trace_id=trace_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Обновление классификации по факту успешного запроса
+    # ------------------------------------------------------------------
+
+    async def _reconcile_classification(
+        self,
+        source_name: str,
+        url: str,
+        html: str,
+        classification: SourceClassification | None,
+        strategy_result: StrategyResult,
+    ) -> None:
+        """Обновляет кэш классификации по факту успешного запроса.
+
+        Объединяет два уточнения (Шаги 8-9 плана рефакторинга,
+        REFACTORING_PLAN.md — N2/N3):
+
+        1. (Шаг 8) ``recommended_strategy`` — стратегия, которая реально
+           сработала (``strategy_result.strategy``), а не та, что была
+           предсказана до запроса. Раньше кэшировалась один раз и не
+           обновлялась — каждый повторный прогон по источнику заново
+           проходил всю лестницу деградации, прежде чем дойти до рабочей
+           стратегии.
+        2. (Шаг 9) ``has_antibot``/``has_captcha``/``is_spa`` —
+           доопределяются по реальному HTML (``SourceClassifier.classify()``
+           раньше вызывался без html/headers и не мог их определить для
+           источников вне жёстко прошитого ``_KNOWN_SOURCES``) и по тому,
+           какая стратегия потребовалась для успеха: сама по себе успешная
+           STEALTH/HITL — сильный сигнал наличия защиты, даже если её
+           маркеров не видно в уже обойдённом HTML. Флаги только
+           усиливаются (``False -> True``) и никогда не сбрасываются
+           обратно одним снимком HTML — отсутствие маркера в конкретном
+           ответе не опровергает ранее подтверждённую защиту.
+
+        Ничего не пишет в кэш, если ни один признак не изменился —
+        не тратим запись в Redis на каждый успешный прогон впустую.
+        """
+        detected = await self._classifier.classify(
+            source_name=source_name, source_url=url, html=html
+        )
+        actual_strategy = strategy_result.strategy
+        has_antibot = detected.has_antibot or actual_strategy in (
+            StrategyType.STEALTH,
+            StrategyType.HITL,
+        )
+        has_captcha = (
+            detected.has_captcha or actual_strategy == StrategyType.HITL
+        )
+        is_spa = detected.is_spa or actual_strategy == StrategyType.BROWSER
+
+        base = classification or detected
+        changed = (
+            classification is None
+            or base.recommended_strategy != actual_strategy.value
+            or base.has_antibot != has_antibot
+            or base.has_captcha != has_captcha
+            or base.is_spa != is_spa
+        )
+        if not changed:
+            return
+
+        updated = base.model_copy(
+            update={
+                'recommended_strategy': actual_strategy.value,
+                'has_antibot': has_antibot,
+                'has_captcha': has_captcha,
+                'is_spa': is_spa,
+            }
+        )
+        await self._cache.set_classification(source_name, updated)
+        self._logger.info(
+            'Классификация %s обновлена по факту успеха: strategy=%s '
+            'antibot=%s captcha=%s spa=%s',
+            source_name,
+            actual_strategy.value,
+            has_antibot,
+            has_captcha,
+            is_spa,
         )
 
     # ------------------------------------------------------------------

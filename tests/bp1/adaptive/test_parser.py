@@ -217,6 +217,53 @@ async def test_parse_no_cache_write_when_strategy_unchanged(monkeypatch):
     assert calls == []
 
 
+@pytest.mark.asyncio
+async def test_parse_detects_antibot_from_real_html_no_prior_cache(
+    monkeypatch,
+):
+    """Шаг 9: без закэшированной классификации первый вызов parse()
+    определяет has_antibot по реальному HTML, а не по пустым умолчаниям.
+
+    До фикса SourceClassifier.classify() вызывался без html/headers —
+    для источника вне _KNOWN_SOURCES has_antibot оставался бы False
+    "навсегда", даже если сервер явно отдаёт маркер антибот-защиты.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    redis = _FakeRedis()
+    parser = AdaptiveParser(redis_client=redis)
+    # example.com не входит ни в _KNOWN_SOURCES, ни в _REGISTRY_DOMAINS.
+    assert await parser._cache.get_classification(EXAMPLE_SOURCE_NAME) is None
+
+    antibot_html = (
+        '<html><head><meta name="cf-ray" content="abc123"></head>'
+        '<body><a href="https://example.com/1">Новость</a></body></html>'
+    )
+
+    class _AntibotOrchestrator:
+        async def fetch_with_degradation(self, url: str, **kwargs):
+            return StrategyResult(
+                strategy=StrategyType.STEALTH,
+                success=True,
+                data=antibot_html,
+                content_length=len(antibot_html),
+            )
+
+    parser._orchestrator = _AntibotOrchestrator()
+
+    result = await parser.parse(
+        url=EXAMPLE_URL,
+        source_name=EXAMPLE_SOURCE_NAME,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+    assert result.status == PARSER_STATUS_OK
+
+    classification = await parser._cache.get_classification(EXAMPLE_SOURCE_NAME)
+    assert classification is not None
+    assert classification.has_antibot is True
+    assert classification.recommended_strategy == StrategyType.STEALTH.value
+
+
 def test_parse_items_with_selectors():
     """_parse_items извлекает поля по селекторам адаптера."""
     html = """

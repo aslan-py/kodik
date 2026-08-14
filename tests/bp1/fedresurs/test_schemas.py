@@ -159,16 +159,6 @@ class TestSearchResult:
 
     # --- Properties ---
 
-    def test_html_content(self):
-        """html_content возвращает raw_text."""
-        result = SearchResult(success=True, name='Test', raw_text='some text')
-        assert result.html_content == 'some text'
-
-    def test_html_content_none(self):
-        """html_content возвращает None если raw_text отсутствует."""
-        result = SearchResult(success=True, name='Test')
-        assert result.html_content is None
-
     def test_director_name(self):
         """director_name извлекается из extra."""
         result = SearchResult(

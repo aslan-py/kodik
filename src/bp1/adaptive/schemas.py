@@ -279,6 +279,10 @@ class SourceRegistrationResult(BaseModel):
     created: bool
     source_id: int | None = None
     classification: SourceClassification
+    # Результат проверки поискового эндпоинта при регистрации (Шаг 19
+    # плана рефакторинга): None — проверка не выполнялась или эндпоинт не
+    # ответил. Заполняется, когда register() вызван с probe_search=True.
+    search_probe: ProbedUrl | None = None
 
 
 class ProbedUrl(BaseModel):

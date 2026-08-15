@@ -126,7 +126,10 @@ async def _add_source_command(args: argparse.Namespace) -> None:
     try:
         async with AsyncSessionLocal() as session:
             service = SourceRegistrationService(session, redis_client=redis)
-            result = await service.register(args.url)
+            # probe_search=True: проверяем поисковый эндпоинт сразу при
+            # регистрации (Шаг 19 плана рефакторинга), чтобы неработающий
+            # поиск было видно здесь, а не при первой боевой задаче.
+            result = await service.register(args.url, probe_search=True)
             await session.commit()
 
             print(f'Источник: {result.source_name}')
@@ -137,6 +140,16 @@ async def _add_source_command(args: argparse.Namespace) -> None:
             print(f'  type      : {cls.source_type.value}')
             print(f'  strategy  : {cls.recommended_strategy}')
             print(f'  complexity: {cls.complexity_score}')
+            probe = result.search_probe
+            if probe is not None:
+                param = next(iter(probe.search_params), '?')
+                print(f'  поиск     : OK ({probe.search_method}, {param}=)')
+                print(f'  search_url: {probe.search_url}')
+            else:
+                print(
+                    '  поиск     : не подтверждён '
+                    '(эндпоинт не ответил — сбор пойдёт по шаблону)'
+                )
     finally:
         await redis.aclose()
 

@@ -281,11 +281,21 @@ class AdaptiveRunner:
             return fallback_url, None
 
         base_url = SearchUrlTemplateRegistry().build_base_url(source_name)
+        # Подсказка от регистрации источника (Шаг 19 плана рефакторинга):
+        # add-source проверяет поисковый эндпоинт и кэширует результат на
+        # уровне источника. Готовый URL оттуда переиспользовать нельзя (он
+        # искал нейтральный запрос, а не этого конкурента), но имя
+        # query-параметра — знание об источнике, а не о конкуренте: с ним
+        # первый боевой пробинг не перебирает цепочку с начала.
+        prefer_param = await self._preferred_param_from_registration(
+            source_name
+        )
         try:
             probed = await self._prober.probe_async(
                 base_url=base_url,
                 search_query=search_param,
                 target_name=target_name,
+                prefer_param=prefer_param,
             )
         except Exception as e:
             self._logger.warning('Пробинг %s не выполнен: %s', source_name, e)
@@ -334,6 +344,29 @@ class AdaptiveRunner:
                 e,
             )
         return probed.search_url, probed
+
+    async def _preferred_param_from_registration(
+        self, source_name: str
+    ) -> str | None:
+        """Имя query-параметра, найденное при регистрации источника.
+
+        Читает source-level запись пробинга (ключ без поискового запроса),
+        которую пишет ``SourceRegistrationService.register(probe_search=True)``,
+        и возвращает имя параметра из неё. Возвращает ``None``, если записи
+        нет, Redis недоступен или параметр не сохранён.
+        """
+        try:
+            registered = await self._cache.get_probed_url(source_name)
+        except Exception as e:
+            self._logger.warning(
+                'Не удалось прочитать probed URL источника %s: %s',
+                source_name,
+                e,
+            )
+            return None
+        if registered is None or not registered.search_params:
+            return None
+        return next(iter(registered.search_params), None)
 
     def _bind_redis(self, redis_client: Any) -> None:
         """Привязывает Redis-клиент к кэшу для хранения классификаций."""

@@ -9,6 +9,7 @@ AdaptiveRunner — единая точка входа для адаптивно�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -83,6 +84,12 @@ class AdaptiveRunner:
         self._classifier = SourceClassifier()
         self._search_param_resolver = SearchParamResolver()
         self._logger = logging.getLogger(__name__)
+        # Фабрика сессий для конкурентного режима run_all (Шаг 17 плана
+        # рефакторинга): каждая параллельная задача работает со СВОЕЙ
+        # сессией — ``AsyncSession`` нельзя использовать одновременно из
+        # нескольких корутин (asyncpg: "another operation is in progress").
+        # Подменяется в тестах, чтобы не требовать живую БД.
+        self._session_factory: Any = None
         # Пробинг поискового URL: по умолчанию включён. Fetch-функция
         # подключается реальным HTTP-загрузчиком по умолчанию (чтобы пробинг
         # не падал на заглушке NotImplementedError), но может быть заменена
@@ -691,23 +698,91 @@ class AdaptiveRunner:
         result = await session.execute(stmt)
         tasks = result.scalars().all()
 
-        results: list[dict[str, Any]] = []
-        for task in tasks:
+        # Разделяем задачи на пропущенные (решение принимается без запуска)
+        # и запускаемые. Порядок результатов соответствует порядку задач —
+        # важно для читаемости логов и потребителей run_all.
+        results: list[dict[str, Any] | None] = [None] * len(tasks)
+        runnable: list[tuple[int, int]] = []  # (позиция в results, task_id)
+        for position, task in enumerate(tasks):
             if not task.source.is_active or not task.competitor.is_active:
-                results.append(
-                    {
-                        'status': 'skipped',
-                        'search_task_id': task.id,
-                        'reason': (
-                            'source_inactive'
-                            if not task.source.is_active
-                            else 'competitor_inactive'
-                        ),
-                    }
-                )
+                results[position] = {
+                    'status': 'skipped',
+                    'search_task_id': task.id,
+                    'reason': (
+                        'source_inactive'
+                        if not task.source.is_active
+                        else 'competitor_inactive'
+                    ),
+                }
                 continue
-            results.append(await self.run_task(task.id, session, redis_client))
-        return results
+            runnable.append((position, task.id))
+
+        if runnable:
+            if self.max_concurrent > 1:
+                await self._run_tasks_concurrently(
+                    runnable, results, redis_client
+                )
+            else:
+                # Последовательный режим — прежнее поведение 1-в-1:
+                # переиспользуем переданную сессию, ничего не создаём.
+                for position, task_id in runnable:
+                    results[position] = await self.run_task(
+                        task_id, session, redis_client
+                    )
+
+        return [item for item in results if item is not None]
+
+    async def _run_tasks_concurrently(
+        self,
+        runnable: list[tuple[int, int]],
+        results: list[dict[str, Any] | None],
+        redis_client: Any,
+    ) -> None:
+        """Выполняет задачи параллельно, записывая результаты по позициям.
+
+        Ограничение параллелизма — ``self.max_concurrent`` (Шаг 17 плана
+        рефакторинга, T1: параметр хранился в конфиге, но ``run_all``
+        выполнял задачи последовательно).
+
+        Каждая задача получает СВОЮ сессию БД: ``AsyncSession`` не
+        рассчитана на одновременное использование несколькими корутинами
+        (asyncpg падает с "another operation is in progress"), поэтому
+        переданную в ``run_all`` сессию здесь переиспользовать нельзя —
+        она остаётся только для выборки списка задач. Каждая сессия
+        коммитится внутри ``RawDataService`` (см. ``storage.py``), так что
+        результат не теряется при закрытии.
+
+        Исключения не проглатываются: как и в последовательном режиме,
+        первое из них поднимается наружу — но только после того, как все
+        параллельные задачи завершились, чтобы не оставить висящих
+        корутин с открытыми сессиями/браузерами.
+        """
+        if self._session_factory is None:
+            from core.database import AsyncSessionLocal
+
+            self._session_factory = AsyncSessionLocal
+
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        self._logger.info(
+            'Запуск %d задач сбора (параллельно до %d)',
+            len(runnable),
+            self.max_concurrent,
+        )
+
+        async def _run_one(position: int, task_id: int) -> None:
+            async with semaphore:
+                async with self._session_factory() as task_session:
+                    results[position] = await self.run_task(
+                        task_id, task_session, redis_client
+                    )
+
+        outcomes = await asyncio.gather(
+            *(_run_one(position, task_id) for position, task_id in runnable),
+            return_exceptions=True,
+        )
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException):
+                raise outcome
 
     async def run_source_competitor(
         self,

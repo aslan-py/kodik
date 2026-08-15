@@ -1,7 +1,9 @@
 """1Тесты для AgenticOrchestrator."""
 
 import ssl
+import sys
 import urllib.request
+from types import ModuleType
 
 import pytest
 
@@ -14,6 +16,7 @@ from src.bp1.adaptive.strategies.orchestrator import (
     _DEGRADATION_ORDER,
     AgenticOrchestrator,
     BaseStrategy,
+    BrowserStrategy,
     WaybackStrategy,
     _allowed_strategies,
     _fetch_sync,
@@ -22,6 +25,7 @@ from src.bp1.adaptive.strategies.orchestrator import (
 
 from .constants import (
     EXAMPLE_URL,
+    MODULE_PLAYWRIGHT,
     ORCH_CONTENT,
     ORCH_CONTENT_LENGTH,
     ORCH_ERROR,
@@ -364,3 +368,124 @@ def test_fetch_sync_trusted_domain_retries_without_verification(monkeypatch):
     assert len(calls) == 2
     assert calls[0]['context'] is None
     assert calls[1]['context'] is not None
+
+
+# ============================================================================
+# BrowserStrategy: wait_for_listing (регресс на "Future exception was never
+# retrieved" / TargetClosedError при фетче отдельных статей)
+# ============================================================================
+
+
+class _FakePage:
+    """Фейковая Playwright-страница: фиксирует вызовы wait_for_selector."""
+
+    def __init__(self, html: str, matching_selectors: set[str] = frozenset()):
+        self._html = html
+        self._matching_selectors = matching_selectors
+        self.wait_for_selector_calls: list[str] = []
+
+    async def goto(self, url, timeout=None):
+        return None
+
+    async def wait_for_selector(self, selector, timeout=None):
+        self.wait_for_selector_calls.append(selector)
+        if selector not in self._matching_selectors:
+            raise TimeoutError(f'no match for {selector}')
+
+    async def content(self):
+        return self._html
+
+
+class _FakeContext:
+    def __init__(self, page: _FakePage):
+        self._page = page
+        self.closed = False
+
+    async def new_page(self):
+        return self._page
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeBrowser:
+    def __init__(self, context: _FakeContext):
+        self._context = context
+        self.closed = False
+
+    async def new_context(self, **kwargs):
+        return self._context
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakePlaywrightManager:
+    """Фейковый ``async_playwright()`` с полным рабочим циклом (без падений)."""
+
+    def __init__(self, browser: _FakeBrowser):
+        self._browser = browser
+        self.stopped = False
+
+    async def start(self):
+        return self
+
+    async def stop(self):
+        self.stopped = True
+
+    @property
+    def chromium(self):
+        return self
+
+    async def launch(self, **kwargs):
+        return self._browser
+
+
+def _install_fake_working_playwright(monkeypatch, page: _FakePage):
+    context = _FakeContext(page)
+    browser = _FakeBrowser(context)
+    fake = ModuleType(MODULE_PLAYWRIGHT)
+    fake.async_playwright = lambda: _FakePlaywrightManager(browser)
+    monkeypatch.setitem(sys.modules, MODULE_PLAYWRIGHT, fake)
+    return browser, context
+
+
+@pytest.mark.asyncio
+async def test_browser_strategy_waits_for_listing_by_default(monkeypatch):
+    """По умолчанию (страница результатов поиска) ждём разметку листинга."""
+    html = '<html><body>' + ('x' * 400) + '</body></html>'
+    page = _FakePage(html, matching_selectors={'ul.search-results__list li'})
+    _install_fake_working_playwright(monkeypatch, page)
+
+    strategy = BrowserStrategy()
+    result = await strategy.fetch(EXAMPLE_URL)
+
+    assert page.wait_for_selector_calls == ['ul.search-results__list li']
+    assert result.success is True
+    assert result.data == html
+
+
+@pytest.mark.asyncio
+async def test_browser_strategy_skips_listing_wait_for_articles(monkeypatch):
+    """``wait_for_listing=False`` (отдельная статья) не ждёт разметку листинга.
+
+    Регресс-тест: раньше ``BrowserStrategy`` всегда перебирала все 5
+    селекторов листинга (до ``5 * 8с = 40с``) даже для фетча ОТДЕЛЬНОЙ
+    статьи, где такой разметки в принципе не бывает — из-за чего внешний
+    ``asyncio.wait_for(ARTICLE_FETCH_TIMEOUT_SECONDS=20с)``
+    (``processing/parser.py::_deep_fetch``) регулярно отменял эту корутину
+    прямо посреди ``page.wait_for_selector``, что и производило
+    ``Future exception was never retrieved`` / ``TargetClosedError`` в
+    логах (см. ``REFACTORING_PLAN.md``). При ``wait_for_listing=False``
+    ``page.wait_for_selector`` не должен вызываться вовсе — используется
+    только общий опрос «появились ли вообще ссылки» (``_is_informative_html``).
+    """
+    html = '<html><body>' + ('<a href="/x">x</a>' * 5) + '</body></html>'
+    page = _FakePage(html, matching_selectors=set())
+    _install_fake_working_playwright(monkeypatch, page)
+
+    strategy = BrowserStrategy()
+    result = await strategy.fetch(EXAMPLE_URL, wait_for_listing=False)
+
+    assert page.wait_for_selector_calls == []
+    assert result.data == html

@@ -152,9 +152,7 @@ async def run_parser_async(
         data_dict = response.model_dump()
 
         # 6. Сохраняем результат (хэширование, дедупликация, файлы, RawItem).
-        html_source_path = None
-        if response.items and response.items[0].extra.get('file_path'):
-            html_source_path = response.items[0].extra['file_path']
+        html_source_path = response.html_file_path
 
         result = await service.persist(
             search_task_id=search_task_id,

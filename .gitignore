@@ -220,4 +220,6 @@ testik
 run_test.py
 **/bp1/BP1_SPECIFICATION.md
 **/bp1/TODO.md
+**/bp1/REFACTORING_PLAN.md
+**/bp1/BP1_PACKAGE_ANALYSIS.md
 TIMING.md

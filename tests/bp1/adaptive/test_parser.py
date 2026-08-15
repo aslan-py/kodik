@@ -10,6 +10,7 @@ from src.bp1.adaptive.processing.parser import (
     DEFAULT_MAX_NEWS,
     MAX_PAGINATION_PAGES,
     AdaptiveParser,
+    _is_ad_redirect_url,
     _is_noise_url,
     _items_per_page,
     _looks_truncated,
@@ -455,6 +456,26 @@ def test_is_noise_url():
     assert not _is_noise_url('/vacancy/123')
 
 
+def test_is_ad_redirect_url():
+    """_is_ad_redirect_url отсеивает рекламные клик-редиректы hh.ru.
+
+    Регрессионный тест: adsrv.hh.ru/click?... — рекламная ссылка на
+    спонсированную вакансию, а не прямая ссылка на страницу вакансии.
+    Deep-fetch такого URL скачивает страницу рекламной системы, а не саму
+    вакансию.
+    """
+    assert _is_ad_redirect_url(
+        'https://adsrv.hh.ru/click?b=2099012&place=35&clickType=link_to_vacancy'
+    )
+    assert not _is_ad_redirect_url(
+        'https://ekaterinburg.hh.ru/vacancy/136245975?query=x'
+    )
+    assert not _is_ad_redirect_url('https://hh.ru/search/vacancy?text=x')
+    assert not _is_ad_redirect_url('/vacancy/123')
+    assert not _is_ad_redirect_url('')
+    assert not _is_ad_redirect_url(None)
+
+
 def test_parse_items_filters_noise_urls():
     """_parse_items отбрасывает служебные ссылки (login, cookie_policy).
 
@@ -715,6 +736,232 @@ def test_looks_truncated_detects_cut_text():
     assert not _looks_truncated('Короткий текст')
 
 
+# ============================================================================
+# Best-of каскад _extract_article_text: не должен стопориться на коротком
+# CSS/readability-результате, если LLM может дать более полный текст.
+# ============================================================================
+
+
+class _ArticleOrchestrator:
+    """Оркестратор-заглушка, возвращающая фиксированный HTML статьи."""
+
+    def __init__(self, html: str):
+        self._html = html
+
+    async def fetch_with_degradation(self, url: str, **kwargs):
+        return StrategyResult(
+            strategy=StrategyType.FAST,
+            success=True,
+            data=self._html,
+            content_length=len(self._html),
+        )
+
+
+@pytest.mark.asyncio
+async def test_extract_article_text_escalates_short_css_to_llm(monkeypatch):
+    """Короткий CSS-результат (лид-абзац) не глушит каскад — LLM пробуется.
+
+    Регрессионный тест на исходную проблему: CSS-селектор, зацепивший
+    только первые 100+ символов статьи, раньше останавливал каскад и не
+    давал шанса извлечь полный текст через LLM.
+    """
+    from src.bp1.adaptive.processing.parser import (
+        MIN_ARTICLE_TEXT_LENGTH,
+        MIN_FULL_ARTICLE_TEXT_LENGTH,
+    )
+
+    lead_paragraph = 'Лид. ' * (MIN_ARTICLE_TEXT_LENGTH // 5)
+    assert (
+        MIN_ARTICLE_TEXT_LENGTH
+        <= len(lead_paragraph)
+        < (MIN_FULL_ARTICLE_TEXT_LENGTH)
+    )
+    html = (
+        f'<html><body><div class="content">{lead_paragraph}</div></body></html>'
+    )
+    full_text = 'x' * (MIN_FULL_ARTICLE_TEXT_LENGTH + 50) + '.'
+
+    parser = AdaptiveParser()
+    parser._orchestrator = _ArticleOrchestrator(html)
+
+    async def _fake_llm_extract(html_arg):
+        return full_text, {'chunked': False, 'chunks_dropped': 0}
+
+    parser._llm_extract_text_with_meta = _fake_llm_extract  # type: ignore
+
+    text, method, meta = await parser._extract_article_text(
+        'https://example.com/news/1',
+        EXAMPLE_SOURCE_NAME,
+        selectors={'text': '.content'},
+    )
+    assert method == 'llm'
+    assert text == full_text
+    assert meta['complete'] is True
+
+
+@pytest.mark.asyncio
+async def test_extract_article_text_confident_css_skips_llm(monkeypatch):
+    """Уверенно полный CSS-результат не тратит LLM-вызов."""
+    from src.bp1.adaptive.processing.parser import (
+        MIN_FULL_ARTICLE_TEXT_LENGTH,
+    )
+
+    full_text = 'y' * (MIN_FULL_ARTICLE_TEXT_LENGTH + 50) + '.'
+    html = f'<html><body><div class="content">{full_text}</div></body></html>'
+
+    parser = AdaptiveParser()
+    parser._orchestrator = _ArticleOrchestrator(html)
+
+    calls: list[str] = []
+
+    async def _fake_llm_extract(html_arg):
+        calls.append(html_arg)
+        return 'не должно вызываться', {'chunked': False, 'chunks_dropped': 0}
+
+    parser._llm_extract_text_with_meta = _fake_llm_extract  # type: ignore
+
+    text, method, meta = await parser._extract_article_text(
+        'https://example.com/news/1',
+        EXAMPLE_SOURCE_NAME,
+        selectors={'text': '.content'},
+    )
+    assert method == 'css'
+    assert text == full_text
+    assert meta['complete'] is True
+    assert calls == []  # LLM не вызывался — CSS уже уверенно полный.
+
+
+@pytest.mark.asyncio
+async def test_extract_article_text_snippet_page_when_nothing_matches():
+    """Без CSS-селектора и без LLM — сниппет всей страницы (snippet_page)."""
+    html = (
+        '<html><body><p>Просто текст страницы без разметки статьи.</p>'
+        '</body></html>'
+    )
+
+    parser = AdaptiveParser()
+    parser._orchestrator = _ArticleOrchestrator(html)
+
+    async def _fake_llm_extract(html_arg):
+        return None, {'chunked': False, 'chunks_dropped': 0}
+
+    parser._llm_extract_text_with_meta = _fake_llm_extract  # type: ignore
+
+    text, method, meta = await parser._extract_article_text(
+        'https://example.com/news/1',
+        EXAMPLE_SOURCE_NAME,
+        selectors={},
+    )
+    assert method == 'snippet_page'
+    assert text and 'Просто текст страницы' in text
+    assert meta['complete'] is False
+
+
+@pytest.mark.asyncio
+async def test_extract_article_text_not_fetchable_returns_snippet_title():
+    """Не-HTTP(S) ссылки сразу дают snippet_title без похода в сеть."""
+    parser = AdaptiveParser()
+
+    text, method, meta = await parser._extract_article_text(
+        'mailto:info@example.com',
+        EXAMPLE_SOURCE_NAME,
+        selectors={},
+    )
+    assert text is None
+    assert method == 'snippet_title'
+    assert meta['complete'] is False
+
+
+class _RecordingOrchestrator:
+    """Оркестратор-заглушка, фиксирующая kwargs каждого вызова."""
+
+    def __init__(self, html: str):
+        self._html = html
+        self.calls: list[dict] = []
+
+    async def fetch_with_degradation(self, url: str, **kwargs):
+        self.calls.append(kwargs)
+        return StrategyResult(
+            strategy=StrategyType.FAST,
+            success=True,
+            data=self._html,
+            content_length=len(self._html),
+        )
+
+
+@pytest.mark.asyncio
+async def test_extract_article_text_reuses_listing_strategy():
+    """Deep-fetch статьи стартует с уже известной стратегии листинга.
+
+    Регрессионный тест: раньше deep-fetch не передавал start_with/
+    classification в fetch_with_degradation и каждая статья заново вслепую
+    перебирала всю цепочку деградации — из-за этого почти всегда не
+    укладывалась в ARTICLE_FETCH_TIMEOUT_SECONDS и скатывалась в
+    snippet_title, даже когда рабочая стратегия для источника уже известна.
+    """
+    html = '<html><body><p>x</p></body></html>'
+    orchestrator = _RecordingOrchestrator(html)
+    parser = AdaptiveParser()
+    parser._orchestrator = orchestrator
+
+    classification = SourceClassification(
+        source_name=EXAMPLE_SOURCE_NAME,
+        recommended_strategy='STEALTH',
+        has_antibot=True,
+    )
+    await parser._extract_article_text(
+        'https://example.com/news/1',
+        EXAMPLE_SOURCE_NAME,
+        selectors={},
+        start_with=StrategyType.STEALTH,
+        classification=classification,
+    )
+    assert len(orchestrator.calls) == 1
+    assert orchestrator.calls[0]['start_with'] == StrategyType.STEALTH
+    assert orchestrator.calls[0]['classification'] is classification
+
+
+@pytest.mark.asyncio
+async def test_deep_fetch_propagates_start_with_and_classification():
+    """_deep_fetch прокидывает start_with/classification дальше в вызов."""
+    parser = AdaptiveParser()
+
+    class _FakeCache:
+        async def get_article_text(self, url):
+            return None
+
+        async def set_article_text(
+            self, url, text, method, possibly_incomplete=False, ttl=None
+        ):
+            pass
+
+    parser._cache = _FakeCache()  # type: ignore
+
+    received: list[dict] = []
+
+    async def _fake_extract(url, source_name, selectors, **kwargs):
+        received.append(kwargs)
+        return 'text', 'css', {'complete': True, 'chunks_dropped': 0}
+
+    parser._extract_article_text = _fake_extract  # type: ignore
+
+    classification = SourceClassification(
+        source_name=EXAMPLE_SOURCE_NAME,
+        recommended_strategy='CRAWL4AI',
+        has_antibot=False,
+    )
+    await parser._deep_fetch(
+        [('Новость', 'https://example.com/news/1', '/news/1')],
+        EXAMPLE_SOURCE_NAME,
+        selectors={},
+        start_with=StrategyType.CRAWL4AI,
+        classification=classification,
+    )
+    assert len(received) == 1
+    assert received[0]['start_with'] == StrategyType.CRAWL4AI
+    assert received[0]['classification'] is classification
+
+
 @pytest.mark.asyncio
 async def test_deep_fetch_uses_cache_and_method(monkeypatch):
     """_deep_fetch возвращает ex_method и использует кэш полного текста."""
@@ -726,8 +973,8 @@ async def test_deep_fetch_uses_cache_and_method(monkeypatch):
     # Замещаем извлечение текста фиксированным полным текстом.
     full_text = 'x' * (MIN_FULL_ARTICLE_TEXT_LENGTH + 10) + '.'
 
-    async def _fake_extract(url, source_name, selectors):
-        return full_text, 'llm'
+    async def _fake_extract(url, source_name, selectors, **kwargs):
+        return full_text, 'llm', {'complete': True, 'chunks_dropped': 0}
 
     parser._extract_article_text = _fake_extract  # type: ignore
     # Кэш заменяем заглушкой, чтобы не писать на диск.
@@ -739,8 +986,14 @@ async def test_deep_fetch_uses_cache_and_method(monkeypatch):
         async def get_article_text(self, url):
             return self.store.get(url)
 
-        async def set_article_text(self, url, text, method):
-            self.store[url] = {'text': text, 'method': method}
+        async def set_article_text(
+            self, url, text, method, possibly_incomplete=False, ttl=None
+        ):
+            self.store[url] = {
+                'text': text,
+                'method': method,
+                'possibly_incomplete': possibly_incomplete,
+            }
 
     parser._cache = _FakeCache()  # type: ignore
 
@@ -756,15 +1009,17 @@ async def test_deep_fetch_uses_cache_and_method(monkeypatch):
     assert result[0]['ex_text'] == full_text
     assert result[0]['ex_method'] == 'llm'
     assert result[0]['ex_url'] == 'https://example.com/news/1'
+    assert result[0]['ex_text_length'] == len(full_text)
+    assert result[0]['ex_text_possibly_incomplete'] is False
 
     # Второй прогон — текст берётся из кэша, извлечение не вызывается
     # повторно. ex_method сохраняет исходный способ извлечения (llm), т.к.
     # кэш хранит полный текст вместе с методом его получения.
     calls = []
 
-    async def _fake_extract2(url, source_name, selectors):
+    async def _fake_extract2(url, source_name, selectors, **kwargs):
         calls.append(url)
-        return full_text, 'llm'
+        return full_text, 'llm', {'complete': True, 'chunks_dropped': 0}
 
     parser._extract_article_text = _fake_extract2  # type: ignore
     result2 = await parser._deep_fetch(
@@ -784,8 +1039,8 @@ async def test_deep_fetch_css_first_ordering():
     parser = AdaptiveParser()
     full_text = 'y' * (MIN_FULL_ARTICLE_TEXT_LENGTH + 10) + '.'
 
-    async def _fake_extract(url, source_name, selectors):
-        return full_text, 'css'
+    async def _fake_extract(url, source_name, selectors, **kwargs):
+        return full_text, 'css', {'complete': True, 'chunks_dropped': 0}
 
     parser._extract_article_text = _fake_extract  # type: ignore
 
@@ -793,7 +1048,9 @@ async def test_deep_fetch_css_first_ordering():
         async def get_article_text(self, url):
             return None
 
-        async def set_article_text(self, url, text, method):
+        async def set_article_text(
+            self, url, text, method, possibly_incomplete=False, ttl=None
+        ):
             pass
 
     parser._cache = _FakeCache()  # type: ignore

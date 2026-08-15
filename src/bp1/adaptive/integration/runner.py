@@ -48,17 +48,15 @@ logger = logging.getLogger(__name__)
 def _collect_quality_levels(response: Any) -> dict[str, Any]:
     """Достаёт сводку уровней Quality Gate из ответа парсера.
 
-    Уровни кладёт ``AdaptiveParser`` в ``extra`` элемента страницы поиска
-    (Шаг 20 плана рефакторинга, T6). Возвращает пустой словарь, если
-    парсер их не проставил (специализированные RPA-адаптеры вроде
-    fedresurs не проходят через ``DataQualityGate``).
+    Уровни кладёт ``AdaptiveBridgeParser`` в ``response.metrics``
+    (см. ``ParsedMetrics`` в ``base_parser.py``, Шаг 20 плана рефакторинга,
+    T6). Возвращает пустой словарь, если парсер их не проставил
+    (специализированные RPA-адаптеры вроде fedresurs не проходят через
+    ``DataQualityGate``).
     """
-    for item in getattr(response, 'items', None) or []:
-        extra = getattr(item, 'extra', None) or {}
-        levels = extra.get('quality_levels')
-        if levels:
-            return levels
-    return {}
+    metrics = getattr(response, 'metrics', None)
+    levels = getattr(metrics, 'quality_levels', None)
+    return levels or {}
 
 
 def check_strategy_chain(orchestrator: Any) -> dict[str, bool]:
@@ -677,14 +675,14 @@ class AdaptiveRunner:
             # Шаг 20 плана рефакторинга (T6): реально сработавшая стратегия
             # и уровни Quality Gate. ``getattr(response, 'strategy_used')``
             # здесь всегда давал None — у ParsedResponse такого поля нет,
-            # оно приходит в meta (см. bridge.py).
-            meta = getattr(response, 'meta', None) or {}
+            # оно приходит в metrics (см. bridge.py/ParsedMetrics).
+            metrics = getattr(response, 'metrics', None)
             _add_stage(
                 'parse',
                 detail={
                     'items': len(response.items),
-                    'strategy': meta.get('strategy_used'),
-                    'quality_status': meta.get('quality_status'),
+                    'strategy': getattr(metrics, 'strategy_used', None),
+                    'quality_status': getattr(metrics, 'quality_status', None),
                     'quality_levels': _collect_quality_levels(response),
                 },
             )
@@ -717,9 +715,7 @@ class AdaptiveRunner:
         #    (хэширование, дедупликация по Redis, HTML/JSON на диск, RawItem).
         service = RawDataService(session, redis_client)
         data_dict = response.model_dump()
-        html_source_path = None
-        if response.items and response.items[0].extra.get('file_path'):
-            html_source_path = response.items[0].extra['file_path']
+        html_source_path = getattr(response, 'html_file_path', None)
 
         persisted = await service.persist(
             search_task_id=task_id,
@@ -746,12 +742,13 @@ class AdaptiveRunner:
         # стратегия. Раньше сюда попадала classification.recommended_strategy
         # — предсказание до попытки, из-за чего разбивка по стратегиям в
         # отчётах показывала намерение, а не факт.
-        meta = getattr(response, 'meta', None) or {}
+        metrics = getattr(response, 'metrics', None)
         persisted['strategy'] = (
-            meta.get('strategy_used') or classification.recommended_strategy
+            getattr(metrics, 'strategy_used', None)
+            or classification.recommended_strategy
         )
         persisted['strategy_recommended'] = classification.recommended_strategy
-        persisted['quality_status'] = meta.get('quality_status')
+        persisted['quality_status'] = getattr(metrics, 'quality_status', None)
         persisted['quality_levels'] = _collect_quality_levels(response)
         persisted['source'] = source_name
         persisted['pipeline_report'] = report.model_dump(mode='json')

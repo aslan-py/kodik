@@ -205,6 +205,16 @@ class Settings(BaseSettings):
     bp1_min_article_text_length: int = 100
     bp1_min_full_article_text_length: int = 300
     bp1_max_tail_fetch_attempts: int = 3
+    # Размер окна (в символах исходного HTML), забираемого с конца документа
+    # при докачке обрезанного хвоста статьи (adaptive/processing/parser.py,
+    # _extract_missing_tail). Раньше был захардкожен в коде.
+    bp1_tail_fetch_chunk_size: int = 12000
+    # Эскалировать ли в LLM короткий (100..min_full) CSS/readability-текст,
+    # даже если он выглядит завершённым (заканчивается пунктуацией, не
+    # обрублен). True — приоритет полноте текста для ML (может увеличить
+    # число LLM-вызовов); False — считать такой текст естественно коротким
+    # (короткие вакансии/пресс-релизы) и не тратить LLM-вызов.
+    bp1_short_text_llm_escalation: bool = True
     bp1_min_content_length: int = 300
     # Верхний предел страниц пагинации на источник за прогон. Раньше
     # _max_pages() возвращал жёстко зашитое 10000 (фактически "без
@@ -226,6 +236,31 @@ class Settings(BaseSettings):
     bp1_relevance_threshold: float = 0.6
     # Включает LLM-обогащение событий структурированными полями.
     bp1_enrichment_enabled: bool = True
+    # Ограничение длины текста (символов), передаваемого в промпт
+    # обогащения (adaptive/processing/_llm/prompt_builders.py,
+    # build_enrichment_prompt). Не влияет на сам извлечённый ex_text —
+    # только на текст, по которому LLM считает summary/sentiment/keywords.
+    bp1_enrichment_snippet_size: int = 12000
+
+    # ===== BP-1 Adaptive (чанкирование длинных страниц для LLM) =====
+    # Размер одного чанка HTML (символов) и максимальное число чанков на
+    # страницу/статью (adaptive/processing/_llm/constants.py). Чанки сверх
+    # bp1_llm_max_chunks отбрасываются (с предупреждением в логах) —
+    # потолок длины HTML, из которого можно извлечь текст через LLM:
+    # bp1_llm_max_chunks * bp1_llm_max_chunk_size символов.
+    #
+    # Снижено с 20 до 6 (реальные замеры hh.ru): _chunk_by_chars режет
+    # текст строго последовательно по позиции в документе, а основной
+    # контент (title/описание вакансии) обычно идёт раньше в DOM, чем
+    # "похожие вакансии"/футер. При 20 чанках 60-85% из них у больших
+    # страниц (hh.ru: 677-823 КБ HTML) возвращали от LLM пустой ответ
+    # (легитимно — там нет текста статьи), но каждый лишний чанк — это
+    # ещё один LLM-запрос, и суммарное время ожидания превышало
+    # bp1_article_fetch_timeout_seconds. Реальная длина извлечённого
+    # текста вакансии (readability/успешный llm) — ~700-2700 символов,
+    # с запасом укладывается в 6 чанков по 8000 символов.
+    bp1_llm_max_chunk_size: int = 8000
+    bp1_llm_max_chunks: int = 6
 
     # ===== BP-1 Adaptive (сетевые ограничения) =====
     # parse_timeout_ms / max_concurrent_tasks — общие для классического
@@ -233,7 +268,14 @@ class Settings(BaseSettings):
     # управляет обоими потребителями одного и того же смысла.
     bp1_parse_timeout_ms: int = 60000
     bp1_max_concurrent_tasks: int = 5
-    bp1_article_fetch_timeout_seconds: float = 20.0
+    # Бюджет на весь _extract_article_text одной статьи, включая полную
+    # цепочку деградации (FAST->CRAWL4AI->BROWSER->WAYBACK->STEALTH->HITL).
+    # Не должен быть меньше внутреннего таймаута одной стратегии (60000мс,
+    # см. AdaptiveParser.__init__/engines.py) — иначе asyncio.wait_for
+    # обрывает выполнение посреди единственной попытки, а не даёт ей дойти
+    # до конца (см. orchestrator.py::BrowserStrategy.fetch, где именно
+    # такой обрыв уже был явно диагностирован как проблема).
+    bp1_article_fetch_timeout_seconds: float = 60.0
     bp1_max_concurrent_fetches: int = 5
 
     # ===== BP-1 Adaptive (время жизни кэшей) =====

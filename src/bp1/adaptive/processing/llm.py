@@ -144,32 +144,54 @@ class LLMClient(BaseLLMClient):
     async def extract_article_text(self, content: str) -> str | None:
         """Извлекает основной текст статьи из очищенного HTML через LLM.
 
-        Используется глубоким фетчем (каскад CSS → LLM → сниппет) для
-        получения полного текста новости со страницы статьи. Если LLM не
-        настроен или запрос не удался — возвращает ``None`` (передаёт
-        управление следующему способу извлечения).
+        Тонкая обёртка над ``extract_article_text_with_meta`` для обратной
+        совместимости с существующими вызывающими — отбрасывает метаданные
+        о чанкировании.
+        """
+        text, _meta = await self.extract_article_text_with_meta(content)
+        return text
+
+    async def extract_article_text_with_meta(
+        self, content: str
+    ) -> tuple[str | None, dict[str, Any]]:
+        """Извлекает текст статьи через LLM вместе с метаданными чанкирования.
+
+        Используется глубоким фетчем (каскад CSS → readability → LLM →
+        сниппет) для получения полного текста новости со страницы статьи.
+        Если LLM не настроен или запрос не удался — возвращает ``None``
+        (передаёт управление следующему способу извлечения).
 
         Длинные статьи (больше ``_max_chunk_size``) обрабатываются по
         частям через ``StructuredChunker``: каждая часть извлекается
-        отдельным запросом, результаты склеиваются.
+        отдельным запросом, результаты склеиваются. Если реальных чанков
+        оказалось больше ``_max_chunks`` — лишние отбрасываются, и это
+        отражается в метаданных (``chunks_dropped``), чтобы вызывающий код
+        мог пометить результат как потенциально неполный.
 
         Args:
             content: Очищенный HTML статьи (см. ``HtmlCleaner.clean``).
 
         Returns:
-            Полный текст статьи или ``None`` при недоступности LLM.
+            Кортеж ``(text, meta)``, где ``meta`` содержит ``chunked``,
+            ``total_chunks``, ``used_chunks``, ``chunks_dropped``.
         """
+        empty_meta: dict[str, Any] = {
+            'chunked': False,
+            'total_chunks': 0,
+            'used_chunks': 0,
+            'chunks_dropped': 0,
+        }
         if not _has_llm_config():
-            return None
+            return None, empty_meta
         try:
             if len(content) <= self._max_chunk_size:
                 text = await self._llm_extract_single(content)
-            else:
-                text = await self._llm_extract_chunked(content)
-            return (text or '').strip() or None
+                return (text or '').strip() or None, empty_meta
+            text, meta = await self._llm_extract_chunked(content)
+            return (text or '').strip() or None, meta
         except Exception as e:
             self._logger.warning('Ошибка LLM-извлечения статьи: %s', e)
-            return None
+            return None, empty_meta
 
     async def _llm_extract_single(self, content: str) -> str | None:
         """Один LLM-запрос: извлечь основной текст из фрагмента HTML."""
@@ -179,17 +201,37 @@ class LLMClient(BaseLLMClient):
             temperature=constants.TEMPERATURE_EXTRACTION,
         )
 
-    async def _llm_extract_chunked(self, content: str) -> str | None:
+    async def _llm_extract_chunked(
+        self, content: str
+    ) -> tuple[str | None, dict[str, Any]]:
         """Чанкированное извлечение текста для длинных статей.
 
-        Разбивает очищенный HTML на части ``StructuredChunker`` (до
-        ``_max_chunks`` штук), извлекает текст из каждой части параллельно
-        (семафор ``_parallel_workers``) и склеивает результаты.
+        Разбивает очищенный HTML на части ``StructuredChunker``, извлекает
+        текст из каждой части параллельно (семафор ``_parallel_workers``) и
+        склеивает результаты. Если частей больше ``_max_chunks`` — лишние
+        (хвостовые) отбрасываются с предупреждением в логах, т.к. иначе
+        потеря текста происходит молча.
         """
         cleaned: dict[str, Any] = {'content': content, 'blocks': []}
-        chunks = self._chunker.chunk(cleaned)[: self._max_chunks]
+        all_chunks = self._chunker.chunk(cleaned)
+        chunks = all_chunks[: self._max_chunks]
+        dropped = len(all_chunks) - len(chunks)
+        if dropped > 0:
+            self._logger.warning(
+                'LLM-чанкирование отбросило %d из %d чанков '
+                '(длина HTML=%d символов) — текст статьи может быть неполным',
+                dropped,
+                len(all_chunks),
+                len(content),
+            )
+        meta: dict[str, Any] = {
+            'chunked': True,
+            'total_chunks': len(all_chunks),
+            'used_chunks': len(chunks),
+            'chunks_dropped': dropped,
+        }
         if not chunks:
-            return None
+            return None, meta
 
         async def _extract(chunk: Chunk) -> str | None:
             return await self._llm_extract_single(chunk.content)
@@ -201,11 +243,24 @@ class LLMClient(BaseLLMClient):
             self._logger,
             'Ошибка LLM-извлечения чанка: %s',
         )
+        # run_limited уже отфильтровал упавшие с исключением чанки (и
+        # залогировал каждую ошибку отдельно) — их количество равно
+        # разнице между числом чанков и числом вернувшихся результатов.
+        failed = len(chunks) - len(results)
         parts: list[str] = []
         for result in results:
             if isinstance(result, str) and result.strip():
                 parts.append(result)
-        return '\n\n'.join(parts) or None
+            else:
+                failed += 1
+        if failed:
+            self._logger.warning(
+                'LLM-извлечение не удалось для %d из %d чанков',
+                failed,
+                len(chunks),
+            )
+        meta['chunks_failed'] = failed
+        return '\n\n'.join(parts) or None, meta
 
     # ------------------------------------------------------------------
     # Анализ структуры.
@@ -713,6 +768,15 @@ class AIAgent(BaseLLMClient):
         if not _has_llm_config():
             return {}
 
+        truncated = len(text) > constants.HTML_SNIPPET_SIZE
+        if truncated:
+            self._logger.info(
+                'Промпт обогащения обрезан: %d -> %d символов. '
+                'summary/sentiment/keywords посчитаны только по началу текста.',
+                len(text),
+                constants.HTML_SNIPPET_SIZE,
+            )
+
         try:
             prompt = prompt_builders.build_enrichment_prompt(
                 text, competitor, trigger
@@ -724,7 +788,14 @@ class AIAgent(BaseLLMClient):
             )
             data = parse_json(content or '') if content else {}
             response = EnrichmentResponse(**data)
-            return mappers.to_enrichment(response)
+            result = mappers.to_enrichment(response)
+            if truncated:
+                # Пишем только когда True — как и остальные поля
+                # to_enrichment, пустое/дефолтное значение не добавляется,
+                # чтобы не менять смысл `if data:` у вызывающего кода
+                # (пустой результат обогащения должен остаться пустым).
+                result['enrichment_truncated'] = True
+            return result
         except Exception as e:
             self._logger.warning('Ошибка LLM-обогащения события: %s', e)
             return {}

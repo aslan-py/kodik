@@ -23,7 +23,7 @@ import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -93,7 +93,7 @@ MAX_TAIL_FETCH_ATTEMPTS = settings.bp1_max_tail_fetch_attempts
 
 # Максимальное количество байт исходного HTML, отдаваемых LLM в одном запросе
 # докачки хвоста (смещение по оффсету в конец документа).
-TAIL_FETCH_CHUNK_SIZE = 12000
+TAIL_FETCH_CHUNK_SIZE = settings.bp1_tail_fetch_chunk_size
 
 # Служебные пути URL, которые не являются элементами данных и должны быть
 # отброшены при извлечении (логин, регистрация, cookie-политика и т.п.).
@@ -136,6 +136,27 @@ def _is_noise_url(url: str) -> bool:
     # (``mailto:``, ``tel:``, ``javascript:``) не считаются шумом здесь:
     # их отфильтровывает ``_is_fetchable_url`` на уровне кандидатов.
     return False
+
+
+def _is_ad_redirect_url(url: str) -> bool:
+    """Возвращает True для рекламных редирект-ссылок (клик-трекеров).
+
+    hh.ru отдаёт спонсированные вакансии через отдельный поддомен
+    ``adsrv.hh.ru/click?...`` — визуально это ссылка на вакансию, но
+    deep-fetch такого URL скачивает страницу рекламной системы (редирект),
+    а не саму вакансию, из-за чего каскад извлечения текста либо не находит
+    ничего, либо извлекает контент, не относящийся к запросу. Узкая,
+    специфичная для hh.ru-подобных доменов эвристика — при появлении
+    похожих паттернов на других источниках (``/redirect?``, ``/away.php``,
+    сторонние рекламные домены) расширить тем же способом.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        host = urlparse(url).netloc.lower()
+    except Exception:
+        return False
+    return host.startswith('adsrv.')
 
 
 def _reject_non_http_scheme(url: str) -> bool:
@@ -488,6 +509,12 @@ class AdaptiveParser:
             selectors=adapter.selectors,
             max_news=DEFAULT_MAX_NEWS,
             initial_html=html,
+            # Переиспользуем стратегию/классификацию, которые уже сработали
+            # для страницы листинга — иначе deep-fetch каждой статьи заново
+            # вслепую перебирает FAST→CRAWL4AI→BROWSER→... и почти никогда
+            # не укладывается в ARTICLE_FETCH_TIMEOUT_SECONDS.
+            start_with=strategy_result.strategy,
+            classification=agent_input,
         )
 
         # Фича 1: семантическая фильтрация нерелевантных новостей.
@@ -871,6 +898,8 @@ class AdaptiveParser:
         selectors: dict[str, str],
         max_news: int = DEFAULT_MAX_NEWS,
         initial_html: str | None = None,
+        start_with: StrategyType | None = None,
+        classification: SourceClassification | None = None,
     ) -> list[dict[str, Any]]:
         """Собирает новости со страниц пагинации до лимита ``max_news``.
 
@@ -886,6 +915,11 @@ class AdaptiveParser:
             selectors: CSS-селекторы адаптера.
             max_news: Максимальное количество новостей (по умолчанию 50).
             initial_html: HTML первой страницы (уже скачан).
+            start_with: Стратегия, уже сработавшая для страницы листинга —
+                переиспользуется для страниц пагинации и deep-fetch статей
+                вместо слепого перебора с FAST.
+            classification: Классификация источника, сузившая перебор для
+                листинга — переиспользуется по той же причине.
 
         Returns:
             Список словарей ``{"title", "url", "text"}``.
@@ -904,6 +938,8 @@ class AdaptiveParser:
                 result = await self._orchestrator.fetch_with_degradation(
                     _pagination_url(base_url, page, items_per_page),
                     source_name=source_name,
+                    start_with=start_with,
+                    classification=classification,
                 )
                 if not result.success or not result.data:
                     break
@@ -935,7 +971,13 @@ class AdaptiveParser:
             html = None
 
         # Глубокий фетч полного текста по накопленным ссылкам.
-        news = await self._deep_fetch(candidates, source_name, selectors)
+        news = await self._deep_fetch(
+            candidates,
+            source_name,
+            selectors,
+            start_with=start_with,
+            classification=classification,
+        )
         return news
 
     async def _enrich_news(
@@ -1006,20 +1048,29 @@ class AdaptiveParser:
         candidates: list[tuple[str, str, str]],
         source_name: str,
         selectors: dict[str, str],
+        start_with: StrategyType | None = None,
+        classification: SourceClassification | None = None,
     ) -> list[dict[str, Any]]:
-        """Докачивает полный текст для списка новостей (каскад CSS → LLM).
+        """Докачивает полный текст для списка новостей (best-of каскад
+        CSS → readability → LLM, см. ``_extract_article_text``).
 
         Каждая статья обрабатывается с ограничением конкурентности
         (``MAX_CONCURRENT_FETCHES``). При сбое всех способов извлечения
-        используется сниппет (заголовок), чтобы не терять новость.
+        используется заголовок (``ex_method='snippet_title'``), чтобы не
+        терять новость.
 
         Args:
             candidates: Список ``(title, url_abs, url_rel)``.
             source_name: Имя источника.
             selectors: CSS-селекторы адаптера.
+            start_with: Стратегия, уже сработавшая для страницы листинга —
+                каждая статья начинает деградацию с неё, а не с FAST.
+            classification: Классификация источника — сужает допустимый
+                перебор стратегий так же, как для листинга.
 
         Returns:
-            Список ``{"title", "url", "text"}`` (url — полная ссылка).
+            Список словарей ``ex_title``/``ex_url``/``ex_text``/
+            ``ex_method``/``ex_text_length``/``ex_text_possibly_incomplete``.
         """
 
         # Приоритет отдаём статьям с настроенным CSS-селектором ``text``
@@ -1041,12 +1092,19 @@ class AdaptiveParser:
             if cached and cached.get('text'):
                 text = cached['text']
                 method = cached.get('method') or 'cache'
+                possibly_incomplete = bool(
+                    cached.get('possibly_incomplete', False)
+                )
             else:
                 try:
                     async with semaphore:
-                        text, method = await asyncio.wait_for(
+                        text, method, meta = await asyncio.wait_for(
                             self._extract_article_text(
-                                url_abs, source_name, selectors
+                                url_abs,
+                                source_name,
+                                selectors,
+                                start_with=start_with,
+                                classification=classification,
                             ),
                             timeout=ARTICLE_FETCH_TIMEOUT_SECONDS,
                         )
@@ -1054,20 +1112,31 @@ class AdaptiveParser:
                     self._logger.warning(
                         'Таймаут извлечения текста статьи: %s', url_abs
                     )
-                    text, method = None, 'timeout'
+                    text, method, meta = None, 'snippet_title', {}
                 if not text:
                     text = title  # сниппет-фолбэк: не теряем новость
-                    method = 'snippet'
+                    method = 'snippet_title'
+                    possibly_incomplete = True
                 else:
-                    await self._cache.set_article_text(url_abs, text, method)
+                    possibly_incomplete = not meta.get('complete', False)
+                    await self._cache.set_article_text(
+                        url_abs,
+                        text,
+                        method,
+                        possibly_incomplete=possibly_incomplete,
+                    )
             # Ключи в extra имеют префикс ex_, чтобы не конфликтовать с
             # обязательными полями item (title/url/text) на уровне BP-2.
-            # method — способ получения текста (css/llm/snippet/cache).
+            # method — способ получения текста: css/readability/llm/
+            # snippet_page (шумный текст всей страницы)/snippet_title
+            # (только заголовок, фетч не удался)/cache.
             return {
                 'ex_title': title,
                 'ex_url': url_abs,
                 'ex_text': text,
                 'ex_method': method,
+                'ex_text_length': len(text) if text else 0,
+                'ex_text_possibly_incomplete': possibly_incomplete,
             }
 
         return await asyncio.gather(*(_one(c) for c in ordered))
@@ -1077,24 +1146,79 @@ class AdaptiveParser:
         url: str,
         source_name: str,
         selectors: dict[str, str],
-    ) -> tuple[str | None, str]:
-        """Извлекает полный текст статьи по URL (каскад CSS → LLM → сниппет).
+        start_with: StrategyType | None = None,
+        classification: SourceClassification | None = None,
+    ) -> tuple[str | None, str, dict[str, Any]]:
+        """Извлекает полный текст статьи по URL (best-of каскад).
 
-        Возвращает кортеж ``(text, method)``, где method — способ получения:
-        ``css``, ``llm`` или ``snippet``.
+        Пробует CSS-селектор → readability/trafilatura → LLM и выбирает
+        среди успешных попыток самый длинный результат, а не просто первый
+        превысивший ``MIN_ARTICLE_TEXT_LENGTH`` — иначе CSS-селектор,
+        случайно зацепивший только лид-абзац, останавливал бы каскад и не
+        давал шанса дойти до readability/LLM. Останавливается досрочно
+        только когда результат уже "уверенно полный" (длиннее
+        ``MIN_FULL_ARTICLE_TEXT_LENGTH`` и не выглядит обрезанным).
+
+        ``start_with``/``classification`` — стратегия и классификация,
+        уже подтверждённые для страницы листинга того же источника.
+        Без них каждая статья заново вслепую перебирает всю цепочку
+        деградации (FAST→CRAWL4AI→BROWSER→...), что почти никогда не
+        укладывается в ``ARTICLE_FETCH_TIMEOUT_SECONDS`` — на практике это
+        и есть основная причина, по которой deep-fetch массово скатывается
+        в ``snippet_title``, а не логика каскада CSS/readability/LLM.
+
+        Возвращает кортеж ``(text, method, meta)``, где ``method`` —
+        ``css``, ``readability``, ``llm``, ``snippet_page`` (текст всей
+        страницы без выделения статьи — может содержать меню/похожие
+        новости) или ``snippet_title`` (текста не нашлось вовсе — вызывающий
+        код подставит заголовок), а ``meta['complete']`` — уверенность в
+        полноте текста.
 
         Не-HTTP(S) ссылки (``mailto:``, ``tel:``, ``javascript:``) не
         скачиваются — ни один движок обхода их не обрабатывает, поэтому сразу
-        возвращается сниппет, чтобы не тратить время на бесполезные попытки.
+        возвращается пустой результат, чтобы не тратить время на бесполезные
+        попытки.
         """
+        empty_meta: dict[str, Any] = {'complete': False, 'chunks_dropped': 0}
         if not _is_fetchable_url(url):
-            return None, 'snippet'
+            return None, 'snippet_title', empty_meta
         result = await self._orchestrator.fetch_with_degradation(
-            url, source_name=source_name
+            url,
+            source_name=source_name,
+            # Отдельная статья — не страница результатов поиска: у неё
+            # никогда не будет разметки списка (``ul.search-results__list``
+            # и т.п.), поэтому BrowserStrategy не должна ждать её появления
+            # (см. пояснение у ``wait_for_listing`` в orchestrator.py).
+            wait_for_listing=False,
+            start_with=start_with,
+            classification=classification,
         )
         if not result.success or not result.data:
-            return None, 'snippet'
+            self._logger.warning(
+                'Deep-fetch не удался для %s (стратегия %s): %s',
+                url,
+                result.strategy,
+                result.error,
+            )
+            return None, 'snippet_title', empty_meta
         html = result.data
+
+        best_text: str | None = None
+        best_method: str | None = None
+        chunks_dropped = 0
+
+        def _confident(text: str | None) -> bool:
+            return (
+                bool(text)
+                and len(text) >= MIN_FULL_ARTICLE_TEXT_LENGTH
+                and not _looks_truncated(text)
+            )
+
+        def _consider(text: str | None, method: str) -> None:
+            nonlocal best_text, best_method
+            if text and len(text) >= MIN_ARTICLE_TEXT_LENGTH:
+                if best_text is None or len(text) > len(best_text):
+                    best_text, best_method = text, method
 
         # Этап A: структурное извлечение по CSS-селектору `text`.
         text_selector = (selectors or {}).get('text')
@@ -1102,35 +1226,60 @@ class AdaptiveParser:
             soup = BeautifulSoup(html, 'html.parser')
             node = soup.select_one(text_selector)
             if node is not None:
-                text = node.get_text(' ', strip=True)
-                if len(text) >= MIN_ARTICLE_TEXT_LENGTH:
-                    return text, 'css'
+                _consider(node.get_text(' ', strip=True), 'css')
 
         # Этап B: детерминированное извлечение основного контента
         # (Фича 2). Использует trafilatura/readability-lxml, если доступен
         # (опциональная зависимость), чтобы получить полный текст без
-        # затрат токенов LLM. Работает даже без LLM-конфига.
-        readable = _extract_main_content(html)
-        if readable and len(readable) >= MIN_ARTICLE_TEXT_LENGTH:
-            return readable, 'readability'
+        # затрат токенов LLM. Работает даже без LLM-конфига. Пропускается,
+        # если этап A уже дал уверенно полный текст.
+        if not _confident(best_text):
+            readable = _extract_main_content(html)
+            _consider(readable, 'readability')
 
-        # Этап C: LLM-извлечение (fallback при сбое CSS/детерминированного
-        # извлечения). Если результат подозрительно короткий или обрывается
-        # без финального знака препинания — считаем текст обрезанным и
-        # пробуем докачать хвост.
-        llm_text = await self._llm_extract_text(html)
-        if llm_text and len(llm_text) >= MIN_ARTICLE_TEXT_LENGTH:
-            if _looks_truncated(llm_text):
-                llm_text = await self._extract_missing_tail(
-                    html, llm_text, source_name
-                )
-            return llm_text, 'llm'
+        # Этап C: LLM-извлечение. Пробуется, если CSS/readability не дали
+        # уверенно полного текста — не только когда они полностью
+        # провалились, иначе короткий лид-абзац "глушит" каскад и мешает
+        # LLM достать полный текст статьи.
+        escalate = not _confident(best_text)
+        if (
+            escalate
+            and best_text is not None
+            and not settings.bp1_short_text_llm_escalation
+            and not _looks_truncated(best_text)
+        ):
+            # Короткий, но формально завершённый текст (например,
+            # вакансия-однострока) — считаем естественно коротким и не
+            # тратим LLM-вызов, если так настроено.
+            escalate = False
 
-        # Этап D: сниппет из очищенного контента.
-        snippet = _plain_text(html)
-        if snippet:
-            return snippet, 'snippet'
-        return None, 'snippet'
+        if escalate:
+            llm_text, llm_meta = await self._llm_extract_text_with_meta(html)
+            chunks_dropped = llm_meta.get('chunks_dropped', 0)
+            _consider(llm_text, 'llm')
+
+        if best_text is None or best_method is None:
+            # Этап D: сниппет из очищенного контента всей страницы — не
+            # выделяет именно статью, может содержать меню/похожие новости.
+            snippet = _plain_text(html)
+            if snippet:
+                return snippet, 'snippet_page', empty_meta
+            return None, 'snippet_title', empty_meta
+
+        # Докачка обрезанного хвоста применяется к победителю независимо
+        # от метода — обрыв возможен и у CSS/readability-результата, не
+        # только у LLM (сдвиг по офсету в исходном HTML от метода не
+        # зависит).
+        if _looks_truncated(best_text):
+            best_text = await self._extract_missing_tail(
+                html, best_text, source_name
+            )
+
+        meta = {
+            'complete': _confident(best_text),
+            'chunks_dropped': chunks_dropped,
+        }
+        return best_text, best_method, meta
 
     async def _extract_missing_tail(
         self,
@@ -1175,14 +1324,30 @@ class AdaptiveParser:
 
     async def _llm_extract_text(self, html: str) -> str | None:
         """Извлекает основной текст статьи через LLM (если настроен)."""
+        text, _meta = await self._llm_extract_text_with_meta(html)
+        return text
+
+    async def _llm_extract_text_with_meta(
+        self, html: str
+    ) -> tuple[str | None, dict[str, Any]]:
+        """Извлекает текст статьи через LLM вместе с метаданными чанкирования.
+
+        ``meta['chunks_dropped']`` > 0 означает, что статья длиннее лимита
+        чанкирования и часть текста была молча отброшена (см.
+        ``LLMClient._llm_extract_chunked``) — вызывающий код помечает такой
+        результат как потенциально неполный, даже если по длине он формально
+        прошёл порог.
+        """
         try:
             cleaner = HtmlCleaner()
             cleaned = cleaner.clean(html, extract_metadata=False)
             content = cleaned.get('content', '')
-            return await self._llm_client.extract_article_text(content)
+            return await self._llm_client.extract_article_text_with_meta(
+                content
+            )
         except Exception as e:  # pragma: no cover - зависит от LLM
             self._logger.warning('Ошибка LLM-извлечения текста: %s', e)
-            return None
+            return None, {'chunked': False, 'chunks_dropped': 0}
 
 
 def _extract_main_content(html: str) -> str | None:
@@ -1204,8 +1369,13 @@ def _extract_main_content(html: str) -> str | None:
         )
         if extracted and len(extracted) >= MIN_ARTICLE_TEXT_LENGTH:
             return extracted.strip()
-    except Exception:
-        pass
+    except Exception as e:
+        # ImportError (пакет не установлен) выглядит так же, как ошибка
+        # парсинга конкретной страницы — не отличить без лога. Раньше это
+        # приводило к тому, что весь каскад молча уходил в LLM для КАЖДОЙ
+        # статьи, даже когда readability/trafilatura реально не установлены
+        # (см. REFACTORING_PLAN.md/раздел про best-of каскад).
+        logger.debug('trafilatura недоступна/ошибка извлечения: %s', e)
 
     try:
         from readability import Document  # type: ignore
@@ -1216,8 +1386,8 @@ def _extract_main_content(html: str) -> str | None:
         content = soup.get_text(' ', strip=True)
         if content and len(content) >= MIN_ARTICLE_TEXT_LENGTH:
             return content
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug('readability-lxml недоступна/ошибка извлечения: %s', e)
 
     return None
 
@@ -1340,6 +1510,7 @@ def _page_items(
             title = raw.get('title', '')
             if (
                 _is_noise_url(url_rel)
+                or _is_ad_redirect_url(url_rel)
                 or _reject_non_http_scheme(url_rel)
                 or not title
             ):
@@ -1359,7 +1530,11 @@ def _page_items(
         collector = _LinkCollector()
         collector.feed(container_html)
         for title, href in collector.links:
-            if _is_noise_url(href) or _reject_non_http_scheme(href):
+            if (
+                _is_noise_url(href)
+                or _is_ad_redirect_url(href)
+                or _reject_non_http_scheme(href)
+            ):
                 continue
             pairs.append((title, href))
             if len(pairs) >= DEFAULT_MAX_NEWS:
@@ -1458,8 +1633,10 @@ def _parse_items(
     if selectors.get('container'):
         items: list[dict[str, Any]] = []
         for raw in _extract_by_selectors(html, selectors):
-            if _is_noise_url(raw.get('url')) or _reject_non_http_scheme(
-                raw.get('url')
+            if (
+                _is_noise_url(raw.get('url'))
+                or _is_ad_redirect_url(raw.get('url'))
+                or _reject_non_http_scheme(raw.get('url'))
             ):
                 continue
             items.append(
@@ -1485,7 +1662,11 @@ def _parse_items(
 
     items = []
     for title, href in collector.links:
-        if _is_noise_url(href) or _reject_non_http_scheme(href):
+        if (
+            _is_noise_url(href)
+            or _is_ad_redirect_url(href)
+            or _reject_non_http_scheme(href)
+        ):
             continue
         items.append(
             _make_item(

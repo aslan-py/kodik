@@ -20,7 +20,6 @@ from src.bp1.models import Source
 
 from .constants import (
     COMPETITOR_INN,
-    REDIS_CLASSIFICATION_KEY,
     SEARCH_QUERY,
     SEARCH_URL,
     SEARCH_URL_FEDRESURS_INN,
@@ -38,8 +37,12 @@ from .constants import (
     SRC_LENTA_NORMALIZED,
     SRC_LENTA_UPPER,
     SRC_LENTA_WWW,
+    SRC_TEST_NEWS_HOST,
+    SRC_TEST_NEWS_NORMALIZED,
+    SRC_TEST_NEWS_URL,
     SRC_WHITESPACE,
     SRC_ZH,
+    TEST_NEWS_REDIS_CLASSIFICATION_KEY,
 )
 
 
@@ -246,24 +249,24 @@ async def test_register_creates_source(session):
     fake_redis = _FakeRedis()
     service = SourceRegistrationService(session, redis_client=fake_redis)
 
-    result = await service.register(SRC_LENTA_NEWS, fake_redis)
+    result = await service.register(SRC_TEST_NEWS_URL, fake_redis)
 
     assert result.created is True
-    assert result.source_name == SRC_LENTA_NORMALIZED
-    assert result.host == SRC_LENTA_HOST
+    assert result.source_name == SRC_TEST_NEWS_NORMALIZED
+    assert result.host == SRC_TEST_NEWS_HOST
     assert result.classification.source_type == SourceType.NEWS
 
     # В БД появилась запись Source.
     source = (
         await session.execute(
-            select(Source).where(Source.name == SRC_LENTA_NORMALIZED)
+            select(Source).where(Source.name == SRC_TEST_NEWS_NORMALIZED)
         )
     ).scalar_one_or_none()
     assert source is not None
     assert source.id == result.source_id
 
     # В Redis появился ключ классификации.
-    assert fake_redis._store.get(REDIS_CLASSIFICATION_KEY) is not None
+    assert fake_redis._store.get(TEST_NEWS_REDIS_CLASSIFICATION_KEY) is not None
 
 
 @pytest.mark.asyncio
@@ -272,8 +275,8 @@ async def test_register_is_idempotent(session):
     fake_redis = _FakeRedis()
     service = SourceRegistrationService(session, redis_client=fake_redis)
 
-    first = await service.register(SRC_LENTA_NORMALIZED, fake_redis)
-    second = await service.register(SRC_LENTA_NEWS, fake_redis)
+    first = await service.register(SRC_TEST_NEWS_NORMALIZED, fake_redis)
+    second = await service.register(SRC_TEST_NEWS_URL, fake_redis)
 
     assert first.created is True
     assert second.created is False
@@ -281,7 +284,7 @@ async def test_register_is_idempotent(session):
 
     count = (
         await session.execute(
-            select(Source).where(Source.name == SRC_LENTA_NORMALIZED)
+            select(Source).where(Source.name == SRC_TEST_NEWS_NORMALIZED)
         )
     ).scalar_one_or_none()
     assert count is not None

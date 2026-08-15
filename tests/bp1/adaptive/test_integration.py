@@ -18,6 +18,7 @@ from .constants import (
     COMPETITOR,
     EXAMPLE_SOURCE_NAME,
     EXAMPLE_URL,
+    NEWS_LINK,
     PARSER_TYPE_ADAPTIVE,
     SEARCH_TASK_ID,
     TITLE_FIELD,
@@ -85,21 +86,22 @@ async def test_bridge_returns_parsed_response(monkeypatch):
         competitor=COMPETITOR,
         trigger=TRIGGER,
     )
-    assert response.meta['source'] == EXAMPLE_SOURCE_NAME
-    assert response.meta['search_task_id'] == SEARCH_TASK_ID
+    assert response.meta.source == EXAMPLE_SOURCE_NAME
+    assert response.meta.search_task_id == SEARCH_TASK_ID
     assert len(response.items) >= 1
-    # Базовый элемент — поисковая страница; её real-новости уходят в
-    # отдельные ParsedItem (см. test_bridge_promotes_news), а также
-    # остаются в extra['news'] для обратной совместимости.
-    assert response.items[0].title == EXAMPLE_SOURCE_NAME
+    # Страница результатов поиска сама не событие БП-1 (её нет в контракте
+    # ABOUT.md) — items содержит только продвинутые новости.
+    assert response.items[0].url == NEWS_LINK
 
 
 @pytest.mark.asyncio
-async def test_bridge_promotes_news(monkeypatch):
-    """Каждая новость из extra.news становится отдельным ParsedItem.
+async def test_bridge_meta_matches_about_contract(monkeypatch):
+    """``meta`` и ``metrics`` разделены по контракту ABOUT.md.
 
-    Пункт 12: BP-2 должен обрабатывать каждую статью как самостоятельное
-    событие с полным текстом (ex_text в text), а не только листинг.
+    ``meta`` — только факты о запросе (закрытый список полей,
+    ``ParsedMeta``); служебные/диагностические поля (``probed_url``,
+    ``strategy_used``, ``quality_status``, ``quality_levels``, ...) обязаны
+    жить в ``metrics``, а не просачиваться в ``meta``.
     """
     monkeypatch.setattr(settings, 'llm_api_key', None)
     parser = AdaptiveBridgeParser(source_name=EXAMPLE_SOURCE_NAME)
@@ -112,26 +114,95 @@ async def test_bridge_promotes_news(monkeypatch):
         trigger=TRIGGER,
     )
 
-    # Базовый элемент (поисковая страница) помечен и сохраняет extra.news.
-    base = response.items[0]
-    assert base.extra.get('search_page') is True
-    assert isinstance(base.extra.get('news'), list)
+    assert response.meta.model_dump().keys() == {
+        'search_task_id',
+        'source',
+        'competitor',
+        'trigger',
+        'source_request_url',
+        'fetched_at',
+    }
+    assert response.metrics.strategy_used == StrategyType.FAST.value
+    assert response.metrics.quality_status is not None
 
-    # Новости продвинуты в отдельные ParsedItem.
-    news_items = [
-        i
-        for i in response.items
-        if i.extra.get('news_source') == 'adaptive_news'
-    ]
-    assert news_items, 'новости должны быть продвинуты в ParsedItem'
 
-    news_entry = base.extra['news'][0]
-    promoted = news_items[0]
-    assert promoted.url == news_entry['ex_url']
-    assert promoted.title == news_entry['ex_title']
-    assert promoted.text == news_entry['ex_text']
+@pytest.mark.asyncio
+async def test_bridge_zero_results_still_routes_metrics(monkeypatch):
+    """Нулевая выдача (news == []) — тоже страница поиска, не событие.
+
+    Регресс-тест на реальный баг (найден на живом прогоне source=lenta.ru,
+    search_task_id=621, 0 найденных новостей): код различал «страницу
+    поиска» по истинности списка новостей (``if news:``), а не по наличию
+    ключа ``news`` в extra. При пустой выдаче условие было ложным, поэтому
+    служебная страница поиска не считалась служебной и проваливалась в
+    ``items`` как обычное событие — вместе со всей диагностикой
+    (``quality_levels``/``relevance_mode``/``news_total``/``file_saved``),
+    которая должна была уйти в ``metrics``.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    parser = AdaptiveBridgeParser(source_name=EXAMPLE_SOURCE_NAME)
+
+    class _NoLinksOrchestrator:
+        async def fetch_with_degradation(self, url: str, **kwargs):
+            html = '<html><body>Ничего не найдено</body></html>'
+            return StrategyResult(
+                strategy=StrategyType.FAST,
+                success=True,
+                data=html,
+                content_length=len(html),
+            )
+
+    parser._adaptive_parser._orchestrator = _NoLinksOrchestrator()
+
+    response = await parser.parse(
+        EXAMPLE_URL,
+        search_task_id=SEARCH_TASK_ID,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+
+    # Ни одной новости не найдено -> служебная страница поиска не событие,
+    # items пуст (а не 1 элемент со слипшейся диагностикой в extra).
+    assert response.items == []
+    assert response.metrics.news_total == 0
+    assert response.metrics.quality_levels is not None
+    assert response.meta.model_dump().keys() == {
+        'search_task_id',
+        'source',
+        'competitor',
+        'trigger',
+        'source_request_url',
+        'fetched_at',
+    }
+
+
+@pytest.mark.asyncio
+async def test_bridge_promotes_news(monkeypatch):
+    """Каждая новость из страницы результатов поиска — отдельный ParsedItem.
+
+    Пункт 12: BP-2 должен обрабатывать каждую статью как самостоятельное
+    событие с полным текстом (title/text), а не только листинг. Страница
+    результатов поиска сама в items не попадает (см.
+    test_bridge_returns_parsed_response) — раскладывается целиком.
+    extra намеренно пуст (по запросу) — вся диагностика извлечения
+    (ex_method/relevance/enrichment/...) больше не сериализуется.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    parser = AdaptiveBridgeParser(source_name=EXAMPLE_SOURCE_NAME)
+    parser._adaptive_parser._orchestrator = _FakeOrchestrator()
+
+    response = await parser.parse(
+        EXAMPLE_URL,
+        search_task_id=SEARCH_TASK_ID,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+
+    assert response.items, 'новости должны быть продвинуты в ParsedItem'
+    promoted = response.items[0]
+    assert promoted.url == NEWS_LINK
     assert promoted.media_name == EXAMPLE_SOURCE_NAME
-    assert promoted.extra.get('search_page_url') == base.url
+    assert promoted.extra == {}
 
 
 def test_bridge_metadata():
@@ -174,7 +245,13 @@ async def test_article_text_cache_roundtrip(tmp_path):
     url = 'https://example.com/about/news/1'
     await cache.set_article_text(url, 'Полный текст новости.', 'llm')
     cached = await cache.get_article_text(url)
-    assert cached == {'text': 'Полный текст новости.', 'method': 'llm'}
+    assert cached == {
+        'text': 'Полный текст новости.',
+        'method': 'llm',
+        'length': len('Полный текст новости.'),
+        'complete': True,
+        'possibly_incomplete': False,
+    }
 
     # Несуществующий URL — None.
     assert await cache.get_article_text('https://example.com/other') is None

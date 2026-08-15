@@ -4,6 +4,8 @@
 настройки промптов. Логика вызовов — в соседних модулях пакета.
 """
 
+from core.config import settings
+
 # Поля по умолчанию для анализа структуры.
 DEFAULT_FIELDS = [
     'title',
@@ -14,14 +16,20 @@ DEFAULT_FIELDS = [
     'media_name',
 ]
 
-# Параметры чанкирования по умолчанию.
-DEFAULT_MAX_CHUNK_SIZE = 8000
+# Параметры чанкирования по умолчанию. Размер чанка и их максимальное
+# число вынесены в settings (bp1_llm_max_chunk_size/bp1_llm_max_chunks) —
+# эксплуатационные ручки, влияющие на потолок длины статьи, которую можно
+# извлечь через LLM (см. adaptive/processing/llm.py::_llm_extract_chunked).
+DEFAULT_MAX_CHUNK_SIZE = settings.bp1_llm_max_chunk_size
 DEFAULT_OVERLAP_SIZE = 500
-DEFAULT_MAX_CHUNKS = 10
+DEFAULT_MAX_CHUNKS = settings.bp1_llm_max_chunks
 DEFAULT_PARALLEL_WORKERS = 5
 
-# Ограничение HTML, передаваемого в промпт (символов).
-HTML_SNIPPET_SIZE = 12000
+# Ограничение HTML/текста, передаваемого в промпт (символов). Используется
+# для классификации сайта и для обогащения события (ENRICHMENT_PROMPT) —
+# не влияет на извлечение самого текста статьи (ARTICLE_TEXT_PROMPT не
+# использует эту константу вовсе).
+HTML_SNIPPET_SIZE = settings.bp1_enrichment_snippet_size
 
 # Лимиты токенов на задачу.
 CLASSIFY_MAX_TOKENS = 2048

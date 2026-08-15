@@ -115,8 +115,6 @@ class FedresursAdapter(BaseParser):
             media_name=None,  # У fedresurs нет СМИ
             extra={
                 'director_info': result.extra,  # Блок с руководителем
-                # служебное поле для копирования HTML
-                'file_path': result.file_path,
             },
         )
 
@@ -132,6 +130,9 @@ class FedresursAdapter(BaseParser):
                 'fetched_at': datetime.now(UTC).isoformat(),
             },
             items=[item],
+            # Путь к HTML-снимку — служебное поле для копирования файла
+            # раннером (см. storage.py), не бизнес-факт о компании.
+            html_file_path=result.file_path,
         )
 
     def get_source_name(self) -> str:

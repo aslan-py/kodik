@@ -368,21 +368,35 @@ class BrowserStrategy(BaseStrategy):
             # постоянных соединениях в отличие от networkidle) и корректно
             # обрабатывает навигацию/перестройку DOM. Если за отведённое время
             # контейнер не появился — читаем текущий контент как есть.
+            #
+            # ``wait_for_listing=False`` (передаётся из
+            # ``AdaptiveParser._extract_article_text``) пропускает этот блок:
+            # у ОТДЕЛЬНОЙ статьи никогда не будет разметки списка результатов
+            # поиска, поэтому раньше здесь впустую ждали до
+            # ``5 * 8с = 40с`` на каждой статье, не помещаясь в общий бюджет
+            # `ARTICLE_FETCH_TIMEOUT_SECONDS` (20с, `core/config.py`) —
+            # внешний ``asyncio.wait_for`` отменял эту корутину прямо
+            # посреди ``page.wait_for_selector``, а закрытие браузера в
+            # ``finally`` ниже гонялось с внутренними футурами Playwright
+            # (видно в логах как ``Future exception was never retrieved`` /
+            # ``TargetClosedError`` для этого же локатора). Для статей
+            # достаточно общего опроса «появились ли вообще ссылки» ниже.
             found = False
-            for selector in self._NEWS_CONTAINER_SELECTORS:
-                try:
-                    await page.wait_for_selector(
-                        selector,
-                        timeout=min(
-                            self._CONTENT_POLL_ATTEMPTS
-                            * int(self._CONTENT_POLL_INTERVAL_S * 1000),
-                            self._timeout_ms,
-                        ),
-                    )
-                    found = True
-                    break
-                except Exception:
-                    continue
+            if kwargs.get('wait_for_listing', True):
+                for selector in self._NEWS_CONTAINER_SELECTORS:
+                    try:
+                        await page.wait_for_selector(
+                            selector,
+                            timeout=min(
+                                self._CONTENT_POLL_ATTEMPTS
+                                * int(self._CONTENT_POLL_INTERVAL_S * 1000),
+                                self._timeout_ms,
+                            ),
+                        )
+                        found = True
+                        break
+                    except Exception:
+                        continue
             if not found:
                 # Контейнер не появился — ждём появления любых ссылок.
                 for _ in range(self._CONTENT_POLL_ATTEMPTS):

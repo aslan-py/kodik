@@ -31,6 +31,13 @@ ARTICLE_TEXT_TTL_SECONDS = settings.bp1_article_text_ttl_seconds
 # TTL кэша пробинга поискового URL по умолчанию — 7 дней (в секундах).
 PROBED_URL_TTL_SECONDS = settings.bp1_probed_url_ttl_seconds
 
+# Версия схемы кэша полного текста статьи. Меняется при несовместимых
+# изменениях каскада извлечения (adaptive/processing/parser.py) или формата
+# хранимой записи — включена в ключ кэша (``_article_text_path``), чтобы
+# записи, посчитанные по старой логике/схеме, естественно "осиротели" и не
+# использовались новым кодом (без ручной миграции файлов на диске).
+ARTICLE_TEXT_CACHE_VERSION = 2
+
 
 def _canonical_source_name(source_name: str) -> str:
     """Приводит имя источника к каноническому hostname в нижнем регистре.
@@ -298,34 +305,51 @@ class UnifiedCache:
     # ========================================================================
 
     def _article_text_path(self, url: str) -> Path:
-        digest = hashlib.md5(url.encode('utf-8')).hexdigest()
+        digest = hashlib.md5(
+            f'{ARTICLE_TEXT_CACHE_VERSION}:{url}'.encode()
+        ).hexdigest()
         return self._snapshots_dir / f'article_{digest}.json'
 
     async def get_article_text(self, url: str) -> dict | None:
-        """Получить кэшированный полный текст статьи (``{"text", "method"}``).
+        """Получить кэшированный полный текст статьи.
 
-        Возвращает ``None``, если кэш пуст или файл повреждён.
+        Возвращает ``{"text", "method", "length", "complete",
+        "possibly_incomplete"}`` или ``None``, если кэш пуст, файл повреждён,
+        либо запись не содержит поля ``complete`` — такая запись считается
+        структурно устаревшей (несмотря на версионирование ключа, это
+        дополнительная защита от случайного использования записи старого
+        формата) и трактуется как промах кэша.
         """
         path = self._article_text_path(url)
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding='utf-8'))
+            data = json.loads(path.read_text(encoding='utf-8'))
         except Exception:
             return None
+        if 'complete' not in data:
+            return None
+        data['possibly_incomplete'] = not data.get('complete', False)
+        return data
 
     async def set_article_text(
         self,
         url: str,
         text: str,
         method: str,
+        possibly_incomplete: bool = False,
         ttl: int = ARTICLE_TEXT_TTL_SECONDS,
     ) -> None:
         """Сохранить полный текст статьи в кэш по ``url``."""
         path = self._article_text_path(url)
         path.write_text(
             json.dumps(
-                {'text': text, 'method': method},
+                {
+                    'text': text,
+                    'method': method,
+                    'length': len(text),
+                    'complete': not possibly_incomplete,
+                },
                 ensure_ascii=False,
             ),
             encoding='utf-8',

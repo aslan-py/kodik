@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from .constants import INN_INDIVIDUAL_LENGTH, INN_LEGAL_ENTITY_LENGTH
 from .schemas import ProxyConfig
 
 
@@ -27,10 +28,10 @@ def validate_inn(inn: str) -> None:
     if not inn.isdigit():
         raise ValueError('ИНН должен содержать только цифры')
 
-    if len(inn) not in (10, 12):
+    if len(inn) not in (INN_LEGAL_ENTITY_LENGTH, INN_INDIVIDUAL_LENGTH):
         raise ValueError('ИНН должен содержать 10 или 12 цифр')
 
-    if len(inn) == 10:
+    if len(inn) == INN_LEGAL_ENTITY_LENGTH:
         weights = [2, 4, 10, 3, 5, 9, 4, 6, 8]
         checksum = sum(int(inn[i]) * weights[i] for i in range(9)) % 11 % 10
         if checksum != int(inn[9]):

@@ -71,19 +71,17 @@ _SEPARATOR = '=' * 60
 # ============================================================================
 
 
-def _print_summary(summary: dict[str, Any]) -> None:
-    """Печатает сводку прогона в человекочитаемом виде."""
-    print()
+def _print_failure_summary(summary: dict[str, Any], status: str) -> None:
+    """Печатает сводку неуспешного прогона (status != 'ok')."""
+    print(f'Результат: {status}')
+    for key in ('source', 'competitor'):
+        if summary.get(key):
+            print(f'  {key}: {summary[key]}')
     print(_SEPARATOR)
-    status = summary.get('status')
-    if status and status != 'ok':
-        print(f'Результат: {status}')
-        for key in ('source', 'competitor'):
-            if summary.get(key):
-                print(f'  {key}: {summary[key]}')
-        print(_SEPARATOR)
-        return
 
+
+def _print_job_header(summary: dict[str, Any]) -> None:
+    """Печатает задание и его источники/конкурентов."""
     print(f'Задание: {summary.get("job", "?")}')
     for key, label in (
         ('source', 'источник'),
@@ -94,6 +92,9 @@ def _print_summary(summary: dict[str, Any]) -> None:
         if summary.get(key) is not None:
             print(f'  {label}: {summary[key]}')
 
+
+def _print_task_counts(summary: dict[str, Any]) -> None:
+    """Печатает счётчики задач и итоговый процент успеха."""
     print(f'  задач: {summary.get("tasks", 0)}')
     print(f'    сохранено      : {summary.get("saved", 0)}')
     print(f'    без изменений  : {summary.get("unchanged", 0)}')
@@ -101,12 +102,19 @@ def _print_summary(summary: dict[str, Any]) -> None:
     print(f'    пропущено      : {summary.get("skipped", 0)}')
     print(f'  успех: {summary.get("success_rate", 0.0) * 100:.1f}%')
 
-    by_strategy = summary.get('by_strategy') or {}
-    if by_strategy:
-        print('  стратегии (фактические):')
-        for name, count in sorted(by_strategy.items(), key=lambda kv: -kv[1]):
-            print(f'    {name:<10} {count}')
 
+def _print_strategy_breakdown(summary: dict[str, Any]) -> None:
+    """Печатает разбивку по фактически сработавшим стратегиям."""
+    by_strategy = summary.get('by_strategy') or {}
+    if not by_strategy:
+        return
+    print('  стратегии (фактические):')
+    for name, count in sorted(by_strategy.items(), key=lambda kv: -kv[1]):
+        print(f'    {name:<10} {count}')
+
+
+def _print_quality_failures(summary: dict[str, Any]) -> None:
+    """Печатает провалы контроля качества и источники низкого качества."""
     quality = summary.get('quality_levels') or {}
     failed = {
         level: info
@@ -121,6 +129,21 @@ def _print_summary(summary: dict[str, Any]) -> None:
     low_quality = summary.get('low_quality_sources') or []
     if low_quality:
         print(f'  низкое качество у источников: {", ".join(low_quality)}')
+
+
+def _print_summary(summary: dict[str, Any]) -> None:
+    """Печатает сводку прогона в человекочитаемом виде."""
+    print()
+    print(_SEPARATOR)
+    status = summary.get('status')
+    if status and status != 'ok':
+        _print_failure_summary(summary, status)
+        return
+
+    _print_job_header(summary)
+    _print_task_counts(summary)
+    _print_strategy_breakdown(summary)
+    _print_quality_failures(summary)
     print(_SEPARATOR)
 
 

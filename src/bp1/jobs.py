@@ -188,6 +188,7 @@ async def _ensure_search_tasks(
 
 
 async def _run_and_summarize(
+    *,
     job: str,
     task_ids: list[int],
     headless: bool,
@@ -288,13 +289,13 @@ async def collect_source(
                 session, [found.id], competitor_ids
             )
             return await _run_and_summarize(
-                'collect_source',
-                task_ids,
-                headless,
-                timeout,
-                max_concurrent,
-                session,
-                redis_client,
+                job='collect_source',
+                task_ids=task_ids,
+                headless=headless,
+                timeout=timeout,
+                max_concurrent=max_concurrent,
+                session=session,
+                redis_client=redis_client,
                 status='ok',
                 source=found.name,
                 source_id=found.id,
@@ -373,13 +374,13 @@ async def collect_competitor(
                 session, source_ids, [found.id]
             )
             return await _run_and_summarize(
-                'collect_competitor',
-                task_ids,
-                headless,
-                timeout,
-                max_concurrent,
-                session,
-                redis_client,
+                job='collect_competitor',
+                task_ids=task_ids,
+                headless=headless,
+                timeout=timeout,
+                max_concurrent=max_concurrent,
+                session=session,
+                redis_client=redis_client,
                 status='ok',
                 competitor=found.name,
                 competitor_id=found.id,
@@ -431,13 +432,13 @@ async def collect_all(
                 task_ids = list((await session.execute(stmt)).scalars().all())
 
             return await _run_and_summarize(
-                'collect_all',
-                task_ids,
-                headless,
-                timeout,
-                max_concurrent,
-                session,
-                redis_client,
+                job='collect_all',
+                task_ids=task_ids,
+                headless=headless,
+                timeout=timeout,
+                max_concurrent=max_concurrent,
+                session=session,
+                redis_client=redis_client,
                 status='ok',
                 sources=len(source_ids),
                 competitors=len(competitor_ids),

@@ -121,7 +121,7 @@ def _make_runner(monkeypatch, config, classification):
         runner, '_get_parser_for_source', lambda source_name: None
     )
     monkeypatch.setattr(
-        'src.bp1.adaptive.integration.runner.get_search_task_config',
+        'src.bp1.adaptive.integration.runner.core.get_search_task_config',
         _fake_get_config,
     )
     monkeypatch.setattr(runner._classifier, 'classify', _fake_classify)
@@ -133,7 +133,7 @@ def _make_runner(monkeypatch, config, classification):
     )
     monkeypatch.setattr(runner._cache, 'is_source_blocked', _fake_is_blocked)
     monkeypatch.setattr(
-        'src.bp1.adaptive.integration.runner.RawDataService',
+        'src.bp1.adaptive.integration.runner.core.RawDataService',
         lambda session, redis: _FakeRawDataService(session),
     )
 

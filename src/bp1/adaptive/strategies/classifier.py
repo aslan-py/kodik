@@ -318,7 +318,22 @@ class SourceClassifier:
 
         soup = BeautifulSoup(html, 'html.parser')
 
-        # schema.org разметка.
+        site_type = self._site_type_from_schema_org(soup)
+        if site_type is not None:
+            return site_type
+
+        site_type = self._site_type_from_open_graph(soup)
+        if site_type is not None:
+            return site_type
+
+        if any(soup.select_one(sel) for sel in _CART_SELECTORS):
+            return SiteType.E_COMMERCE
+
+        return self._site_type_from_text_markers(html.lower())
+
+    @staticmethod
+    def _site_type_from_schema_org(soup: BeautifulSoup) -> SiteType | None:
+        """Определяет тип сайта по schema.org разметке, если она есть."""
         for item in soup.find_all(
             attrs={'itemtype': re.compile(r'schema\.org')}
         ):
@@ -333,29 +348,30 @@ class SourceClassifier:
                 return SiteType.QUESTION_ANSWER
             if 'article' in item_str:
                 return SiteType.NEWS
+        return None
 
-        # Open Graph тип.
+    @staticmethod
+    def _site_type_from_open_graph(soup: BeautifulSoup) -> SiteType | None:
+        """Определяет тип сайта по мета-тегу Open Graph, если он есть."""
         og_type = soup.find('meta', attrs={'property': 'og:type'})
-        if og_type:
-            og_value = (og_type.get('content') or '').lower()
-            if og_value == 'product':
-                return SiteType.E_COMMERCE
-            if og_value == 'article':
-                return SiteType.NEWS
-
-        # Корзина / магазин.
-        if any(soup.select_one(sel) for sel in _CART_SELECTORS):
+        if not og_type:
+            return None
+        og_value = (og_type.get('content') or '').lower()
+        if og_value == 'product':
             return SiteType.E_COMMERCE
+        if og_value == 'article':
+            return SiteType.NEWS
+        return None
 
-        # Маркеры классифицированного контента.
-        html_lower = html.lower()
+    @staticmethod
+    def _site_type_from_text_markers(html_lower: str) -> SiteType:
+        """Определяет тип сайта по текстовым маркерам контента."""
         if 'вакансия' in html_lower or 'вакансии' in html_lower:
             return SiteType.JOB_BOARD
         if 'объявлени' in html_lower:
             return SiteType.CLASSIFIEDS
         if 'отзыв' in html_lower:
             return SiteType.REVIEW_AGGREGATOR
-
         return SiteType.OTHER
 
     def _detect_js_frameworks(self, html: str) -> list[str]:

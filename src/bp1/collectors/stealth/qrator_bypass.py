@@ -7,6 +7,8 @@ QRATOR_CHALLENGE_WAIT_MS = 25000
 QRATOR_POST_NAVIGATION_WAIT_MS = 3000
 QRATOR_LOGO_CLICK_WAIT_MS = 5000
 
+HTTP_STATUS_OK = 200
+
 
 async def bypass_qrator(
     page: Page,
@@ -35,7 +37,7 @@ async def bypass_qrator(
     status = response.status if response else 0
 
     if status not in (401, 403):
-        return status == 200
+        return status == HTTP_STATUS_OK
 
     await page.wait_for_timeout(QRATOR_CHALLENGE_WAIT_MS)
 
@@ -50,7 +52,7 @@ async def bypass_qrator(
     )
     await page.wait_for_timeout(QRATOR_POST_NAVIGATION_WAIT_MS)
 
-    if not search_response or search_response.status != 200:
+    if not search_response or search_response.status != HTTP_STATUS_OK:
         return False
 
     logo = await page.query_selector('a[href="/"]')

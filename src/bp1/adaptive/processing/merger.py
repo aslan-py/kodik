@@ -50,43 +50,21 @@ class ResultMerger:
                 - duplicate_count: int — количество удалённых дубликатов.
         """
         chunk_metadata = chunk_metadata or []
-        all_items: list[dict[str, Any]] = []
-        confidences: list[float] = []
-        merged_metadata: dict[str, Any] = {}
-        merged_selectors: dict[str, Any] = {}
-        merged_schema: dict[str, Any] = {}
-
+        acc: dict[str, Any] = {
+            'items': [],
+            'confidences': [],
+            'metadata': {},
+            'selectors': {},
+            'schema': {},
+        }
         for result in results:
-            if not isinstance(result, dict):
-                continue
-            items = result.get('items', [])
-            if isinstance(items, list):
-                all_items.extend(items)
-            confidence = result.get('confidence')
-            if isinstance(confidence, int | float):
-                confidences.append(float(confidence))
-            if self.merge_metadata:
-                meta = result.get('metadata')
-                if isinstance(meta, dict):
-                    merged_metadata.update(meta)
-            # Слияние селекторов и схемы из чанков.
-            # Непустые значения имеют приоритет: если один чанк вернул
-            # пустой селектор для поля, а другой — непустой, берём непустой.
-            selectors = result.get('selectors')
-            if isinstance(selectors, dict):
-                for key, value in selectors.items():
-                    if value and not merged_selectors.get(key):
-                        merged_selectors[key] = value
-            schema = result.get('schema')
-            if isinstance(schema, dict):
-                for key, value in schema.items():
-                    if value and not merged_schema.get(key):
-                        merged_schema[key] = value
+            self._accumulate_result(result, acc)
 
         # Дедупликация.
-        unique_items, duplicate_count = self._deduplicate(all_items)
+        unique_items, duplicate_count = self._deduplicate(acc['items'])
 
         # Общая уверенность — среднее арифметическое.
+        confidences = acc['confidences']
         confidence = (
             round(sum(confidences) / len(confidences), 3)
             if confidences
@@ -95,14 +73,46 @@ class ResultMerger:
 
         return {
             'items': unique_items,
-            'metadata': merged_metadata,
-            'selectors': merged_selectors,
-            'schema': merged_schema,
+            'metadata': acc['metadata'],
+            'selectors': acc['selectors'],
+            'schema': acc['schema'],
             'confidence': confidence,
             'chunks_processed': len(results),
-            'total_items_found': len(all_items),
+            'total_items_found': len(acc['items']),
             'duplicate_count': duplicate_count,
         }
+
+    def _accumulate_result(self, result: Any, acc: dict[str, Any]) -> None:
+        """Добавляет один результат чанка в аккумулятор ``merge``."""
+        if not isinstance(result, dict):
+            return
+        items = result.get('items', [])
+        if isinstance(items, list):
+            acc['items'].extend(items)
+        confidence = result.get('confidence')
+        if isinstance(confidence, int | float):
+            acc['confidences'].append(float(confidence))
+        if self.merge_metadata:
+            meta = result.get('metadata')
+            if isinstance(meta, dict):
+                acc['metadata'].update(meta)
+        # Слияние селекторов и схемы из чанков.
+        # Непустые значения имеют приоритет: если один чанк вернул
+        # пустой селектор для поля, а другой — непустой, берём непустой.
+        self._merge_dict_field(result, 'selectors', acc['selectors'])
+        self._merge_dict_field(result, 'schema', acc['schema'])
+
+    @staticmethod
+    def _merge_dict_field(
+        result: dict[str, Any], field: str, target: dict[str, Any]
+    ) -> None:
+        """Копирует непустые значения ``result[field]`` в ``target``."""
+        value = result.get(field)
+        if not isinstance(value, dict):
+            return
+        for key, val in value.items():
+            if val and not target.get(key):
+                target[key] = val
 
     def _deduplicate(
         self, items: list[dict[str, Any]]

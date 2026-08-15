@@ -181,7 +181,7 @@ def heuristic_relevance_score(
     tokens = [
         t
         for t in re.findall(r'[а-яёa-z0-9]+', comp_l)
-        if len(t) > 3 and t not in stop
+        if len(t) > constants.MIN_SIGNIFICANT_TOKEN_LENGTH and t not in stop
     ]
     if tokens:
         matches = sum(1 for t in tokens if t in text_l)
@@ -192,7 +192,11 @@ def heuristic_relevance_score(
     score = base * 0.9
 
     # Бонус за совпадение темы поиска.
-    if trig_l and len(trig_l) > 2 and trig_l in text_l:
+    if (
+        trig_l
+        and len(trig_l) > constants.MIN_TRIGGER_TOKEN_LENGTH
+        and trig_l in text_l
+    ):
         score += 0.1
 
     return max(0.0, min(1.0, score))

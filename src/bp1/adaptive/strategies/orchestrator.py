@@ -363,51 +363,19 @@ class BrowserStrategy(BaseStrategy):
             # асинхронно после события load (XHR/fetch), поэтому ``goto``
             # возвращается раньше, чем в DOM появятся результаты.
             #
-            # Используем ``page.wait_for_selector`` по контейнеру результатов
-            # поиска: он ждёт именно появления элемента в DOM (не зависает на
-            # постоянных соединениях в отличие от networkidle) и корректно
-            # обрабатывает навигацию/перестройку DOM. Если за отведённое время
-            # контейнер не появился — читаем текущий контент как есть.
-            #
             # ``wait_for_listing=False`` (передаётся из
-            # ``AdaptiveParser._extract_article_text``) пропускает этот блок:
-            # у ОТДЕЛЬНОЙ статьи никогда не будет разметки списка результатов
-            # поиска, поэтому раньше здесь впустую ждали до
-            # ``5 * 8с = 40с`` на каждой статье, не помещаясь в общий бюджет
-            # `ARTICLE_FETCH_TIMEOUT_SECONDS` (20с, `core/config.py`) —
-            # внешний ``asyncio.wait_for`` отменял эту корутину прямо
-            # посреди ``page.wait_for_selector``, а закрытие браузера в
-            # ``finally`` ниже гонялось с внутренними футурами Playwright
-            # (видно в логах как ``Future exception was never retrieved`` /
-            # ``TargetClosedError`` для этого же локатора). Для статей
-            # достаточно общего опроса «появились ли вообще ссылки» ниже.
+            # ``AdaptiveParser._extract_article_text``) пропускает ожидание
+            # контейнера результатов поиска: у ОТДЕЛЬНОЙ статьи такой
+            # разметки никогда не будет, поэтому раньше здесь впустую ждали
+            # до ``5 * 8с = 40с`` на каждой статье, не помещаясь в общий
+            # бюджет `ARTICLE_FETCH_TIMEOUT_SECONDS` (20с, `core/config.py`).
+            # Для статей достаточно общего опроса «появились ли вообще
+            # ссылки» (``_wait_for_any_links``).
             found = False
             if kwargs.get('wait_for_listing', True):
-                for selector in self._NEWS_CONTAINER_SELECTORS:
-                    try:
-                        await page.wait_for_selector(
-                            selector,
-                            timeout=min(
-                                self._CONTENT_POLL_ATTEMPTS
-                                * int(self._CONTENT_POLL_INTERVAL_S * 1000),
-                                self._timeout_ms,
-                            ),
-                        )
-                        found = True
-                        break
-                    except Exception:
-                        continue
+                found = await self._wait_for_results_container(page)
             if not found:
-                # Контейнер не появился — ждём появления любых ссылок.
-                for _ in range(self._CONTENT_POLL_ATTEMPTS):
-                    try:
-                        html = await page.content()
-                    except Exception:
-                        html = ''
-                    if _is_informative_html(html):
-                        found = True
-                        break
-                    await asyncio.sleep(self._CONTENT_POLL_INTERVAL_S)
+                await self._wait_for_any_links(page)
 
             # Всегда читаем финальный контент после ожидания.
             try:
@@ -432,19 +400,61 @@ class BrowserStrategy(BaseStrategy):
                 elapsed_ms=elapsed,
             )
         finally:
-            # Гарантированно освобождаем ресурсы даже при отмене корутины
-            # (asyncio.wait_for / fetch_with_timeout). shield защищает
-            # close()/stop() от отмены, чтобы процесс не завис.
-            if browser is not None:
-                try:
-                    await asyncio.shield(browser.close())
-                except Exception:
-                    pass
-            if p is not None:
-                try:
-                    await asyncio.shield(p.stop())
-                except Exception:
-                    pass
+            await self._cleanup(p, browser)
+
+    async def _wait_for_results_container(self, page) -> bool:
+        """Ждёт появления контейнера результатов поиска по известным
+        селекторам (``page.wait_for_selector``: ждёт именно появления
+        элемента в DOM, не зависает на постоянных соединениях в отличие
+        от networkidle, и корректно обрабатывает навигацию/перестройку
+        DOM). Возвращает ``True``, если контейнер появился хотя бы по
+        одному из селекторов.
+        """
+        for selector in self._NEWS_CONTAINER_SELECTORS:
+            try:
+                await page.wait_for_selector(
+                    selector,
+                    timeout=min(
+                        self._CONTENT_POLL_ATTEMPTS
+                        * int(self._CONTENT_POLL_INTERVAL_S * 1000),
+                        self._timeout_ms,
+                    ),
+                )
+                return True
+            except Exception:
+                continue
+        return False
+
+    async def _wait_for_any_links(self, page) -> None:
+        """Опрашивает страницу, пока в ней не появятся хоть какие-то
+        ссылки (см. ``_is_informative_html``), либо не истощится бюджет
+        попыток.
+        """
+        for _ in range(self._CONTENT_POLL_ATTEMPTS):
+            try:
+                html = await page.content()
+            except Exception:
+                html = ''
+            if _is_informative_html(html):
+                return
+            await asyncio.sleep(self._CONTENT_POLL_INTERVAL_S)
+
+    @staticmethod
+    async def _cleanup(p, browser) -> None:
+        """Гарантированно освобождает ресурсы Playwright даже при отмене
+        корутины (asyncio.wait_for / fetch_with_timeout). ``shield``
+        защищает close()/stop() от отмены, чтобы процесс не завис.
+        """
+        if browser is not None:
+            try:
+                await asyncio.shield(browser.close())
+            except Exception:
+                pass
+        if p is not None:
+            try:
+                await asyncio.shield(p.stop())
+            except Exception:
+                pass
 
 
 class AgenticOrchestrator:

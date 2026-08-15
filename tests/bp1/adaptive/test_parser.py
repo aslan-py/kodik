@@ -716,6 +716,125 @@ def test_page_items_makes_absolute_urls():
     assert pairs[1][1] == 'https://www.ptsecurity.com/about/news/2'
 
 
+def test_page_items_collects_from_all_containers():
+    """_page_items (эвристическая ветка) собирает ссылки со ВСЕХ карточек.
+
+    Регрессионный тест: раньше soup.select_one(container) брал только
+    первую карточку из N на странице листинга, из-за чего терялись почти
+    все новости (например, lenta.ru отдавал 1 новость вместо 10). Адаптер
+    задаёт container, но НЕ задаёт url/title — код должен уйти в
+    эвристическую ветку и всё равно собрать ссылки со всех карточек.
+    """
+    html = """
+    <html><body>
+      <div class="card"><a href="/news/1">Новость 1</a></div>
+      <div class="card"><a href="/news/2">Новость 2</a></div>
+      <div class="card"><a href="/news/3">Новость 3</a></div>
+    </body></html>
+    """
+    pairs = _page_items(
+        html,
+        EXAMPLE_SOURCE_NAME,
+        COMPETITOR,
+        TRIGGER,
+        selectors={'container': 'div.card'},
+        base_url='https://example.com/',
+    )
+    assert len(pairs) == 3
+    assert [p[0] for p in pairs] == ['Новость 1', 'Новость 2', 'Новость 3']
+    assert [p[1] for p in pairs] == [
+        'https://example.com/news/1',
+        'https://example.com/news/2',
+        'https://example.com/news/3',
+    ]
+
+
+def test_page_items_explodes_list_container_with_field_selectors():
+    """_page_items (ветка с url/title-селекторами) раскладывает
+
+    контейнер-список на отдельные записи.
+
+    Регрессионный тест на реальный инцидент: у hh.ru/lenta.ru LLM-анализ
+    вернул ``container``, указывающий на ОБЁРТКУ списка целиком
+    (``ol.vacancies-list``/``ul.search-results__list``), а не на карточку
+    одной записи. ``soup.select(container)`` находит ровно один такой
+    элемент — раньше внутри него бралось только первое совпадение title/url
+    (``select_one``), и вместо 10 вакансий/новостей оставалась 1.
+    """
+    html = """
+    <html><body>
+      <ul class="list">
+        <li>
+          <h3 class="title">Новость 1</h3>
+          <a class="link" href="/news/1">x</a>
+        </li>
+        <li>
+          <h3 class="title">Новость 2</h3>
+          <a class="link" href="/news/2">x</a>
+        </li>
+        <li>
+          <h3 class="title">Новость 3</h3>
+          <a class="link" href="/news/3">x</a>
+        </li>
+      </ul>
+    </body></html>
+    """
+    pairs = _page_items(
+        html,
+        EXAMPLE_SOURCE_NAME,
+        COMPETITOR,
+        TRIGGER,
+        selectors={
+            'container': 'ul.list',
+            'title': 'h3.title',
+            'url': 'a.link',
+        },
+        base_url='https://example.com/',
+    )
+    assert len(pairs) == 3
+    assert [p[0] for p in pairs] == ['Новость 1', 'Новость 2', 'Новость 3']
+    assert [p[1] for p in pairs] == [
+        'https://example.com/news/1',
+        'https://example.com/news/2',
+        'https://example.com/news/3',
+    ]
+
+
+def test_page_items_single_item_container_unaffected():
+    """Обычный случай (контейнер = одна карточка) не ломается доработкой.
+
+    Каждый селектор поля находит не больше одного совпадения внутри своего
+    контейнера — поведение должно остаться прежним (по одной записи на
+    контейнер), даже если на странице несколько таких контейнеров.
+    """
+    html = """
+    <html><body>
+      <div class="card">
+        <h3 class="title">Новость 1</h3>
+        <a class="link" href="/news/1">x</a>
+      </div>
+      <div class="card">
+        <h3 class="title">Новость 2</h3>
+        <a class="link" href="/news/2">x</a>
+      </div>
+    </body></html>
+    """
+    pairs = _page_items(
+        html,
+        EXAMPLE_SOURCE_NAME,
+        COMPETITOR,
+        TRIGGER,
+        selectors={
+            'container': 'div.card',
+            'title': 'h3.title',
+            'url': 'a.link',
+        },
+        base_url='https://example.com/',
+    )
+    assert len(pairs) == 2
+    assert [p[0] for p in pairs] == ['Новость 1', 'Новость 2']
+
+
 def test_default_max_news_value():
     """DEFAULT_MAX_NEWS задана и имеет положительное значение."""
     assert isinstance(DEFAULT_MAX_NEWS, int)

@@ -244,6 +244,14 @@ class _LinkCollector(HTMLParser):
                 self.links.append((text, href))
 
 
+def _node_field_value(field: str, node: Any) -> str:
+    """Достаёт значение поля из узла (href/src для url, иначе текст)."""
+    if field == 'url':
+        href = node.get('href') or node.get('src') or ''
+        return str(href).strip()
+    return node.get_text(' ', strip=True)
+
+
 def _extract_by_selectors(
     html: str, selectors: dict[str, str]
 ) -> list[dict[str, str]]:
@@ -252,6 +260,17 @@ def _extract_by_selectors(
     Для каждого контейнера (``selectors['container']``) извлекает поля
     (title, text, url, published_at, region, media_name) по соответствующим
     селекторам. Корректно обрабатывает вложенные контейнеры.
+
+    LLM-анализ структуры иногда путает "контейнер одной записи" (карточка)
+    с "контейнером списка" (обёртка вокруг ВСЕХ карточек, например
+    ``ol.vacancies-list``/``ul.search-results__list``) — тогда
+    ``container_selector`` матчит единственный элемент на всю страницу.
+    Если внутри такого контейнера селектор поля (например ``title``/``url``)
+    находит НЕСКОЛЬКО совпадений вместо одного — это и есть признак
+    контейнера-списка: результат "разворачивается" в несколько записей по
+    индексу совпадения, а не схлопывается в одну (что раньше происходило
+    из-за ``container.select_one(...)``, бравшего только первое совпадение
+    на всю страницу — вместо 10 новостей/вакансий оставалась 1).
 
     Args:
         html: Исходный HTML.
@@ -269,23 +288,47 @@ def _extract_by_selectors(
     containers = soup.select(container_selector)
     items: list[dict[str, str]] = []
 
+    field_selectors = {
+        field: selector
+        for field, selector in selectors.items()
+        if field != 'container' and selector
+    }
+
     for container in containers:
-        item: dict[str, str] = {}
-        for field, selector in selectors.items():
-            if field == 'container' or not selector:
-                continue
-            node = container.select_one(selector)
-            if node is None:
-                continue
-            if field == 'url':
-                href = node.get('href') or node.get('src') or ''
-                item[field] = str(href).strip()
-            else:
-                text = node.get_text(' ', strip=True)
-                if text:
-                    item[field] = text
-        if item:
-            items.append(item)
+        field_matches = {
+            field: container.select(selector)
+            for field, selector in field_selectors.items()
+        }
+        match_lengths = (len(nodes) for nodes in field_matches.values())
+        max_matches = max(match_lengths, default=0)
+
+        if max_matches <= 1:
+            # Обычный случай: контейнер — одна запись, у каждого поля не
+            # больше одного совпадения внутри неё.
+            item: dict[str, str] = {}
+            for field, nodes in field_matches.items():
+                if not nodes:
+                    continue
+                value = _node_field_value(field, nodes[0])
+                if value:
+                    item[field] = value
+            if item:
+                items.append(item)
+        else:
+            # Контейнер оказался списком записей — раскладываем по индексу
+            # совпадения: i-е совпадение title соответствует i-му url и т.д.
+            # (стандартный паттерн: поля одной карточки идут в одном и том
+            # же порядке в DOM для каждой карточки).
+            for i in range(max_matches):
+                item = {}
+                for field, nodes in field_matches.items():
+                    if i >= len(nodes):
+                        continue
+                    value = _node_field_value(field, nodes[i])
+                    if value:
+                        item[field] = value
+                if item:
+                    items.append(item)
 
     return items
 
@@ -361,6 +404,10 @@ class AdaptiveParser:
         # этого зависит самокоррекция при провале качества (Шаг 21 плана
         # рефакторинга): свежесозданный адаптер сбрасывать бессмысленно.
         adapter_from_cache = adapter is not None
+        if adapter is not None:
+            self._logger.debug(
+                'Адаптер %s: selectors=%s', source_name, adapter.selectors
+            )
 
         # 2. Получение HTML через оркестратор.
         #    Если классификация источника уже сохранена — начинаем с
@@ -963,6 +1010,17 @@ class AdaptiveParser:
                 candidates.append((title, url_abs, url_rel))
                 added += 1
 
+            self._logger.debug(
+                'Пагинация %s: page=%d, найдено=%d, добавлено=%d, '
+                'всего=%d, items_per_page=%d, max_pages=%d',
+                source_name,
+                page,
+                len(page_items),
+                added,
+                len(candidates),
+                items_per_page,
+                self._max_pages(selectors),
+            )
             # Защита от зацикливания: на странице нет новых новостей или
             # больше нет страниц пагинации.
             if added == 0 or page >= self._max_pages(selectors):
@@ -1521,10 +1579,16 @@ def _page_items(
     else:
         # Эвристический сбор ссылок. Если контейнер задан, ограничиваем сбор
         # его областью (иначе соберутся навигационные ссылки шапки/подвала).
+        # select() — ВСЕ совпадения (карточки), а не только первая: раньше
+        # select_one() брал первую карточку из N на странице листинга, и
+        # _LinkCollector видел ссылки только внутри неё — отсюда терялись
+        # почти все новости (например, 1 из 10 на lenta.ru).
         if has_container:
             soup = BeautifulSoup(html, 'html.parser')
-            container = soup.select_one(selectors['container'])
-            container_html = str(container) if container is not None else html
+            containers = soup.select(selectors['container'])
+            container_html = (
+                ''.join(str(c) for c in containers) if containers else html
+            )
         else:
             container_html = html
         collector = _LinkCollector()

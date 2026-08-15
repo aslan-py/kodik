@@ -201,11 +201,18 @@ class Settings(BaseSettings):
     # Эксплуатационные ручки: меняются при работе с конкретными источниками,
     # без правки кода. Значения по умолчанию равны прежним константам
     # (adaptive/processing/parser.py, adaptive/strategies/orchestrator.py).
-    bp1_max_news_per_source: int = 3
+    bp1_max_news_per_source: int = 20
     bp1_min_article_text_length: int = 100
     bp1_min_full_article_text_length: int = 300
     bp1_max_tail_fetch_attempts: int = 3
     bp1_min_content_length: int = 300
+    # Верхний предел страниц пагинации на источник за прогон. Раньше
+    # _max_pages() возвращал жёстко зашитое 10000 (фактически "без
+    # лимита") — единственным тормозом был bp1_max_news_per_source, и его
+    # рост напрямую удлинял прогон. Реальный лимит: сколько страниц
+    # придётся пройти, чтобы набрать max_news, если на странице мало
+    # подходящих ссылок (Шаг 16 плана, kodik/src/bp1/REFACTORING_PLAN.md).
+    bp1_max_pagination_pages: int = 10
 
     # ===== BP-1 Adaptive (релевантность и обогащение, финальный этап) =====
     # Режим фильтрации релевантности: 'off' | 'filter' | 'rank'.

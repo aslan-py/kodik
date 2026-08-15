@@ -7,8 +7,10 @@ from src.bp1.adaptive.processing import parser as parser_module
 from src.bp1.adaptive.processing.llm import LLMClient
 from src.bp1.adaptive.processing.parser import (
     DEFAULT_MAX_NEWS,
+    MAX_PAGINATION_PAGES,
     AdaptiveParser,
     _is_noise_url,
+    _items_per_page,
     _looks_truncated,
     _page_items,
     _pagination_url,
@@ -613,6 +615,58 @@ def test_pagination_url():
     assert _pagination_url('https://example.com/news?q=ии', 2) == (
         'https://example.com/news?q=ии&page=2'
     )
+
+
+def test_pagination_url_offset_style():
+    """Шаг 16: при известном items_per_page используется offset-стиль."""
+    # Первая страница — без параметра пагинации, как и раньше.
+    assert _pagination_url('https://example.com/news', 1, 20) == (
+        'https://example.com/news'
+    )
+    # Вторая страница -> offset = (2-1) * 20.
+    assert _pagination_url('https://example.com/news', 2, 20) == (
+        'https://example.com/news?offset=20'
+    )
+    # Третья страница с уже существующим query-параметром.
+    assert _pagination_url('https://example.com/news?q=ии', 3, 15) == (
+        'https://example.com/news?q=ии&offset=30'
+    )
+    # items_per_page=0 (неизвестно) -> прежний page-стиль.
+    assert _pagination_url('https://example.com/news', 2, 0) == (
+        'https://example.com/news?page=2'
+    )
+
+
+def test_items_per_page_parsing():
+    """_items_per_page устойчиво разбирает метаданные адаптера."""
+    assert _items_per_page({'items_per_page': 20}) == 20
+    assert _items_per_page({'items_per_page': '15'}) == 15
+    assert _items_per_page({'items_per_page': 'много'}) == 0
+    assert _items_per_page({'items_per_page': -5}) == 0
+    assert _items_per_page({}) == 0
+    assert _items_per_page(None) == 0
+
+
+def test_max_pages_uses_config_limit():
+    """Шаг 16: _max_pages берёт лимит из конфигурации, а не 10000."""
+    parser = AdaptiveParser()
+    # Без items_per_page — предел из настроек.
+    assert parser._max_pages({}) == MAX_PAGINATION_PAGES
+
+
+def test_max_pages_narrowed_by_items_per_page():
+    """При известном items_per_page лимит сужается до числа страниц,
+    реально нужного, чтобы набрать DEFAULT_MAX_NEWS."""
+    parser = AdaptiveParser()
+    # На странице столько же элементов, сколько нужно всего -> 1 страница.
+    assert parser._max_pages({'items_per_page': DEFAULT_MAX_NEWS}) == 1
+    # Вдвое меньше на странице -> нужно 2 страницы.
+    assert (
+        parser._max_pages({'items_per_page': max(1, DEFAULT_MAX_NEWS // 2)})
+        == 2
+    )
+    # Огромная страница -> всё равно минимум 1.
+    assert parser._max_pages({'items_per_page': 10_000}) == 1
 
 
 def test_page_items_makes_absolute_urls():

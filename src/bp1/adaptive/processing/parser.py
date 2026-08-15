@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from html.parser import HTMLParser
 from pathlib import Path
@@ -48,6 +49,12 @@ logger = logging.getLogger(__name__)
 
 # Максимальное количество новостей, собираемых за один проход пагинации.
 DEFAULT_MAX_NEWS = settings.bp1_max_news_per_source
+
+# Верхний предел страниц пагинации на источник за прогон (Шаг 16 плана
+# рефакторинга, REFACTORING_PLAN.md — T5). Раньше _max_pages() возвращал
+# жёстко зашитое 10000 (фактически «без лимита»), и единственным тормозом
+# был DEFAULT_MAX_NEWS — его рост напрямую удлинял прогон.
+MAX_PAGINATION_PAGES = settings.bp1_max_pagination_pages
 
 # Минимальная длина текста, при которой результат извлечения считается
 # успешным (для каскада CSS → LLM → сниппет).
@@ -755,11 +762,15 @@ class AdaptiveParser:
         seen: set[str] = set()
         page = 1
         html = initial_html
+        # Размер страницы из метаданных LLM-анализа (если определён) —
+        # выбирает стиль пагинации (offset вместо page) и сужает лимит
+        # страниц в _max_pages.
+        items_per_page = _items_per_page(selectors)
 
         while len(candidates) < max_news:
             if html is None:
                 result = await self._orchestrator.fetch_with_degradation(
-                    _pagination_url(base_url, page),
+                    _pagination_url(base_url, page, items_per_page),
                     source_name=source_name,
                 )
                 if not result.success or not result.data:
@@ -832,9 +843,31 @@ class AdaptiveParser:
         return enriched
 
     def _max_pages(self, selectors: dict[str, str]) -> int:
-        """Ограничение числа страниц из конфигурации (если есть)."""
-        # По умолчанию пагинация не ограничена (регулируется лимитом новостей).
-        return 10000
+        """Верхний предел страниц пагинации за один прогон источника.
+
+        Раньше возвращал жёстко зашитое ``10000`` — фактически «без
+        лимита», и единственным ограничителем длительности прогона был
+        ``max_news``. Теперь берётся из конфигурации
+        (``settings.bp1_max_pagination_pages``) и дополнительно
+        сужается по ``metadata.items_per_page`` адаптера, если LLM его
+        определил: чтобы набрать ``DEFAULT_MAX_NEWS`` элементов, при
+        ``items_per_page`` на странице достаточно
+        ``ceil(max_news / items_per_page)`` страниц — ходить дальше
+        бессмысленно.
+
+        Args:
+            selectors: Селекторы адаптера (могут содержать
+                ``items_per_page`` в метаданных LLM-анализа).
+
+        Returns:
+            Максимальное число страниц (не меньше 1).
+        """
+        limit = MAX_PAGINATION_PAGES
+        per_page = _items_per_page(selectors)
+        if per_page > 0:
+            needed = math.ceil(DEFAULT_MAX_NEWS / per_page)
+            limit = min(limit, needed)
+        return max(1, limit)
 
     async def _deep_fetch(
         self,
@@ -1088,15 +1121,59 @@ def _looks_truncated(text: str) -> bool:
     return stripped[-1:] not in ('.', '!', '?')
 
 
-def _pagination_url(base_url: str, page: int) -> str:
-    """Возвращает URL страницы пагинации с подставленным номером.
+def _items_per_page(selectors: dict[str, str] | None) -> int:
+    """Число элементов на странице выдачи из метаданных адаптера.
 
-    Если в базовом URL уже есть query-параметр, номер страницы добавляется
-    как ``&page=N``, иначе — как ``?page=N``.
+    LLM-анализ структуры возвращает ``items_per_page`` в ``metadata``
+    (см. ``_ANALYSIS_RESPONSE_RULES``); значение попадает в селекторы
+    адаптера. Используется для выбора стиля пагинации
+    (``_pagination_url``) и для сужения лимита страниц (``_max_pages``).
+
+    Returns:
+        Положительное число элементов или 0, если значение не задано или
+        не приводится к целому.
+    """
+    raw = (selectors or {}).get('items_per_page')
+    try:
+        value = int(raw) if raw else 0
+    except (TypeError, ValueError):
+        return 0
+    return max(0, value)
+
+
+def _pagination_url(
+    base_url: str,
+    page: int,
+    items_per_page: int = 0,
+) -> str:
+    """Возвращает URL следующей страницы выдачи.
+
+    Поддерживает два стиля пагинации (Шаг 16 плана рефакторинга,
+    REFACTORING_PLAN.md):
+
+    - **По номеру страницы** (по умолчанию): ``?page=N`` / ``&page=N``.
+    - **По смещению** (``items_per_page > 0``): ``?offset=N`` — многие
+      выдачи (особенно API-подобные и job-board) нумеруют не страницы, а
+      элементы. Смещение считается как ``(page - 1) * items_per_page``.
+
+    Стиль выбирается по ``items_per_page`` из ``metadata`` LLM-анализа
+    (``_ANALYSIS_RESPONSE_RULES`` просит модель его вернуть): если размер
+    страницы известен, значит выдача сама сообщила о постраничной
+    структуре, и смещение вычислимо; иначе остаётся ``page=N``.
+
+    Args:
+        base_url: URL первой страницы результата поиска.
+        page: Номер страницы (1 — первая, без параметра пагинации).
+        items_per_page: Число элементов на странице (0 — неизвестно).
+
+    Returns:
+        URL страницы пагинации.
     """
     if page <= 1:
         return base_url
     sep = '&' if '?' in base_url else '?'
+    if items_per_page > 0:
+        return f'{base_url}{sep}offset={(page - 1) * items_per_page}'
     return f'{base_url}{sep}page={page}'
 
 

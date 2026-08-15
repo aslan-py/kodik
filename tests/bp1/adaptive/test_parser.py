@@ -835,6 +835,51 @@ def test_page_items_single_item_container_unaffected():
     assert [p[0] for p in pairs] == ['Новость 1', 'Новость 2']
 
 
+def test_page_items_prefers_title_own_href_over_unrelated_links():
+    """Заголовок-ссылка не путается с посторонними ссылками внутри карточки.
+
+    Регрессионный тест на реальный инцидент (hh.ru): внутри ОДНОЙ карточки
+    вакансии может быть несколько разных `<a href>` (реклама, работодатель,
+    кнопка отклика) помимо самой ссылки на вакансию. Широкий `url`-селектор
+    (`a[href]`) матчит их все — при сопоставлении по голому индексу
+    совпадения (title[i] с url[i]) число совпадений на поле расходится, и
+    заголовок одной карточки приклеивается к ссылке постороннего элемента
+    (в том числе из ДРУГОЙ карточки). Заголовок сам является ссылкой —
+    его собственный href должен побеждать независимый поиск по контейнеру.
+    """
+    html = """
+    <html><body>
+      <article class="card">
+        <a class="noise" href="/ad/1">реклама</a>
+        <a class="title" href="/vacancy/1">Вакансия 1</a>
+        <a class="noise" href="/employer/1">работодатель</a>
+      </article>
+      <article class="card">
+        <a class="noise" href="/ad/2">реклама</a>
+        <a class="title" href="/vacancy/2">Вакансия 2</a>
+        <a class="noise" href="/employer/2">работодатель</a>
+      </article>
+    </body></html>
+    """
+    pairs = _page_items(
+        html,
+        EXAMPLE_SOURCE_NAME,
+        COMPETITOR,
+        TRIGGER,
+        selectors={
+            'container': 'article.card',
+            'title': 'a.title',
+            'url': 'a[href]',
+        },
+        base_url='https://example.com/',
+    )
+    assert len(pairs) == 2
+    assert pairs[0][0] == 'Вакансия 1'
+    assert pairs[0][1] == 'https://example.com/vacancy/1'
+    assert pairs[1][0] == 'Вакансия 2'
+    assert pairs[1][1] == 'https://example.com/vacancy/2'
+
+
 def test_default_max_news_value():
     """DEFAULT_MAX_NEWS задана и имеет положительное значение."""
     assert isinstance(DEFAULT_MAX_NEWS, int)

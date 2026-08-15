@@ -29,23 +29,84 @@ def _single_item_from_matches(
     return item
 
 
-def _multi_items_from_matches(
-    field_matches: dict[str, list[Any]], max_matches: int
-) -> list[dict[str, str]]:
-    """Раскладывает совпадения по индексу — контейнер оказался списком
-    записей: i-е совпадение title соответствует i-му url и т.д.
-    (стандартный паттерн: поля одной карточки идут в одном и том же
-    порядке в DOM для каждой карточки).
+def _find_row_scope(
+    anchor_node: Any, anchor_selector: str, container: Any
+) -> Any:
+    """Находит наименьшего предка ``anchor_node`` (в пределах ``container``),
+    содержащего РОВНО одно совпадение ``anchor_selector`` — то есть не
+    выходящего за границы одной записи списка. Если такого предка нет
+    (плоская разметка без обёрток вокруг записи) — возвращает сам
+    ``anchor_node``.
     """
+    for ancestor in anchor_node.parents:
+        if len(ancestor.select(anchor_selector)) == 1:
+            return ancestor
+        if ancestor is container:
+            break
+    return anchor_node
+
+
+def _multi_items_from_matches(
+    field_matches: dict[str, list[Any]],
+    field_selectors: dict[str, str],
+    container: Any,
+) -> list[dict[str, str]]:
+    """Раскладывает контейнер-список на отдельные записи.
+
+    Не сопоставляет поля по голому индексу совпадения (``title[i]`` с
+    ``url[i]``) — если у полей разное количество совпадений внутри
+    контейнера (частый случай: ``url`` задан общим ``a[href]``, который
+    матчит рекламу/работодателя/кнопку отклика внутри той же карточки, а
+    не только саму запись — реальная разметка hh.ru даёт до 5-7 разных
+    ``<a href>`` на одну вакансию), индексы расходятся и записи
+    "разъезжаются" — заголовок одной вакансии приклеивается к ссылке
+    совсем другого элемента.
+
+    Вместо этого ``title`` (если задан, иначе первое доступное поле) —
+    якорь: для каждого его совпадения находится наименьший охватывающий
+    предок, изолирующий ровно одну запись (см. ``_find_row_scope``), и
+    остальные поля ищутся уже внутри этого предка — то есть в границах
+    именно этой карточки, а не всего контейнера-списка.
+    """
+    anchor_field = (
+        'title'
+        if field_selectors.get('title')
+        else next(iter(field_selectors), None)
+    )
+    if anchor_field is None:
+        return []
+    anchor_nodes = field_matches.get(anchor_field) or []
+    anchor_selector = field_selectors[anchor_field]
+
     items: list[dict[str, str]] = []
-    for i in range(max_matches):
+    for anchor_node in anchor_nodes:
         item: dict[str, str] = {}
-        for field, nodes in field_matches.items():
-            if i >= len(nodes):
+        anchor_value = _node_field_value(anchor_field, anchor_node)
+        if anchor_value:
+            item[anchor_field] = anchor_value
+
+        row = _find_row_scope(anchor_node, anchor_selector, container)
+        for field, selector in field_selectors.items():
+            if field == anchor_field:
                 continue
-            value = _node_field_value(field, nodes[i])
-            if value:
-                item[field] = value
+            if (
+                field == 'url'
+                and getattr(anchor_node, 'name', None) == 'a'
+                and anchor_node.get('href')
+            ):
+                # Якорный узел сам является ссылкой (типичный случай —
+                # заголовок и есть ссылка на запись). Его собственный href
+                # надёжнее независимого поиска ``url`` в границах карточки:
+                # там может быть несколько разных <a href> (см. докстринг
+                # выше), и select_one() взял бы первую по порядку в DOM, не
+                # обязательно ту, что относится к заголовку.
+                item['url'] = str(anchor_node.get('href')).strip()
+                continue
+            node = row.select_one(selector)
+            if node is not None:
+                value = _node_field_value(field, node)
+                if value:
+                    item[field] = value
         if item:
             items.append(item)
     return items
@@ -109,6 +170,10 @@ def _extract_by_selectors(
                 items.append(item)
         else:
             # Контейнер оказался списком записей.
-            items.extend(_multi_items_from_matches(field_matches, max_matches))
+            items.extend(
+                _multi_items_from_matches(
+                    field_matches, field_selectors, container
+                )
+            )
 
     return items

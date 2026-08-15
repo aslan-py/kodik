@@ -24,7 +24,7 @@ src/bp1/
 ├── tasks.py                 # Основная логика: run_parser_async, получение конфигурации задачи
 ├── celery_tasks.py          # Celery-обёртка для production-запуска
 ├── cli.py                   # CLI-интерфейс (запуск, список задач, очистка Redis)
-├── test_parser.py           # Интеграционный тест с реальной БД и Redis
+├── pipeline.py              # run_bp1() — точка входа этапа 1 + сводка прогона
 │
 ├── parsers/                 # Адаптеры парсеров (реализуют BaseParser)
 │   ├── __init__.py          # Регистрация адаптеров в ParserFactory
@@ -34,10 +34,13 @@ src/bp1/
 ├── adaptive/                # ✅ Адаптивный сбор данных (интеллектуальный парсинг)
 │   ├── schemas.py           # Pydantic-схемы (классификация, стратегии, HITL, отчёты)
 │   ├── cli.py               # CLI: run / classify / add-source / cache / profile / quality
+│   ├── hostname.py          # Общая нормализация hostname + список гос. доменов
 │   ├── core/                # UnifiedCache (Redis+диск), DataQualityGate (5 уровней)
-│   ├── processing/          # AdaptiveParser, HtmlCleaner, StructuredChunker, ResultMerger, LLM
+│   ├── processing/          # AdaptiveParser, HtmlCleaner, StructuredChunker, ResultMerger
+│   │   └── _llm/            # Промпты, схемы ответов, мапперы, эвристики, клиент
 │   ├── strategies/          # SourceClassifier, AgenticOrchestrator, Crawl4AI/Stealth/HITL, engines
-│   └── integration/         # AdaptiveBridgeParser, AdaptiveRunner, SourceRegistrationService
+│   └── integration/         # AdaptiveBridgeParser, AdaptiveRunner, SourceRegistrationService,
+│                            # SearchUrlProber (перебор параметров / POST-форма / переформулировки)
 │
 ├── collectors/              # Движки парсинга (реализация сбора данных)
 │   ├── fedresurs_rpa/       # ✅ RPA-парсер fedresurs.ru
@@ -46,6 +49,7 @@ src/bp1/
 └── raw_storage/             # ✅ Модуль хранения сырых данных (Bronze Layer)
     ├── core/models.py       # Pydantic модели (RawDataFile, MetaInfo, RawDataItem)
     ├── core/interfaces.py   # Абстрактные интерфейсы (BaseStorage, BaseDeduplicator)
+    ├── core/deduplication.py # ContentHashDeduplicator — дедуп по хэшу содержимого
     ├── backends/disk_backend.py  # DiskBackend — JSONB на диске
     ├── services/repository.py    # RawDataRepository (CRUD + дедупликация)
     ├── factory.py           # StorageFactory — фабрика бэкендов
@@ -352,14 +356,20 @@ response = await parser.parse(
 ### Ключевые возможности
 
 - **Классификация источников** — [`SourceClassifier`](src/bp1/adaptive/strategies/classifier.py:168) определяет тип сайта (новостной, реестр, API, SPA), антибот-защиту (Cloudflare, DataDome, QRATOR, Akamai, Incapsula), CAPTCHA (reCAPTCHA, hCaptcha), SPA-фреймворки (React, Vue, Nuxt, Next.js, Angular) и рекомендует стратегию.
-- **Иерархия стратегий с деградацией** — [`AgenticOrchestrator`](src/bp1/adaptive/strategies/orchestrator.py:245) пробует стратегии по порядку `FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL`. При ошибке или контенте < 300 символов переходит к следующей.
-- **Интеллектуальный парсинг** — [`AdaptiveParser`](src/bp1/adaptive/processing/parser.py:206) извлекает реальные CSS-селекторы и схему данных через LLM, кэширует адаптеры в Redis (TTL 7 дней).
+- **Классификация учится на фактах** — классификация уточняется по РЕАЛЬНОМУ HTML (а не вслепую по имени источника) и переписывается по факту сработавшей стратегии: если закэшировано `FAST`, а сбор реально прошёл через `STEALTH`, кэш обновляется, и следующий прогон не проходит всю лестницу деградации заново. Флаги защиты только усиливаются (`False → True`) и не сбрасываются одним снимком HTML.
+- **LLM-категоризация подключена к бою** — [`LLMClient.classify_with_llm`](src/bp1/adaptive/processing/llm.py) (промпт `SITE_CLASSIFICATION_PROMPT_V2`, 20 типов сайта) вызывается один раз на источник, когда адаптер выводится впервые. Уточняет признаки защиты там, где эвристика по ключевым словам ничего не находит; сбой LLM не ломает сбор.
+- **Иерархия стратегий с деградацией** — [`AgenticOrchestrator`](src/bp1/adaptive/strategies/orchestrator.py) пробует стратегии по порядку `FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL`. При ошибке, контенте < 300 символов или «пустом JS-каркасе» (нет ссылок) переходит к следующей. **Заведомо бесполезные стратегии пропускаются**: при известной CAPTCHA — сразу `STEALTH/WAYBACK/HITL`, при антиботе без SPA — без `CRAWL4AI`.
+- **Интеллектуальный парсинг** — [`AdaptiveParser`](src/bp1/adaptive/processing/parser.py) извлекает реальные CSS-селекторы и схему данных через LLM, кэширует адаптеры в Redis (TTL 7 дней).
+- **Самокоррекция адаптера** — если закэшированный адаптер дважды подряд не проходит Quality Gate, он сбрасывается (селекторы выводятся заново), а у LLM запрашивается диагностическая рекомендация (`extra.adapter_review`). Успешный прогон обнуляет счётчик.
 - **Чанкирование больших страниц** — `HtmlCleaner → StructuredChunker → параллельное извлечение → ResultMerger` для HTML, не помещающегося в контекст LLM.
-- **5 уровней контроля качества** — [`DataQualityGate`](src/bp1/adaptive/core/quality.py): SCHEMA, TYPES, BUSINESS, VOLUME, CONSISTENCY с Quarantine-паттерном.
+- **5 уровней контроля качества** — [`DataQualityGate`](src/bp1/adaptive/core/quality.py): SCHEMA, TYPES, BUSINESS, VOLUME, CONSISTENCY с Quarantine-паттерном. Результаты по уровням доходят до сводки прогона.
 - **HITL для CAPTCHA** — [`HITLManager`](src/bp1/adaptive/strategies/hitl.py) запускает видимый браузер, детектирует момент решения CAPTCHA и кэширует cookies в профиль.
-- **Регистрация источников** — [`SourceRegistrationService`](src/bp1/adaptive/integration/sources.py:302) по ссылке нормализует адрес, классифицирует сайт, добавляет `Source` в БД и кэширует классификацию.
+- **Регистрация источников** — [`SourceRegistrationService`](src/bp1/adaptive/integration/sources.py) по ссылке нормализует адрес, классифицирует сайт, добавляет `Source` в БД, кэширует классификацию и (в CLI `add-source`) проверяет, отвечает ли поисковый эндпоинт.
 - **Source-aware выбор поискового параметра** — для гос. источников (реестры) поиск по ИНН, для остальных — по названию конкурента.
 - **Per-source шаблоны URL** — `SearchUrlTemplateRegistry` задаёт специфичные пути поиска (например, `hh.ru → /search/vacancy?text=`), с fallback на универсальный `/search?q=`.
+- **Пробинг поиска** — [`SearchUrlProber`](src/bp1/adaptive/integration/search_probe.py) перебирает имена query-параметров (`q`, `query`, `text`, …), пробует POST-форму и упрощает запрос (без кавычек / без ОПФ / первое значимое слово), проверяя, есть ли цель в выдаче.
+- **Параллельный сбор** — `AdaptiveRunner.run_all()` выполняет задачи одновременно (`max_concurrent`), каждая со своей сессией БД.
+- **Метрики прогона** — `run_bp1()` возвращает `success_rate`, разбивку по фактически сработавшим стратегиям, по уровням Quality Gate и список источников с низким качеством; отсутствие `crawl4ai`/`playwright` фиксируется предупреждением до прогона.
 
 ### Адаптивный поиск (Adaptive Search)
 
@@ -531,7 +541,7 @@ orch.register_strategy(MyStrategy.strategy_type, MyStrategy())
 
 ### Ключевые компоненты
 
-- **`RawDataRepository`** — репозиторий для CRUD-операций: `save()`, `find_by_id()`, `find_by_trigger()`, `find_pending()`, `update_status()`, `find_by_prefix()`, `delete()`. Поддерживает дедупликацию через `BaseDeduplicator`.
+- **`RawDataRepository`** — репозиторий для CRUD-операций: `save()`, `find_by_id()`, `find_by_content_hash()`, `find_by_trigger()`, `find_pending()`, `update_status()`, `find_by_prefix()`, `delete()`. По умолчанию дедуплицирует по хэшу содержимого `items` (`ContentHashDeduplicator`); стратегия заменяется через параметр `deduplicator`.
 - **`StorageFactory`** — фабрика бэкендов: `create(backend_type)` и `register(name, backend_class)`. Доступен бэкенд `disk`.
 - **`DiskBackend`** — JSONB-файлы на диске.
 
@@ -540,7 +550,7 @@ import asyncio
 from src.bp1.raw_storage import RawDataRepository, RawDataFile, StorageFactory
 
 async def main():
-    storage = StorageFactory.create('disk', base_dir='./data/raw')
+    storage = StorageFactory.create('disk', base_path='./data/raw')
     repo = RawDataRepository(storage_backend=storage)
 
     file = RawDataFile(...)  # модель с meta + items
@@ -556,10 +566,11 @@ asyncio.run(main())
 
 ## Хэширование и дедупликация
 
-BP-1 использует двухуровневую систему дедупликации:
+BP-1 использует трёхуровневую систему дедупликации:
 
 1. **Redis** — хранит последний хэш для каждой `search_task_id`. При совпадении хэша строка RawItem не создаётся, обновляется только `updated_at`.
-2. **MD5 от items** — [`calculate_content_hash()`](src/bp1/tasks.py:28) считает хэш только от содержимого `items` (без `meta` и `file_path`), что позволяет детектировать смысловые изменения данных. Из `items` исключается поле `extra.file_path`.
+2. **MD5 от items** — [`calculate_content_hash()`](src/bp1/storage.py:46) считает хэш только от содержимого `items` (без `meta` и `file_path`), что позволяет детектировать смысловые изменения данных. Из `items` исключается поле `extra.file_path`.
+3. **Bronze Layer** — `RawDataRepository` дедуплицирует файлы выгрузок по SHA-256 от содержимого `items` (`ContentHashDeduplicator`, см. [raw_storage/README.md](src/bp1/raw_storage/README.md)): повторное сохранение той же выгрузки возвращает путь к уже существующему файлу вместо создания второго.
 
 ## Функции и методы пакета (справочник)
 
@@ -669,16 +680,31 @@ pytest kodik/tests/bp1/ --cov=src.bp1 -v
 | [`test_llm.py`](kodik/tests/bp1/adaptive/test_llm.py) | LLMClient, AIAgent |
 | [`test_llm_smoke.py`](kodik/tests/bp1/adaptive/test_llm_smoke.py) | Smoke-тест LLM-модуля |
 | [`test_integration.py`](kodik/tests/bp1/adaptive/test_integration.py) | AdaptiveRunner, AdaptiveBridgeParser |
-| [`test_source_registration.py`](kodik/tests/bp1/adaptive/test_source_registration.py) | SourceRegistrationService, нормализация URL |
+| [`test_source_registration.py`](kodik/tests/bp1/adaptive/test_source_registration.py) | SourceRegistrationService, нормализация URL, проверка поискового эндпоинта |
+| [`test_runner_source_aware.py`](kodik/tests/bp1/adaptive/test_runner_source_aware.py) | Source-aware выбор параметра (ИНН vs название), пробинг |
+| [`test_runner_concurrency.py`](kodik/tests/bp1/adaptive/test_runner_concurrency.py) | Параллельное выполнение `run_all` (лимит, порядок, сессии) |
+| [`test_search_probe.py`](kodik/tests/bp1/adaptive/test_search_probe.py) | Перебор параметров, POST-форма, переформулировки |
 
-### Интеграционный тест
+### Тесты общего контура
+
+| Файл тестов | Что тестируется |
+|-------------|-----------------|
+| [`test_cli.py`](kodik/tests/bp1/test_cli.py) | Безопасная очистка ключей Redis (`clear-redis`) |
+| [`test_raw_storage.py`](kodik/tests/bp1/test_raw_storage.py) | Дедупликация Bronze Layer по хэшу содержимого |
+| [`test_pipeline_metrics.py`](kodik/tests/bp1/test_pipeline_metrics.py) | Сводка прогона: success_rate, стратегии, уровни качества |
+
+### Реальный прогон
+
+Сквозной прогон на живой БД/Redis выполняется точкой входа этапа:
 
 ```bash
 # Требует: PostgreSQL + Redis + активные search_task в БД
-python -m src.bp1.test_parser
+python -m core.pipeline.cli 1 real
 ```
 
-Тест использует реальную БД и Redis, выполняет все активные задачи и выводит детальный отчёт.
+Возвращает сводку прогона (`success_rate`, разбивка по стратегиям и
+уровням Quality Gate). Прежний ручной скрипт `src/bp1/test_parser.py`
+удалён — его роль закрывают автотесты выше и эта команда.
 
 ## Настройка
 
@@ -691,13 +717,42 @@ DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/kodik
 # Redis
 REDIS_URL=redis://localhost:6379/0
 
-# Директории для хранения данных
-BP1_HTML_DIR=src/bp1/data/html_pages
-BP1_RAW_DIR=src/bp1/data/raw
+# Корень для хранения данных. Поддиректории html_pages/ и raw/
+# вычисляются от него (settings.bp1_html_dir / settings.bp1_raw_dir —
+# свойства, отдельными переменными окружения не задаются).
+BP1_DATA_ROOT=./src/bp1/data
 
-# LLM (для адаптивного извлечения)
-# OPENAI_API_KEY=sk-...
+# LLM (для адаптивного извлечения, классификации и обогащения)
+LLM_API_KEY=sk-...
+LLM_MODEL=gpt-4o-mini
+# LLM_BASE_URL=https://...   # для совместимых с OpenAI провайдеров
 ```
+
+### Ключевые эксплуатационные настройки
+
+Меняются без правки кода; значения — по умолчанию.
+
+```ini
+# Охват сбора
+BP1_MAX_NEWS_PER_SOURCE=20       # новостей с источника за прогон
+BP1_MAX_PAGINATION_PAGES=10      # верхний предел страниц пагинации
+BP1_MAX_CONCURRENT_TASKS=5       # параллельных задач в run_all
+BP1_MAX_CONCURRENT_FETCHES=5     # параллельных докачек статей
+
+# Релевантность и обогащение (LLM)
+BP1_RELEVANCE_MODE=rank          # off | filter | rank
+BP1_RELEVANCE_THRESHOLD=0.6      # порог для режима filter
+BP1_ENRICHMENT_ENABLED=true
+
+# Circuit breaker источников
+SOURCE_CIRCUIT_TTL_SECONDS=86400
+SOURCE_DISABLE_THRESHOLD=3       # подряд отказов -> is_active=False
+```
+
+`BP1_RELEVANCE_MODE=rank` (а не `filter`) — намеренный выбор по умолчанию:
+BP-1 отвечает за сырой сбор (Bronze Layer), а решение «что из собранного
+оставить» принадлежит этапу нормализации (BP-2). `rank` только размечает
+и сортирует по `relevance`, ничего не отбрасывая.
 
 ### Инициализация данных
 

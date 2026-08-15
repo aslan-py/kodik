@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,10 @@ from ..core.cache import PROBED_URL_TTL_SECONDS, UnifiedCache
 from ..core.quality import DataQualityGate
 from ..schemas import PipelineReport, PipelineStage, ProbedUrl, UnifiedConfig
 from ..strategies.classifier import SourceClassifier
+from ..strategies.orchestrator import (
+    _is_trusted_self_signed_domain,
+    _ssl_unverified_context,
+)
 from .bridge import AdaptiveBridgeParser
 from .search_probe import SearchUrlProber
 from .sources import (
@@ -97,11 +101,58 @@ class AdaptiveRunner:
         self._prober = SearchUrlProber(
             fetch=self._default_probe_fetch,
             looks_like_search_results=self._default_looks_like,
+            post=self._default_probe_post,
         )
 
     @staticmethod
+    def _probe_request(url: str, data: bytes | None = None) -> str:
+        """Синхронный HTTP-запрос для пробинга (GET или POST).
+
+        Общая основа для ``_default_probe_fetch`` (GET) и
+        ``_default_probe_post`` (POST): единый User-Agent, таймаут и
+        единая политика TLS.
+
+        Фолбэк без верификации сертификата разрешён только для доменов из
+        ``KNOWN_REGISTRY_DOMAINS`` (гос.порталы с самоподписанными
+        сертификатами) — та же политика, что в
+        ``strategies/orchestrator.py`` после Шага 13 плана рефакторинга
+        (N11). Для остальных доменов TLS-ошибка остаётся ошибкой, и
+        попытка честно помечается ``fetch_error``.
+        """
+        import urllib.request
+
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0 Safari/537.36'
+                ),
+                **(
+                    {'Content-Type': 'application/x-www-form-urlencoded'}
+                    if data is not None
+                    else {}
+                ),
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.read().decode('utf-8', errors='replace')
+        except Exception:
+            if not _is_trusted_self_signed_domain(url):
+                raise
+            # Известный гос.портал с самоподписанным/недоверенным
+            # сертификатом — повторяем без верификации.
+            with urllib.request.urlopen(
+                req, timeout=10, context=_ssl_unverified_context()
+            ) as resp:
+                return resp.read().decode('utf-8', errors='replace')
+
+    @staticmethod
     def _default_probe_fetch(url: str) -> str:
-        """Реальный fetch для пробинга: синхронный HTTP-запрос через urllib.
+        """Реальный GET-загрузчик для пробинга.
 
         Используется по умолчанию, чтобы пробинг не падал на заглушке
         ``NotImplementedError`` (как было раньше, когда fetch подставлялся
@@ -109,31 +160,21 @@ class AdaptiveRunner:
         поднимает исключение, которое ``SearchUrlProber._safe_fetch``
         превращает в ``None`` (вариант помечается ``fetch_error``).
         """
-        import urllib.request
+        return AdaptiveRunner._probe_request(url)
 
-        req = urllib.request.Request(
-            url,
-            headers={
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/120.0 Safari/537.36'
-                )
-            },
+    @staticmethod
+    def _default_probe_post(url: str, params: dict[str, str]) -> str:
+        """Реальный POST-загрузчик формы поиска (Шаг 18 плана рефакторинга).
+
+        Раньше этап формы в ``SearchUrlProber`` был заглушкой: он выполнял
+        обычный GET, но результат помечался как ``search_method='POST'``.
+        Теперь параметры уходят телом запроса
+        (``application/x-www-form-urlencoded``) — так ищут сайты, где поиск
+        реализован формой, а не query-строкой.
+        """
+        return AdaptiveRunner._probe_request(
+            url, data=urlencode(params).encode('utf-8')
         )
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.read().decode('utf-8', errors='replace')
-        except Exception:
-            # Недоверенный SSL-сертификат (гос.порталы) — повторяем без
-            # верификации, чтобы пробинг не ложно падал.
-            import ssl
-
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                return resp.read().decode('utf-8', errors='replace')
 
     @staticmethod
     def _default_looks_like(html: str) -> bool:
@@ -150,18 +191,24 @@ class AdaptiveRunner:
         fetch: Any,
         looks_like: Any | None = None,
         param_chain: tuple[str, ...] | None = None,
+        post: Any | None = None,
     ) -> None:
-        """Заменяет fetch (и опционально looks_like) у проубера.
+        """Заменяет fetch (и опционально looks_like/post) у проубера.
 
         По умолчанию проубер использует ``_default_probe_fetch`` (реальный
         HTTP-загрузчик через urllib). Метод позволяет подставить другой
         загрузчик (браузер, httpx, мок в тестах) и/или свою проверку
         «похоже ли на выдачу».
+
+        ``post`` по умолчанию остаётся реальным (``_default_probe_post``),
+        чтобы подмена GET-загрузчика не отключала молча этап POST-формы;
+        передайте свой callable, чтобы заменить и его.
         """
         self._prober = SearchUrlProber(
             fetch=fetch,
             looks_like_search_results=looks_like,
             param_chain=param_chain,
+            post=post if post is not None else self._default_probe_post,
         )
 
     def _build_fallback_url(self, source_name: str, search_param: str) -> str:

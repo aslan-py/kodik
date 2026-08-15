@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 # Максимальное количество новостей, собираемых за один проход пагинации.
 DEFAULT_MAX_NEWS = settings.bp1_max_news_per_source
 
+# Сколько прогонов подряд закэшированный адаптер может не проходить
+# контроль качества, прежде чем будет сброшен и выведен заново (Шаг 21
+# плана рефакторинга). 2, а не 1: разовый провал бывает от самих данных
+# (пустая выдача, дубли в источнике), а не от устаревших селекторов.
+ADAPTER_FAIL_THRESHOLD = 2
+
 # Верхний предел страниц пагинации на источник за прогон (Шаг 16 плана
 # рефакторинга, REFACTORING_PLAN.md — T5). Раньше _max_pages() возвращал
 # жёстко зашитое 10000 (фактически «без лимита»), и единственным тормозом
@@ -330,6 +336,10 @@ class AdaptiveParser:
 
         # 1. Проверка кэша адаптеров.
         adapter = await self._cache.get_adapter(source_name)
+        # Пришёл ли адаптер из кэша (а не создан в этом же прогоне) — от
+        # этого зависит самокоррекция при провале качества (Шаг 21 плана
+        # рефакторинга): свежесозданный адаптер сбрасывать бессмысленно.
+        adapter_from_cache = adapter is not None
 
         # 2. Получение HTML через оркестратор.
         #    Если классификация источника уже сохранена — начинаем с
@@ -513,6 +523,39 @@ class AdaptiveParser:
         reports = self._quality_gate.validate_all(items)
         quality_ok = self._quality_gate.is_all_passed(reports)
 
+        # Шаг 20 плана рефакторинга (T6): раньше пер-уровневые отчёты
+        # Quality Gate вычислялись и выбрасывались — наружу уходил только
+        # булев признак 'ok'/'low_quality', поэтому нельзя было увидеть,
+        # КАКОЙ уровень проверки просел (SCHEMA/TYPES/BUSINESS/VOLUME/
+        # CONSISTENCY). Сводка по уровням кладётся в extra элемента и
+        # доходит до отчёта прогона через bridge -> runner.
+        quality_levels = {
+            report.level.value: {
+                'passed': report.passed,
+                'errors': len(report.errors),
+                'warnings': len(report.warnings),
+            }
+            for report in reports
+        }
+        for item in items:
+            item.setdefault('extra', {})['quality_levels'] = quality_levels
+
+        # Шаг 21 плана рефакторинга (N6): самокоррекция адаптера по итогам
+        # контроля качества. До этого AIAgent.analyze_result существовал, но
+        # никем не вызывался, а его рекомендация всё равно никуда не
+        # применялась — «самообучение» было видимостью.
+        recommendation = await self._handle_quality_outcome(
+            source_name=source_name,
+            adapter=adapter,
+            adapter_from_cache=adapter_from_cache,
+            quality_ok=quality_ok,
+            items=items,
+            html=html,
+        )
+        if recommendation:
+            for item in items:
+                item.setdefault('extra', {})['adapter_review'] = recommendation
+
         elapsed = int((time.monotonic() - start) * 1000)
         return AdaptiveParseResult(
             status='ok' if quality_ok else 'low_quality',
@@ -525,6 +568,95 @@ class AdaptiveParser:
             elapsed_ms=elapsed,
             trace_id=trace_id,
         )
+
+    # ------------------------------------------------------------------
+    # Самокоррекция адаптера по итогам контроля качества
+    # ------------------------------------------------------------------
+
+    async def _handle_quality_outcome(
+        self,
+        source_name: str,
+        adapter: AdapterState,
+        adapter_from_cache: bool,
+        quality_ok: bool,
+        items: list[dict[str, Any]],
+        html: str,
+    ) -> dict[str, Any] | None:
+        """Обновляет судьбу закэшированного адаптера по итогам качества.
+
+        Шаг 21 плана рефакторинга (N6). Раньше ``AIAgent.analyze_result``
+        и промпт ``RESULT_ANALYSIS_PROMPT`` существовали, но не вызывались
+        ниоткуда, а сама рекомендация нигде не применялась — выглядело как
+        самокоррекция, которой не было.
+
+        Логика (только для адаптера, пришедшего ИЗ КЭША — свежесозданный
+        сбрасывать бессмысленно, он и так только что выведен):
+
+        - качество прошло, а на счётчике были провалы -> счётчик
+          сбрасывается (адаптер «выздоровел»);
+        - качество не прошло -> ``fail_count`` увеличивается; по достижении
+          ``ADAPTER_FAIL_THRESHOLD`` адаптер удаляется из кэша, чтобы на
+          следующем прогоне селекторы были выведены заново, а у LLM
+          запрашивается диагностическая рекомендация (уходит в
+          ``extra.adapter_review`` и в лог — как аудит причины сброса).
+
+        Используется поле ``AdapterState.fail_count``, которое до этого шага
+        было объявлено в схеме, но нигде не читалось и не писалось.
+
+        Returns:
+            Рекомендация LLM (если запрашивалась) или ``None``.
+        """
+        if not adapter_from_cache:
+            return None
+
+        if quality_ok:
+            if adapter.fail_count:
+                await self._cache.set_adapter(
+                    source_name, adapter.model_copy(update={'fail_count': 0})
+                )
+                self._logger.info(
+                    'Адаптер %s снова даёт качественные данные — счётчик '
+                    'провалов сброшен',
+                    source_name,
+                )
+            return None
+
+        fail_count = adapter.fail_count + 1
+        if fail_count < ADAPTER_FAIL_THRESHOLD:
+            await self._cache.set_adapter(
+                source_name,
+                adapter.model_copy(update={'fail_count': fail_count}),
+            )
+            self._logger.info(
+                'Качество данных %s не прошло контроль (провал %d/%d) — '
+                'адаптер пока сохранён',
+                source_name,
+                fail_count,
+                ADAPTER_FAIL_THRESHOLD,
+            )
+            return None
+
+        recommendation: dict[str, Any] | None = None
+        try:
+            recommendation = await self._agent.analyze_result(
+                html, items, source_name
+            )
+        except Exception as exc:  # pragma: no cover - зависит от LLM
+            self._logger.warning(
+                'Не удалось получить рекомендацию по адаптеру %s: %s',
+                source_name,
+                exc,
+            )
+
+        await self._cache.clear_adapter(source_name)
+        self._logger.warning(
+            'Адаптер %s сброшен после %d провалов качества подряд — '
+            'селекторы будут выведены заново. Рекомендация LLM: %s',
+            source_name,
+            fail_count,
+            (recommendation or {}).get('recommendation', 'n/a'),
+        )
+        return recommendation
 
     # ------------------------------------------------------------------
     # Обновление классификации по факту успешного запроса

@@ -6,6 +6,7 @@ from core.config import settings
 from src.bp1.adaptive.processing import parser as parser_module
 from src.bp1.adaptive.processing.llm import LLMClient
 from src.bp1.adaptive.processing.parser import (
+    ADAPTER_FAIL_THRESHOLD,
     DEFAULT_MAX_NEWS,
     MAX_PAGINATION_PAGES,
     AdaptiveParser,
@@ -18,6 +19,7 @@ from src.bp1.adaptive.processing.parser import (
     _to_absolute,
 )
 from src.bp1.adaptive.schemas import (
+    AdapterState,
     ExtendedSiteClassification,
     SiteType,
     SourceClassification,
@@ -809,3 +811,142 @@ async def test_deep_fetch_css_first_ordering():
     assert len(result) == 2
     assert result[0]['ex_text'] == full_text
     assert result[1]['ex_text'] == full_text
+
+
+# ============================================================================
+# Шаг 21: самокоррекция адаптера по итогам Quality Gate (N6)
+# ============================================================================
+
+
+def _cached_adapter(fail_count: int = 0) -> AdapterState:
+    return AdapterState(
+        source_name=EXAMPLE_SOURCE_NAME,
+        selectors={'container': '.item', 'title': '.t', 'url': 'a'},
+        confidence=0.9,
+        fail_count=fail_count,
+    )
+
+
+@pytest.mark.asyncio
+async def test_quality_failure_increments_adapter_fail_count():
+    """Первый провал качества не сбрасывает адаптер, а считает попытку."""
+    parser = AdaptiveParser(redis_client=_FakeRedis())
+    adapter = _cached_adapter()
+    await parser._cache.set_adapter(EXAMPLE_SOURCE_NAME, adapter)
+
+    review = await parser._handle_quality_outcome(
+        source_name=EXAMPLE_SOURCE_NAME,
+        adapter=adapter,
+        adapter_from_cache=True,
+        quality_ok=False,
+        items=[],
+        html='<html></html>',
+    )
+
+    assert review is None
+    stored = await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME)
+    assert stored is not None, 'адаптер не должен сбрасываться с первого раза'
+    assert stored.fail_count == 1
+
+
+@pytest.mark.asyncio
+async def test_quality_failure_resets_adapter_at_threshold():
+    """По достижении порога адаптер сбрасывается и запрашивается разбор."""
+    parser = AdaptiveParser(redis_client=_FakeRedis())
+    adapter = _cached_adapter(fail_count=ADAPTER_FAIL_THRESHOLD - 1)
+    await parser._cache.set_adapter(EXAMPLE_SOURCE_NAME, adapter)
+
+    called: list[str] = []
+
+    async def _fake_analyze(html, items, source_name):
+        called.append(source_name)
+        return {'recommendation': 'селекторы устарели', 'confidence': 0.8}
+
+    parser._agent.analyze_result = _fake_analyze
+
+    review = await parser._handle_quality_outcome(
+        source_name=EXAMPLE_SOURCE_NAME,
+        adapter=adapter,
+        adapter_from_cache=True,
+        quality_ok=False,
+        items=[],
+        html='<html></html>',
+    )
+
+    assert called == [EXAMPLE_SOURCE_NAME]
+    assert review == {
+        'recommendation': 'селекторы устарели', 'confidence': 0.8}
+    # Адаптер удалён — на следующем прогоне селекторы выведутся заново.
+    assert await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME) is None
+
+
+@pytest.mark.asyncio
+async def test_quality_success_resets_fail_counter():
+    """Успешное качество обнуляет накопленные провалы."""
+    parser = AdaptiveParser(redis_client=_FakeRedis())
+    adapter = _cached_adapter(fail_count=1)
+    await parser._cache.set_adapter(EXAMPLE_SOURCE_NAME, adapter)
+
+    await parser._handle_quality_outcome(
+        source_name=EXAMPLE_SOURCE_NAME,
+        adapter=adapter,
+        adapter_from_cache=True,
+        quality_ok=True,
+        items=[],
+        html='<html></html>',
+    )
+
+    stored = await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME)
+    assert stored is not None
+    assert stored.fail_count == 0
+
+
+@pytest.mark.asyncio
+async def test_fresh_adapter_not_penalised_on_quality_failure():
+    """Свежесозданный адаптер не сбрасывается и не штрафуется.
+
+    Иначе он удалялся бы в том же прогоне, в котором был выведен, —
+    бесконечная пересборка без накопления опыта.
+    """
+    parser = AdaptiveParser(redis_client=_FakeRedis())
+    adapter = _cached_adapter()
+    await parser._cache.set_adapter(EXAMPLE_SOURCE_NAME, adapter)
+
+    review = await parser._handle_quality_outcome(
+        source_name=EXAMPLE_SOURCE_NAME,
+        adapter=adapter,
+        adapter_from_cache=False,
+        quality_ok=False,
+        items=[],
+        html='<html></html>',
+    )
+
+    assert review is None
+    stored = await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME)
+    assert stored is not None
+    assert stored.fail_count == 0
+
+
+@pytest.mark.asyncio
+async def test_adapter_reset_survives_llm_failure():
+    """Сбой LLM-разбора не мешает сбросить устаревший адаптер."""
+    parser = AdaptiveParser(redis_client=_FakeRedis())
+    adapter = _cached_adapter(fail_count=ADAPTER_FAIL_THRESHOLD - 1)
+    await parser._cache.set_adapter(EXAMPLE_SOURCE_NAME, adapter)
+
+    async def _failing_analyze(html, items, source_name):
+        raise RuntimeError('LLM down')
+
+    parser._agent.analyze_result = _failing_analyze
+
+    review = await parser._handle_quality_outcome(
+        source_name=EXAMPLE_SOURCE_NAME,
+        adapter=adapter,
+        adapter_from_cache=True,
+        quality_ok=False,
+        items=[],
+        html='<html></html>',
+    )
+
+    assert review is None
+    assert await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME) is None

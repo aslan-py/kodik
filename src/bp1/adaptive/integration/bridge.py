@@ -137,6 +137,13 @@ class AdaptiveBridgeParser(BaseParser):
             ),
             # Время съёма; в хэш НЕ включается, иначе всегда 'changed'.
             'fetched_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
+            # Шаг 20 плана рефакторинга (T6): реально сработавшая стратегия
+            # и статус качества. Раньше терялись при конвертации
+            # AdaptiveParseResult -> ParsedResponse, из-за чего в отчёте
+            # прогона фигурировала лишь ПРЕДСКАЗАННАЯ стратегия
+            # (classification.recommended_strategy), а не фактическая.
+            'strategy_used': result.strategy_used.value,
+            'quality_status': result.status,
         }
 
         return ParsedResponse(meta=meta, items=items)

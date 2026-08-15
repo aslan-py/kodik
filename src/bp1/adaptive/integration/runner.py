@@ -45,6 +45,46 @@ from .sources import (
 logger = logging.getLogger(__name__)
 
 
+def _collect_quality_levels(response: Any) -> dict[str, Any]:
+    """Достаёт сводку уровней Quality Gate из ответа парсера.
+
+    Уровни кладёт ``AdaptiveParser`` в ``extra`` элемента страницы поиска
+    (Шаг 20 плана рефакторинга, T6). Возвращает пустой словарь, если
+    парсер их не проставил (специализированные RPA-адаптеры вроде
+    fedresurs не проходят через ``DataQualityGate``).
+    """
+    for item in getattr(response, 'items', None) or []:
+        extra = getattr(item, 'extra', None) or {}
+        levels = extra.get('quality_levels')
+        if levels:
+            return levels
+    return {}
+
+
+def check_strategy_chain(orchestrator: Any) -> dict[str, bool]:
+    """Проверяет, какие стратегии деградации реально доступны.
+
+    ``Crawl4AIStrategy``/``StealthStrategy``/``BrowserStrategy`` зависят от
+    опциональных пакетов (``crawl4ai``, ``playwright``). Если пакет не
+    установлен, стратегия молча падает в рантайме и эффективная цепочка
+    деградации короче ожидаемой — раньше это никак не было видно (T6:
+    «нет наблюдаемости за тихой деградацией цепочки»).
+
+    Returns:
+        ``{имя стратегии: доступна ли}`` — импорт проверяется без запуска
+        браузера, поэтому вызов дешёвый.
+    """
+    import importlib.util
+
+    availability = {
+        'crawl4ai': importlib.util.find_spec('crawl4ai') is not None,
+        'playwright': importlib.util.find_spec('playwright') is not None,
+    }
+    registered = getattr(orchestrator, '_strategies', {}) or {}
+    availability['registered_count'] = len(registered)
+    return availability
+
+
 class AdaptiveRunner:
     """
     Единая точка входа для адаптивного сбора данных.
@@ -200,15 +240,19 @@ class AdaptiveRunner:
         загрузчик (браузер, httpx, мок в тестах) и/или свою проверку
         «похоже ли на выдачу».
 
-        ``post`` по умолчанию остаётся реальным (``_default_probe_post``),
-        чтобы подмена GET-загрузчика не отключала молча этап POST-формы;
-        передайте свой callable, чтобы заменить и его.
+        Подмена транспорта — «всё или ничего»: если ``post`` не передан
+        явно, этап POST-формы отключается (помечается
+        ``no_post_transport``), а не выполняется штатным urllib. Иначе
+        подмена GET-загрузчика на мок/браузер оставляла бы POST-запросы
+        ходить в реальную сеть мимо подставленного транспорта — тесты
+        неожиданно стучались бы на живые сайты, а браузерный сценарий
+        терял бы cookies/сессию на POST-этапе.
         """
         self._prober = SearchUrlProber(
             fetch=fetch,
             looks_like_search_results=looks_like,
             param_chain=param_chain,
-            post=post if post is not None else self._default_probe_post,
+            post=post,
         )
 
     def _build_fallback_url(self, source_name: str, search_param: str) -> str:
@@ -630,11 +674,18 @@ class AdaptiveRunner:
                     source_name=source_name,
                     **parse_kwargs,
                 )
+            # Шаг 20 плана рефакторинга (T6): реально сработавшая стратегия
+            # и уровни Quality Gate. ``getattr(response, 'strategy_used')``
+            # здесь всегда давал None — у ParsedResponse такого поля нет,
+            # оно приходит в meta (см. bridge.py).
+            meta = getattr(response, 'meta', None) or {}
             _add_stage(
                 'parse',
                 detail={
                     'items': len(response.items),
-                    'strategy': getattr(response, 'strategy_used', None),
+                    'strategy': meta.get('strategy_used'),
+                    'quality_status': meta.get('quality_status'),
+                    'quality_levels': _collect_quality_levels(response),
                 },
             )
             # Источник успешно спарсен — снимаем временную блокировку и
@@ -691,7 +742,18 @@ class AdaptiveRunner:
         report.total_duration_ms = int((time.monotonic() - report_start) * 1000)
         report.overall_status = 'ok'
 
-        persisted['strategy'] = classification.recommended_strategy
+        # Шаг 20 плана рефакторинга (T6): в сводку идёт РЕАЛЬНО сработавшая
+        # стратегия. Раньше сюда попадала classification.recommended_strategy
+        # — предсказание до попытки, из-за чего разбивка по стратегиям в
+        # отчётах показывала намерение, а не факт.
+        meta = getattr(response, 'meta', None) or {}
+        persisted['strategy'] = (
+            meta.get('strategy_used') or classification.recommended_strategy
+        )
+        persisted['strategy_recommended'] = classification.recommended_strategy
+        persisted['quality_status'] = meta.get('quality_status')
+        persisted['quality_levels'] = _collect_quality_levels(response)
+        persisted['source'] = source_name
         persisted['pipeline_report'] = report.model_dump(mode='json')
         return persisted
 

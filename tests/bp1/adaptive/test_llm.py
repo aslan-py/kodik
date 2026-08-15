@@ -1,5 +1,6 @@
 """Тесты для LLMClient и AIAgent (llm.py)."""
 
+import logging
 import re
 import sys
 from types import ModuleType
@@ -7,6 +8,7 @@ from types import ModuleType
 import pytest
 
 from core.config import settings
+from src.bp1.adaptive.processing._llm import constants
 from src.bp1.adaptive.processing.llm import AIAgent, LLMClient, _default_model
 from src.bp1.adaptive.schemas import (
     SiteType,
@@ -556,3 +558,104 @@ async def test_score_relevance_single_batch_unchanged_behavior(monkeypatch):
 
     assert len(calls) == 1
     assert scores == [{'index': 0, 'score': 0.8, 'relevant': True}]
+
+
+# ============================================================================
+# Шаг 22: промпты против реальных лимитов токенов (T7)
+# ============================================================================
+
+# Оценка размера ответа модели на ОДИН элемент скоринга:
+# {"index": 12, "score": 0.95, "relevant": true},
+# ~15 токенов + запас на разделители и разброс форматирования.
+_TOKENS_PER_RELEVANCE_ITEM = 25
+# Обвязка ответа: {"items": [ ... ]} и возможная преамбула модели.
+_RELEVANCE_RESPONSE_OVERHEAD_TOKENS = 64
+
+
+def test_relevance_batch_size_fits_token_budget():
+    """Размер пачки согласован с лимитом токенов ответа.
+
+    Страховка от регресса Шага 14: если поднять RELEVANCE_BATCH_SIZE, не
+    подняв RELEVANCE_MAX_TOKENS, ответ модели снова начнёт обрезаться —
+    parse_json тихо вернёт {}, и пачка молча уйдёт в эвристику.
+    """
+    worst_case = (
+        constants.RELEVANCE_BATCH_SIZE * _TOKENS_PER_RELEVANCE_ITEM
+        + _RELEVANCE_RESPONSE_OVERHEAD_TOKENS
+    )
+    assert worst_case <= constants.RELEVANCE_MAX_TOKENS, (
+        f'Пачка из {constants.RELEVANCE_BATCH_SIZE} элементов требует '
+        f'~{worst_case} токенов ответа при лимите '
+        f'{constants.RELEVANCE_MAX_TOKENS}: ответ будет обрезан. '
+        'Уменьшите RELEVANCE_BATCH_SIZE или поднимите RELEVANCE_MAX_TOKENS.'
+    )
+
+
+@pytest.mark.asyncio
+async def test_truncated_response_degrades_only_affected_batch(
+    monkeypatch, caplog
+):
+    """Усечённый ответ (обрыв JSON на середине) изолирован одной пачкой.
+
+    Воспроизводит именно тот регресс, который закрывал Шаг 14: до
+    батчирования обрыв ответа на большом списке отправлял в эвристику ВЕСЬ
+    список. Проверяется и то, что причина видна в логах.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
+    agent = AIAgent()
+    # 2 пачки: 15 + 5 элементов.
+    items = [
+        {'title': f'{COMPETITOR} новость {i}', 'text': 'текст'}
+        for i in range(constants.RELEVANCE_BATCH_SIZE + 5)
+    ]
+
+    async def _fake_complete(prompt, **kwargs):
+        count = _batch_size_from_prompt(prompt)
+        full = ', '.join(
+            f'{{"index": {i}, "score": 0.2, "relevant": false}}'
+            for i in range(count)
+        )
+        if count < constants.RELEVANCE_BATCH_SIZE:
+            # Меньшая (вторая) пачка: ответ оборван на середине —
+            # ровно так выглядит упирание в max_tokens.
+            return f'{{"items": [{full}'[: len(full) // 2]
+        return f'{{"items": [{full}]}}'
+
+    agent._complete = _fake_complete
+
+    with caplog.at_level(logging.WARNING):
+        scores = await agent.score_relevance(items, COMPETITOR, '')
+
+    assert len(scores) == len(items)
+    # Первая пачка сохранила LLM-оценку.
+    first = [s for s in scores if s['index'] < constants.RELEVANCE_BATCH_SIZE]
+    assert all(s['score'] == 0.2 for s in first)
+    # Вторая — ушла в эвристику (конкурент дословно в title -> высокий балл).
+    second = [s for s in scores if s['index'] >= constants.RELEVANCE_BATCH_SIZE]
+    assert second and all(s['score'] > 0.2 for s in second)
+
+
+@pytest.mark.asyncio
+async def test_enrichment_prompt_is_per_item_not_batched(monkeypatch):
+    """ENRICHMENT_PROMPT обрабатывает одно событие за вызов.
+
+    Фиксирует уточнение Шага 14: обогащение не батчируется (в отличие от
+    релевантности), поэтому упереться в ENRICHMENT_MAX_TOKENS списком
+    элементов оно не может — на каждый вызов идёт один текст.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', TEST_API_KEY)
+    agent = AIAgent()
+    prompts_seen: list[str] = []
+
+    async def _fake_complete(prompt, **kwargs):
+        prompts_seen.append(prompt)
+        assert kwargs.get('max_tokens') == constants.ENRICHMENT_MAX_TOKENS
+        return '{"summary": "кратко", "sentiment": "neutral"}'
+
+    agent._complete = _fake_complete
+
+    await agent.enrich_event('Текст новости', COMPETITOR, TRIGGER)
+
+    assert len(prompts_seen) == 1
+    # В промпте ровно один текст события, а не JSON-массив элементов.
+    assert '"items"' not in prompts_seen[0]

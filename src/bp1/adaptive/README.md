@@ -706,34 +706,35 @@ print(resp.items[0].title, resp.items[0].url)
 
 ## CLI
 
-Точка входа: `python -m src.bp1.adaptive.cli`.
+Собственного CLI у адаптивного контура больше нет: он объединён с CLI
+этапа — `python -m src.bp1.cli` (см. [../README.md](../README.md)).
+Команды сбора — обёртки над заданиями [`../jobs.py`](../jobs.py).
 
 ```bash
-# Классификация источника
-python -m src.bp1.adaptive.cli classify --source lenta.ru
+# Категоризация источника без записи в БД
+python -m src.bp1.cli classify lenta.ru
 
-# Запуск адаптивного сбора (все активные задачи)
-python -m src.bp1.adaptive.cli run
-
-# Запуск конкретной задачи
-python -m src.bp1.adaptive.cli run --task-id 40
-
-# Запуск с указанием режима и fallback
-python -m src.bp1.adaptive.cli run --source lenta.ru --mode hybrid --fallback
+# Сбор: по источнику / по конкуренту / всё
+python -m src.bp1.cli source lenta.ru
+python -m src.bp1.cli competitor "ООО АРХИТЕХ ИИ"
+python -m src.bp1.cli all
 
 # Видимый браузер (для отладки HITL/STEALTH)
-python -m src.bp1.adaptive.cli run --task-id 40 --no-headless
+python -m src.bp1.cli source lenta.ru --no-headless
 
 # Управление кэшем адаптеров
-python -m src.bp1.adaptive.cli cache --show --source lenta.ru
-python -m src.bp1.adaptive.cli cache --clear --source lenta.ru
-
-# Управление профилями браузеров
-python -m src.bp1.adaptive.cli profile --show --source lenta.ru
+python -m src.bp1.cli cache --show lenta.ru
+python -m src.bp1.cli cache --clear lenta.ru
 
 # Отчёт качества по задаче
-python -m src.bp1.adaptive.cli quality --report --task-id 40
+python -m src.bp1.cli quality --task-id 40
 ```
+
+Команды `profile` и режимы `--mode hybrid --fallback` в объединённый CLI
+не переносились: профили HITL правятся на диске
+(`src/bp1/data/profiles/`), а режим прогона задаётся настройкой
+`BP1_ADAPTIVE_MODE` — флаг в CLI дублировал её и расходился с прогоном
+через конвейер.
 
 ---
 

@@ -23,7 +23,8 @@ src/bp1/
 ├── runner.py                # Оркестратор BPRunner (direct / celery режимы)
 ├── tasks.py                 # Основная логика: run_parser_async, получение конфигурации задачи
 ├── celery_tasks.py          # Celery-обёртка для production-запуска
-├── cli.py                   # CLI-интерфейс (запуск, список задач, очистка Redis)
+├── cli.py                   # Единый CLI этапа (source/competitor/all/add-source)
+├── jobs.py                  # Задания сбора — публичный API для CLI и планировщика
 ├── pipeline.py              # run_bp1() — точка входа этапа 1 + сводка прогона
 │
 ├── parsers/                 # Адаптеры парсеров (реализуют BaseParser)
@@ -33,7 +34,6 @@ src/bp1/
 │
 ├── adaptive/                # ✅ Адаптивный сбор данных (интеллектуальный парсинг)
 │   ├── schemas.py           # Pydantic-схемы (классификация, стратегии, HITL, отчёты)
-│   ├── cli.py               # CLI: run / classify / add-source / cache / profile / quality
 │   ├── hostname.py          # Общая нормализация hostname + список гос. доменов
 │   ├── core/                # UnifiedCache (Redis+диск), DataQualityGate (5 уровней)
 │   ├── processing/          # AdaptiveParser, HtmlCleaner, StructuredChunker, ResultMerger
@@ -138,76 +138,58 @@ python -m src.bp1.search_task_coverage # только создать задач�
 `.env` (см. `core/scripts/SCRIPTS_README.md`, «Три способа наполнить
 этап 1»); режимы ниже (Direct/Celery/адаптивный CLI) — более низкий
 уровень, `run_bp1()` их не заменяет, а вызывает `AdaptiveRunner` тем же
-способом, что и `AdaptiveRunner.run_all()` из адаптивного CLI.
+способом, что и команда `all` объединённого CLI.
 
-### Direct (тестовый)
+### CLI этапа
 
-Прямой запуск без Celery, для отладки и разработки:
+Единая точка входа — `python -m src.bp1.cli`. Прежние два интерфейса
+(`src/bp1/cli.py` с `run --mode direct|celery` и `src/bp1/adaptive/cli.py`)
+объединены: рабочие сценарии были размазаны по двум командам с разными
+флагами для одного и того же.
 
-```bash
-# Все активные задачи
-python -m src.bp1.cli run --mode direct
-
-# Конкретная задача
-python -m src.bp1.cli run --task-id 26 --mode direct
-
-# Несколько задач
-python -m src.bp1.cli run --task-ids 1,2,3 --mode direct
-
-# С видимым браузером (для отладки)
-python -m src.bp1.cli run --task-id 26 --mode direct --no-headless
-```
-
-### Celery (production)
-
-Запуск через Celery-воркеры:
+Четыре команды сбора — тонкие обёртки над заданиями
+[`src/bp1/jobs.py`](src/bp1/jobs.py); вся логика живёт там, поэтому
+планировщик задач вызывает те же функции напрямую, без CLI.
 
 ```bash
-# Отправить задачи в очередь
-python -m src.bp1.cli run --mode celery
+# 1. Один источник по всем активным конкурентам
+python -m src.bp1.cli source lenta.ru
 
-# Запустить воркер
-celery -A core.celery_app worker --loglevel=info
+# 2. Один конкурент по всем активным источникам
+#    (конкурента, которого нет в БД, задание создаёт само)
+python -m src.bp1.cli competitor "Сбербанк"
+python -m src.bp1.cli competitor "Сбербанк" --inn 7707083893
+
+# 3. Полный прогон: все источники x все конкуренты
+python -m src.bp1.cli all
+python -m src.bp1.cli all --no-ensure-matrix   # только заведённые связки
+
+# 4. Поставить новый источник на учёт (категоризация + БД + кэш)
+python -m src.bp1.cli add-source https://www.lenta.ru/news
 ```
+
+Общие флаги команд сбора: `--no-headless` (показать окно браузера),
+`--timeout` (мс), `--max-concurrent` (параллельных задач). По умолчанию
+значения берутся из настроек.
 
 ### Вспомогательные команды
 
 ```bash
-# Список активных задач
+# Активные связки источник-конкурент
 python -m src.bp1.cli list
 
-# Очистить Redis от ключей задач
+# Категоризация источника без записи в БД
+python -m src.bp1.cli classify lenta.ru
+
+# Кэш адаптера источника (в любой форме записи источника)
+python -m src.bp1.cli cache --show lenta.ru
+python -m src.bp1.cli cache --clear lenta.ru
+
+# Последний собранный RawItem по задаче
+python -m src.bp1.cli quality --task-id 26
+
+# Сброс ключей дедупликации BP-1 в Redis
 python -m src.bp1.cli clear-redis
-```
-
-### Адаптивный CLI (BP-1 Adaptive)
-
-```bash
-# Запуск всех задач из БД (учитывает is_active SearchTask/Source/Competitor)
-python -m src.bp1.adaptive.cli run
-
-# Сбор по конкретному источнику + конкуренту (создаёт Source/Competitor/SearchTask
-# и запускает именно эту задачу — адаптивный поиск по паре)
-python -m src.bp1.adaptive.cli run --source lenta.ru --competitor "ООО АРХИТЕХ ИИ"
-
-# Гибридный режим с fallback
-python -m src.bp1.adaptive.cli run --source lenta.ru --mode hybrid --fallback
-
-# Классификация источника
-python -m src.bp1.adaptive.cli classify --source lenta.ru
-
-# Регистрация нового источника (нормализация + классификация + БД + Redis)
-python -m src.bp1.adaptive.cli add-source --url "https://www.lenta.ru/news"
-
-# Управление кэшем адаптеров (источник в любом виде: lenta.ru / https://lenta.ru/)
-python -m src.bp1.adaptive.cli cache --show --source lenta.ru
-python -m src.bp1.adaptive.cli cache --clear --source lenta.ru
-
-# Управление профилями браузеров (HITL)
-python -m src.bp1.adaptive.cli profile --show --source lenta.ru
-
-# Отчёт качества по задаче
-python -m src.bp1.adaptive.cli quality --report --task-id 26
 ```
 
 ## Программный запуск
@@ -440,18 +422,18 @@ print(registry.build_url('hh.ru', 'ООО АРХИТЕХ ИИ'))
 #### Использование в CLI
 
 ```bash
-# Сбор по конкретному источнику + конкуренту: автоматически создаёт
-# Source/Competitor/SearchTask и запускает адаптивный поиск по этой паре.
-python -m src.bp1.adaptive.cli run --source hh.ru --competitor "ООО АРХИТЕХ ИИ"
+# Регистрация нового источника (классификация + БД + Redis) перед поиском
+python -m src.bp1.cli add-source https://hh.ru
 
-# Гибридный режим с fallback
-python -m src.bp1.adaptive.cli run --source lenta.ru --mode hybrid --fallback
+# Сбор по источнику: связки Source/Competitor/SearchTask достраиваются
+# автоматически по всем активным конкурентам.
+python -m src.bp1.cli source hh.ru
+
+# Сбор по конкуренту (по всем активным источникам)
+python -m src.bp1.cli competitor "ООО АРХИТЕХ ИИ"
 
 # Все активные задачи (учитывает is_active всех трёх уровней)
-python -m src.bp1.adaptive.cli run
-
-# Регистрация нового источника (классификация + БД + Redis) перед поиском
-python -m src.bp1.adaptive.cli add-source --url "https://hh.ru"
+python -m src.bp1.cli all
 ```
 
 #### Использование в коде

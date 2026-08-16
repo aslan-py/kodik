@@ -3,7 +3,6 @@
 import pytest
 
 from core.config import settings
-from src.bp1.adaptive.processing import parser as parser_module
 from src.bp1.adaptive.processing.llm import LLMClient
 from src.bp1.adaptive.processing.parser import (
     ADAPTER_FAIL_THRESHOLD,
@@ -19,6 +18,7 @@ from src.bp1.adaptive.processing.parser import (
     _parse_items,
     _to_absolute,
 )
+from src.bp1.adaptive.processing.parser import constants as parser_constants
 from src.bp1.adaptive.schemas import (
     AdapterState,
     ExtendedSiteClassification,
@@ -533,7 +533,7 @@ def test_parse_items_filters_non_http_schemes():
 
 def test_parse_items_applies_limit_after_filtering_noise(monkeypatch):
     """Служебные ссылки не занимают квоту полезных материалов."""
-    monkeypatch.setattr(parser_module, 'DEFAULT_MAX_NEWS', 2)
+    monkeypatch.setattr(parser_constants, 'DEFAULT_MAX_NEWS', 2)
     html = """
     <html><body>
       <a href="/account/login">Войти</a>
@@ -556,7 +556,7 @@ def test_parse_items_applies_limit_after_filtering_noise(monkeypatch):
 
 def test_parse_items_returns_all_useful_links_below_limit(monkeypatch):
     """При нехватке пригодных ссылок фильтр не добавляет шум."""
-    monkeypatch.setattr(parser_module, 'DEFAULT_MAX_NEWS', 3)
+    monkeypatch.setattr(parser_constants, 'DEFAULT_MAX_NEWS', 3)
     html = """
     <html><body>
       <a href="javascript:void(0)">Меню</a>
@@ -574,7 +574,7 @@ def test_parse_items_returns_all_useful_links_below_limit(monkeypatch):
 
 def test_parse_items_with_selectors_filters_before_limit(monkeypatch):
     """Селекторный путь применяет лимит только после фильтрации URL."""
-    monkeypatch.setattr(parser_module, 'DEFAULT_MAX_NEWS', 2)
+    monkeypatch.setattr(parser_constants, 'DEFAULT_MAX_NEWS', 2)
     html = """
     <html><body>
       <div class="item">
@@ -677,17 +677,22 @@ def test_max_pages_uses_config_limit():
     assert parser._max_pages({}) == MAX_PAGINATION_PAGES
 
 
-def test_max_pages_narrowed_by_items_per_page():
+def test_max_pages_narrowed_by_items_per_page(monkeypatch):
     """При известном items_per_page лимит сужается до числа страниц,
-    реально нужного, чтобы набрать DEFAULT_MAX_NEWS."""
+    реально нужного, чтобы набрать DEFAULT_MAX_NEWS.
+
+    DEFAULT_MAX_NEWS зафиксирован явным monkeypatch (чётное число), а не
+    взят из реального BP1_MAX_NEWS_PER_SOURCE — тест проверяет арифметику
+    _max_pages (деление пополам должно давать ровно 2 страницы), а не
+    текущее значение переменной окружения; нечётное/маленькое значение из
+    .env ломает именно эту арифметику (3 // 2 = 1, не половина).
+    """
+    monkeypatch.setattr(parser_constants, 'DEFAULT_MAX_NEWS', 4)
     parser = AdaptiveParser()
     # На странице столько же элементов, сколько нужно всего -> 1 страница.
-    assert parser._max_pages({'items_per_page': DEFAULT_MAX_NEWS}) == 1
+    assert parser._max_pages({'items_per_page': 4}) == 1
     # Вдвое меньше на странице -> нужно 2 страницы.
-    assert (
-        parser._max_pages({'items_per_page': max(1, DEFAULT_MAX_NEWS // 2)})
-        == 2
-    )
+    assert parser._max_pages({'items_per_page': 2}) == 2
     # Огромная страница -> всё равно минимум 1.
     assert parser._max_pages({'items_per_page': 10_000}) == 1
 
@@ -1295,8 +1300,7 @@ async def test_quality_failure_resets_adapter_at_threshold():
     )
 
     assert called == [EXAMPLE_SOURCE_NAME]
-    assert review == {
-        'recommendation': 'селекторы устарели', 'confidence': 0.8}
+    assert review == {'recommendation': 'селекторы устарели', 'confidence': 0.8}
     # Адаптер удалён — на следующем прогоне селекторы выведутся заново.
     assert await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME) is None
 

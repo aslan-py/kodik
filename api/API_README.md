@@ -14,12 +14,16 @@ JWT-авторизации пользователей с ролями. Общи�
 
 ```bash
 alembic upgrade head
-uvicorn api.main:app --reload
+python -m api.main
 ```
 
 Требуемые переменные окружения (`.env`, см. `.env.example`):
-`JWT_SECRET_KEY`, `JWT_EXPIRE_MINUTES` — добавлены к уже существующим
+`API_PORT`, `JWT_SECRET_KEY`, `JWT_EXPIRE_MINUTES` — добавлены к уже существующим
 Postgres/Redis/Mail/Telegram настройкам.
+
+Порт меняется в одном месте — `API_PORT` в `.env`. Команда
+`python -m api.main` читает его через `core.config.settings`; например,
+при `API_PORT=8001` Swagger доступен на `http://127.0.0.1:8001/docs`.
 
 `api/main.py` — только сборка приложения (`FastAPI()` + `include_router`).
 Пайплайны (BP-2/BP-4/BP-5) сюда не переехали и не переедут — это отдельный
@@ -52,16 +56,16 @@ api/
 
 ## Админка
 
-`http://127.0.0.1:8000/admin` — веб-интерфейс над справочниками и данными
+`http://127.0.0.1:8001/admin` — веб-интерфейс над справочниками и данными
 конвейера (FastAdmin). Живёт в **этом же** процессе `uvicorn`: отдельный
 сервер и контейнер не нужны. Вход по email+паролю, роли `admin`/`analyst`.
 Подробности — **[ADMIN_README.md](ADMIN_README.md)**.
 
 ## Документация API
 
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
-- Сырая OpenAPI-схема: `http://127.0.0.1:8000/openapi.json`
+- Swagger UI: `http://127.0.0.1:8001/docs`
+- ReDoc: `http://127.0.0.1:8001/redoc`
+- Сырая OpenAPI-схема: `http://127.0.0.1:8001/openapi.json`
 
 **Кнопка Authorize в Swagger.** Схема авторизации — простой HTTP Bearer
 (`HTTPBearer`, `api/security.py`), без своего OAuth2-flow: в диалоге
@@ -172,6 +176,36 @@ require_at_least_one_field`): без этой проверки пустой PATC
 проходил бы и превращался в no-op (`ShowcaseCRUD.update()` не находит
 изменений через `exclude_unset`), а `200` без единого изменённого поля
 скорее вводит в заблуждение, чем помогает.
+
+### `filter-options` — варианты фильтров
+
+`GET /filter-options` доступен ролям `viewer`, `analyst` и `admin` и за
+один запрос возвращает варианты для витрины и плана действий:
+
+```json
+{
+  "showcase": {
+    "category": ["Логистика"],
+    "region": ["Москва"],
+    "priority": ["П1", "П2", "П3", "П4"],
+    "competitor": ["Ozon"],
+    "department": ["Коммерческий"]
+  },
+  "action_items": {
+    "status": ["open", "in_progress", "done"],
+    "deadline": ["2026-02-19"],
+    "priority": ["П1"],
+    "assigned_user_id": [{"value": 17, "label": "Анастасия Иванова"}],
+    "department_id": [{"value": 3, "label": "Коммерческий"}]
+  }
+}
+```
+
+Сроки передаются в машинном ISO-формате `YYYY-MM-DD`. Для полей
+`assigned_user_id` и `department_id` фронт показывает `label`, а в
+одноимённый query-параметр отправляет числовой `value`. Варианты задач для
+`viewer` вычисляются только по задачам его отдела; `analyst` и `admin`
+получают общий набор.
 
 ---
 

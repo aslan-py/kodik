@@ -1,0 +1,17 @@
+.git
+.venv
+venv
+node_modules
+frontend/node_modules
+.next
+frontend/.next
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+.env.*
+tests
+openspec
+ABOUT_PROJECT
+.agents

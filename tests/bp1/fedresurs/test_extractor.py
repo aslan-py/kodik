@@ -226,7 +226,7 @@ class TestExtractWithFallback:
         mock_first.count = mocker.AsyncMock(return_value=0)
         mock_locator = mocker.Mock()
         mock_locator.first = mock_first
-        mock_page.locator.return_value = mock_locator
+        mock_page.locator = mocker.Mock(return_value=mock_locator)
 
         result = await extractor._extract_with_fallback(
             mock_page, '.primary', '.fallback'

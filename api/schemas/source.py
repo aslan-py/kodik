@@ -17,3 +17,4 @@ class SourceCreate(BaseModel):
 
 class SourceUpdate(BaseModel):
     name: str | None = None
+    is_active: bool | None = None

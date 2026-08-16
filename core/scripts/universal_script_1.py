@@ -1,11 +1,9 @@
-"""Полу-реальный прогон конвейера BP-1…BP-5 с двумя заглушками + сервер API.
+"""Детерминированный демо-прогон BP-1…BP-5 и запуск сервера API.
 
-Показывает, как выглядит пайплайн, пока парсинг (BP-1) и LLM-категоризация
-(BP-3) ещё не готовы: эти два этапа заполняются фейковыми, но правдоподобными
-данными (теми же, что использует core/scripts/seed_all.py — никакой новый
-набор здесь не придумывается), а BP-2/BP-4/BP-5 прогоняются НАСТОЯЩИМИ
-конвейерами — теми же функциями, что пойдут в бой (src/bp2/pipeline.py,
-src/bp4/pipeline.py, src/bp5/pipeline.py).
+BP-1 и BP-3 имеют реальные реализации, но этот ознакомительный сценарий
+намеренно заменяет их фиксированными демо-данными: так одна команда не ходит
+по внешним сайтам и не расходует LLM-токены. BP-2/BP-4/BP-5 прогоняются
+настоящими конвейерами. Набор тот же, что у core/scripts/seed_all.py.
 
 Запуск (одна команда, из корня проекта, внутри venv):
     python -m core.scripts.universal_script_1
@@ -15,9 +13,9 @@ src/bp4/pipeline.py, src/bp5/pipeline.py).
   2. alembic upgrade head
   3. Справочники (core/scripts/stages/dictionaries) — идемпотентно
   4. Очистка данных предыдущего прогона (BP-1…BP-6), справочники не трогает
-  5. BP-1 — ЗАГЛУШКА (парсинга ещё нет): core/scripts/stages/bp1.seed()
+  5. BP-1 — фиксированный демо-слой: core/scripts/stages/bp1.seed()
   6. BP-2 — РЕАЛЬНЫЙ конвейер: src.bp2.pipeline.run_bp2()
-  7. BP-3 — ЗАГЛУШКА (LLM ещё нет): core/scripts/stages/bp3.seed()
+  7. BP-3 — фиксированный демо-слой: core/scripts/stages/bp3.seed()
   8. BP-4 — РЕАЛЬНЫЙ конвейер: src.bp4.pipeline.run_bp4()
   9. BP-5 — РЕАЛЬНЫЙ конвейер (детект + маршрутизация). Перед этим шагом
      скрипт спросит в терминале, слать ли алерты по-настоящему на этом
@@ -54,6 +52,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+from core.config import settings
+
 
 def _find_project_root(start: Path) -> Path:
     """Корень проекта = ближайший наверх каталог с alembic.ini.
@@ -72,8 +72,8 @@ def _find_project_root(start: Path) -> Path:
 
 
 ROOT = _find_project_root(Path(__file__).resolve().parent)
-HOST = '127.0.0.1'
-PORT = 8000
+HOST = settings.api_host
+PORT = settings.api_port
 DOCS_URL = f'http://{HOST}:{PORT}/docs'
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -116,7 +116,7 @@ def _ask_yes_no(prompt: str) -> bool:
 
 
 def seed_pipeline() -> None:
-    """Справочники → заглушки BP-1/BP-3 → реальные конвейеры BP-2/BP-4/BP-5.
+    """Демо-слои BP-1/BP-3 → реальные конвейеры BP-2/BP-4/BP-5.
 
     Импорты — только здесь: до install_dependencies() зависимостей может не
     быть вообще (свежий venv у другого разработчика), импортировать их на
@@ -268,8 +268,7 @@ def seed_pipeline() -> None:
             print(f'    -{deleted}')
 
             print(
-                '  BP-1 — ЗАГЛУШКА (парсинга ещё нет): фейковое сырьё '
-                'raw_item...'
+                '  BP-1 — ДЕМО-СЛОЙ (без сети): фиксированное сырьё raw_item...'
             )
             added = await bp1_stage.seed(session)
             print(f'    +{added}')
@@ -282,7 +281,7 @@ def seed_pipeline() -> None:
 
         async with AsyncSessionLocal() as session:
             print(
-                '  BP-3 — ЗАГЛУШКА (LLM ещё нет): фейковая разметка '
+                '  BP-3 — ДЕМО-СЛОЙ (без LLM): фиксированная разметка '
                 'categorized_event...'
             )
             added = await bp3_stage.seed(session)

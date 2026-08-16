@@ -86,10 +86,12 @@ api/
 - **`role`** — новый небольшой enum именно для прав доступа. Добавить в `core/enums.py`:
   ```python
   class UserRole(enum.StrEnum):
-      pending = 'pending'   # только что зарегистрировался, доступа нет
-      viewer = 'viewer'     # читает витрину/свои задачи, править не может
-      analyst = 'analyst'   # правит витрину, подтверждает pending → viewer/analyst
-      admin = 'admin'       # + управление пользователями/справочниками
+      pending = 'pending'  # только что зарегистрировался, доступа нет
+      viewer = 'viewer'  # читает витрину/свои задачи, править не может
+      analyst = 'analyst'  # правит витрину, подтверждает pending → viewer/analyst
+      admin = 'admin'  # + управление пользователями/справочниками
+
+
   user_role = Enum(UserRole, name='user_role')
   ```
 
@@ -100,8 +102,12 @@ api/
 
 **В `src/bp5/models.py::User` добавить:**
 ```python
-password_hash: Mapped[str] = mapped_column(StrippedString(256), comment='bcrypt-хэш пароля')
-role: Mapped[UserRole] = mapped_column(user_role, default=UserRole.pending, server_default=text("'pending'"))
+password_hash: Mapped[str] = mapped_column(
+    StrippedString(256), comment='bcrypt-хэш пароля'
+)
+role: Mapped[UserRole] = mapped_column(
+    user_role, default=UserRole.pending, server_default=text("'pending'")
+)
 ```
 
 **Важный побочный эффект переиспользования `bp5.User`:** сейчас `email` и `telegram_id` — оба
@@ -151,7 +157,7 @@ HTTP-сервер (`uvicorn api.main:app`), он не должен сам гон
 
 ## Проверка
 
-- `uvicorn api.main:app --reload` стартует без ошибок импорта.
+- `python -m api.main` стартует без ошибок импорта на порту из `API_PORT`.
 - `POST /auth/register` → в БД строка `role=pending`; `GET /users/me` под её токеном не даёт
   доступа к `showcase`; `admin`/`analyst` меняет роль → доступ появляется.
 - `PATCH /showcase/{id}` с новым `priority` → проверить, что `categorized_event.priority` тоже

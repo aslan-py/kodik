@@ -28,7 +28,20 @@ class CategorizedModule(LLMModule):
 
         try:
             response: CategorizedResponse = self.structured_llm.invoke(prompt)
-            ctx.category_news = [item.model_dump() for item in response.items]
+            categories_by_id = {
+                item.id: item.category for item in response.items
+            }
+            ctx.category_news = [
+                {
+                    'id': item['id'],
+                    # Текст уже есть во входных данных. Просить LLM вернуть
+                    # его повторно означает раздувать ответ до лимита токенов
+                    # на длинных статьях и обрывать категоризацию.
+                    'text': item.get('text'),
+                    'category': categories_by_id.get(item['id']),
+                }
+                for item in news
+            ]
         except Exception as e:
             print(f'[ОШИБКА] CategorizedModule: {e}')
             ctx.category_news = [

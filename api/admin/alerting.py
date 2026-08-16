@@ -31,7 +31,14 @@ _RULE_LABELS = {
 
 
 class RoutingRuleInline(KodikInlineModelAdmin):
-    """Правила маршрутизации прямо на странице типа события."""
+    """Правила маршрутизации прямо на странице типа события.
+
+    `event_type` здесь — поле связи с родителем (страница конкретного типа
+    события), FastAdmin скрывает его из формы инлайна автоматически. Правило
+    БЕЗ типа (срабатывает на любой тип) с этой страницы завести нельзя —
+    для него нужен отдельный список `RoutingRuleAdmin` ниже, где поле типа
+    редактируется явно.
+    """
 
     model = RoutingRule
     verbose_name = 'Правило'
@@ -111,6 +118,11 @@ class ChannelAdmin(KodikModelAdmin):
 
 @register(RoutingRule, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class RoutingRuleAdmin(KodikModelAdmin):
+    """Полный список правил маршрутизации — единственное место, где можно
+    завести правило БЕЗ типа события (срабатывает на любой тип нужного
+    приоритета). Пустая ячейка `event_type` в списке — это оно, не
+    забытое поле (см. RelatedLabelMixin.EMPTY, api/admin/base.py)."""
+
     menu_section = MENU_ADMIN_ALERTING
     verbose_name = 'Правило'
     verbose_name_plural = 'Маршрутизация'
@@ -127,5 +139,17 @@ class RoutingRuleAdmin(KodikModelAdmin):
     list_display_labels = _RULE_LABELS
     # Без этого obj.event_type после закрытия сессии не прочитается.
     list_select_related = ('event_type', 'user', 'channel')
+
+    formfield_overrides = {  # noqa: RUF012
+        'event_type': (
+            WidgetType.AsyncSelect,
+            {
+                'placeholder': (
+                    'Не выбирайте — правило сработает на ЛЮБОЙ тип '
+                    'события этого приоритета'
+                ),
+            },
+        ),
+    }
     list_filter = ('event_type', 'priority', 'channel', 'mode', 'is_active')
     ordering = ('id',)

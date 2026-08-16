@@ -20,7 +20,7 @@ from uuid import UUID
 from fastadmin import WidgetType, register
 from sqlalchemy import select
 
-from api.admin.base import MENU_USERS, KodikModelAdmin
+from api.admin.base import MENU_ADMIN_REFERENCES, KodikModelAdmin
 from api.security import hash_password, verify_password
 from core.database import AsyncSessionLocal
 from core.enums import UserRole
@@ -41,7 +41,7 @@ async def _get_role(user_id: UUID | int | None) -> UserRole | None:
 
 @register(User, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class UserAdmin(KodikModelAdmin):
-    menu_section = MENU_USERS
+    menu_section = MENU_ADMIN_REFERENCES
     verbose_name = 'Пользователь'
     verbose_name_plural = 'Список'
 

@@ -1,0 +1,144 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.tableContainer {
+  overflow: hidden;
+  flex: 1 0 auto;
+}
+
+.scrollable {
+  overflow-x: auto;
+  height: 100%;
+}
+
+.table {
+  min-width: 100%;
+  text-align: left;
+  border-collapse: collapse;
+  table-layout: fixed;
+    width: 100%;
+}
+
+.thead {
+  border-radius: 10px;
+}
+
+.headerRow {
+  background-color: var(--color-surface);
+  border-radius: 10px;
+}
+
+.headerCell {
+  padding: 12px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: capitalize;
+  letter-spacing: 0.05em;
+  color: var(--color-secondary);
+}
+
+
+.bodyDivider {
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.bodyRow {
+  height: 58px;
+  transition: background-color 0.15s ease;
+}
+
+.bodyRow:hover {
+  background-color: var(--color-accent-light);
+}
+
+.bodyRowClickable {
+  cursor: pointer;
+}
+
+.bodyCell {
+  height: 58px;
+  padding: 0px 14px;
+  font-size: 14px;
+}
+.bodyCell span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emptyCell {
+  text-align: center;
+  height: 58px;
+  font-size: 14px;
+  color: #71717a;
+}
+
+.pagination {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.paginationRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.paginationInfo {
+  font-size: 14px;
+  color: #71717a;
+}
+
+.paginationInfo strong {
+  font-weight: 600;
+}
+
+.paginationButtons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pageButton {
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  transition: background-color 0.15s ease;
+}
+
+.pageButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.pageButton:hover:not(:disabled) {
+  background-color: #e4e4e7;
+}
+
+.pageButtonActive {
+  background-color: var(--color-accent-light);
+  color: var(--color-accent);
+}
+
+.pageEllipsis {
+  padding: 8px 4px;
+  font-size: 14px;
+  color: #71717a;
+  user-select: none;
+}
+
+@media (min-width: 640px) {
+  .pagination {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}

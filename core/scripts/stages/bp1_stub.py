@@ -28,6 +28,12 @@ dictionaries/design.md` за точным раскладом и обоснова
 `core/scripts/stages/simple_dictionaries.py` — запускать до этой
 заглушки.
 
+`clear()` сносит сырьё (`raw_item`) и всё, что на нём построено, но
+НЕ трогает саму задачу сбора (`search_task`) — это конфигурация,
+которую ведёт аналитик через админку/API, а не данные конвейера.
+`seed()` переиспользует подходящую существующую задачу, если она уже
+заведена, и создаёт свою только при её отсутствии.
+
 Нужна для дешёвой сквозной проверки этапов 2-7 через пайплайн/админку —
 LLM-модули BP-3 и Tavily-поиск BP-3/BP-7 стоят реальных токенов и
 лимитов внешних API, гонять их на полном датасете (~49 конкурентов)
@@ -164,11 +170,18 @@ def _item(news: dict, competitor_name: str) -> dict:
 
 
 async def seed(session: AsyncSession) -> int:
-    """Одна `search_task` + один `raw_item` с шестью новостями.
+    """Задача сбора (переиспользуется, если уже есть) + один `raw_item`
+    с шестью новостями.
 
     Конкурент — первый попавшийся активный из справочника (не жёстко
     заданное имя): справочники курируются вручную, состав конкурентов
     в конкретной БД может не совпадать с полным демо-набором.
+
+    Задача сбора ищется по (competitor_id, source_id, trigger_id=None) —
+    ровно тому натуральному ключу, что защищён partial unique index
+    `uq_search_task_no_trigger` (src/bp1/models.py). Слепая вставка на
+    повторный запуск упала бы на этом индексе теперь, когда clear() ниже
+    задачу сбора больше не сносит.
     """
     competitor = await session.scalar(
         select(Competitor).where(Competitor.is_active).limit(1)
@@ -182,11 +195,19 @@ async def seed(session: AsyncSession) -> int:
             'Сначала: python -m core.scripts.stages.dictionaries'
         )
 
-    task = SearchTask(
-        competitor_id=competitor.id, source_id=source_id, trigger_id=None
+    task = await session.scalar(
+        select(SearchTask).where(
+            SearchTask.competitor_id == competitor.id,
+            SearchTask.source_id == source_id,
+            SearchTask.trigger_id.is_(None),
+        )
     )
-    session.add(task)
-    await session.flush()
+    if task is None:
+        task = SearchTask(
+            competitor_id=competitor.id, source_id=source_id, trigger_id=None
+        )
+        session.add(task)
+        await session.flush()
 
     created = datetime.now(UTC)
     raw_data = {
@@ -216,8 +237,16 @@ async def seed(session: AsyncSession) -> int:
 
 
 async def clear(session: AsyncSession) -> int:
-    """Снести сырьё, задачу сбора и всё, что на них построено."""
-    return await clear_from(session, SearchTask)
+    """Снести сырьё и всё, что на нём построено — НЕ задачу сбора.
+
+    Задача сбора (`search_task`) — конфигурация, которую ведёт аналитик
+    через админку/API, а не данные конвейера: снести её значило бы
+    потерять чужую ручную настройку при каждом запуске заглушки.
+    `clear_from(session, RawItem)` сносит сырьё и все слои, построенные
+    на нём (normalized_item, categorized_event, showcase_event, alert,
+    action_item), оставляя search_task нетронутым.
+    """
+    return await clear_from(session, RawItem)
 
 
 if __name__ == '__main__':

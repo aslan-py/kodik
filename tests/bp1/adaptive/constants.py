@@ -222,6 +222,23 @@ SEARCH_QUERY = 'ИИ'
 SEARCH_URL = 'https://lenta.ru/search?q=%D0%98%D0%98'
 REDIS_CLASSIFICATION_KEY = 'bp1:classification:lenta.ru'
 
+# --- test_register_creates_source / test_register_is_idempotent ---
+# Эти два теста реально пишут в БД через фикстуру `session` (rollback
+# после теста, без изоляции от УЖЕ закоммиченных строк). БД тестов — та
+# же dev-БД (settings.database_url), где lenta.ru зарегистрирован
+# по-настоящему (реальный Source с реальными SearchTask), поэтому
+# SRC_LENTA_* здесь использовать нельзя — коллизия по уникальному
+# Source.name ломает created=True/False. Домен на TLD .invalid
+# (зарезервирован RFC 2606 для тестов) гарантированно не столкнётся ни с
+# одной настоящей регистрацией; подстрока "news" сохраняет классификацию
+# SourceClassifier как SourceType.NEWS.
+SRC_TEST_NEWS_URL = 'https://www.test-news-source.invalid/news'
+SRC_TEST_NEWS_NORMALIZED = 'https://test-news-source.invalid/'
+SRC_TEST_NEWS_HOST = 'test-news-source.invalid'
+TEST_NEWS_REDIS_CLASSIFICATION_KEY = (
+    'bp1:classification:test-news-source.invalid'
+)
+
 # --- test_source_registration: SearchParamResolver / URL-шаблоны ---
 # ИНН конкурента (10 цифр — юридическое лицо).
 COMPETITOR_INN = '9718283930'
@@ -238,25 +255,8 @@ SRC_HH_HOST = 'hh.ru'
 SRC_ZH = 'zakupki.gov.ru'
 
 # ---------------------------------------------------------------------------
-# test_mcp
-# ---------------------------------------------------------------------------
-MCP_JSONRPC = '2.0'
-MCP_PROTOCOL_VERSION = '2024-11-05'
-MCP_SERVER_NAME = 'bp1-adaptive'
-MCP_METHOD_INITIALIZE = 'initialize'
-MCP_METHOD_TOOLS_LIST = 'tools/list'
-MCP_METHOD_TOOLS_CALL = 'tools/call'
-MCP_TOOL_CLASSIFY_SOURCE = 'classify_source'
-MCP_TOOL_RUN_PARSE = 'run_adaptive_parse'
-MCP_TOOL_LIST_STRATEGIES = 'list_strategies'
-MCP_ERROR_METHOD_NOT_FOUND = -32601
-MCP_ERROR_INTERNAL = -32603
-
-# ---------------------------------------------------------------------------
 # test_llm / test_llm_smoke
 # ---------------------------------------------------------------------------
-ENV_LLM_API_KEY = 'LLM_API_KEY'
-ENV_OPENAI_API_KEY = 'OPENAI_API_KEY'
 TEST_API_KEY = 'sk-test'
 MODULE_OPENAI = 'openai'
 LLM_CHUNK_MAX_SIZE = 2000

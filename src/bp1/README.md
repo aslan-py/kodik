@@ -5,10 +5,11 @@ BP-1 — первый слой ETL-пайплайна системы конку�
 ## Статус: ✅ РАБОТАЕТ
 
 - **fedresurs.ru** — полностью реализован RPA-парсер с обходом QRATOR антибот-защиты
-- **kad.arbitr.ru** — реализован RPA-парсер через Playwright (поиск дел по ИНН)
-- **Адаптивный движок (adaptive)** — полностью реализован: автоматическая классификация источников, иерархия стратегий обхода с деградацией (FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL), интеллектуальное извлечение через LLM, кэширование адаптеров, MCP-сервер и CLI
+- **Адаптивный движок (adaptive)** — полностью реализован: автоматическая классификация источников, иерархия стратегий обхода с деградацией (FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL), интеллектуальное извлечение через LLM, кэширование адаптеров и CLI
 - **Остальные источники** — обрабатываются универсальным `AdaptiveBridgeParser` (авто-детекция структуры сайта без ручной настройки)
 - **Адаптивный поиск (Adaptive Search)** — полностью реализован: source-aware выбор поискового параметра (ИНН для гос. источников, название конкурента для остальных), per-source шаблоны URL поиска (например, `hh.ru → /search/vacancy?text=`), пропуск задач по `is_active`, circuit breaker (авто-блокировка источника при сбоях)
+- **Задания для планировщика (`jobs.py`)** — четыре самодостаточных задания (`collect_source`, `collect_competitor`, `collect_all`, `register_source`) с контрактом «только примитивы на входе / JSON-сериализуемый результат / идемпотентность», спроектированы так, чтобы оборачиваться в Celery task и Celery beat без адаптеров (см. [«Подключение к Celery: tasks и beat»](#подключение-к-celery-tasks-и-beat))
+- **Контракт `raw_data` (`meta`/`metrics`)** — метаданные выгрузки (`ParsedMeta`) и диагностика прогона (`ParsedMetrics`) разделены и закреплены тестом-контрактом против `ABOUT_PROJECT/ABOUT.md`, чтобы не расходиться незаметно (см. [«Выходной формат»](#выходной-формат))
 - **Raw Storage** — модуль хранения сырых данных (Bronze Layer) реализован и протестирован
 - **CI/CD** — 100% тестов проходят (pytest), линтер (ruff) чист
 
@@ -23,9 +24,11 @@ src/bp1/
 ├── storage.py               # ✅ RawDataService — единая персистентность (хэш, Redis, HTML/JSON, RawItem)
 ├── runner.py                # Оркестратор BPRunner (direct / celery режимы)
 ├── tasks.py                 # Основная логика: run_parser_async, получение конфигурации задачи
-├── celery_tasks.py          # Celery-обёртка для production-запуска
-├── cli.py                   # CLI-интерфейс (запуск, список задач, очистка Redis)
-├── test_parser.py           # Интеграционный тест с реальной БД и Redis
+├── celery_tasks.py          # Celery-обёртка для run_parser_async (низкий уровень, по task_id)
+├── cli.py                   # Единый CLI этапа (source/competitor/all/add-source)
+├── jobs.py                  # ✅ Задания сбора: collect_source/collect_competitor/collect_all/
+│                            #    register_source — публичный API для CLI, Celery task и beat
+├── pipeline.py              # run_bp1() — точка входа этапа 1 + сводка прогона
 │
 ├── parsers/                 # Адаптеры парсеров (реализуют BaseParser)
 │   ├── __init__.py          # Регистрация адаптеров в ParserFactory
@@ -34,21 +37,22 @@ src/bp1/
 │
 ├── adaptive/                # ✅ Адаптивный сбор данных (интеллектуальный парсинг)
 │   ├── schemas.py           # Pydantic-схемы (классификация, стратегии, HITL, отчёты)
-│   ├── cli.py               # CLI: run / classify / add-source / cache / profile / quality
+│   ├── hostname.py          # Общая нормализация hostname + список гос. доменов
 │   ├── core/                # UnifiedCache (Redis+диск), DataQualityGate (5 уровней)
-│   ├── processing/          # AdaptiveParser, HtmlCleaner, StructuredChunker, ResultMerger, LLM
+│   ├── processing/          # AdaptiveParser, HtmlCleaner, StructuredChunker, ResultMerger
+│   │   └── _llm/            # Промпты, схемы ответов, мапперы, эвристики, клиент
 │   ├── strategies/          # SourceClassifier, AgenticOrchestrator, Crawl4AI/Stealth/HITL, engines
-│   └── integration/         # AdaptiveBridgeParser, AdaptiveRunner, SourceRegistrationService, MCPServer
+│   └── integration/         # AdaptiveBridgeParser, AdaptiveRunner, SourceRegistrationService,
+│                            # SearchUrlProber (перебор параметров / POST-форма / переформулировки)
 │
 ├── collectors/              # Движки парсинга (реализация сбора данных)
 │   ├── fedresurs_rpa/       # ✅ RPA-парсер fedresurs.ru
-│   ├── kad_arbitr_rpa/      # ✅ RPA-парсер kad.arbitr.ru (поиск дел по ИНН)
-│   ├── stealth/             # ✅ Модуль антиобнаружения (QRATOR bypass, JS evasions)
-│   └── ...                  # Заготовки под остальные движки (hh_api, fips_rpa, ...)
+│   └── stealth/             # ✅ Модуль антиобнаружения (QRATOR bypass, JS evasions)
 │
 └── raw_storage/             # ✅ Модуль хранения сырых данных (Bronze Layer)
     ├── core/models.py       # Pydantic модели (RawDataFile, MetaInfo, RawDataItem)
     ├── core/interfaces.py   # Абстрактные интерфейсы (BaseStorage, BaseDeduplicator)
+    ├── core/deduplication.py # ContentHashDeduplicator — дедуп по хэшу содержимого
     ├── backends/disk_backend.py  # DiskBackend — JSONB на диске
     ├── services/repository.py    # RawDataRepository (CRUD + дедупликация)
     ├── factory.py           # StorageFactory — фабрика бэкендов
@@ -81,7 +85,9 @@ src/bp1/
 ## Поток выполнения
 
 ```
-SearchTask (БД)
+Активные Competitor × Source (БД)
+    │
+    ├─ sync_search_task_coverage → недостающие SearchTask без trigger
     │
     ▼
 BPRunner / AdaptiveRunner / Celery
@@ -99,74 +105,94 @@ BPRunner / AdaptiveRunner / Celery
 
 ## Режимы запуска
 
-### Direct (тестовый)
+### Через реестр конвейера (рекомендуемый способ)
 
-Прямой запуск без Celery, для отладки и разработки:
-
-```bash
-# Все активные задачи
-python -m src.bp1.cli run --mode direct
-
-# Конкретная задача
-python -m src.bp1.cli run --task-id 26 --mode direct
-
-# Несколько задач
-python -m src.bp1.cli run --task-ids 1,2,3 --mode direct
-
-# С видимым браузером (для отладки)
-python -m src.bp1.cli run --task-id 26 --mode direct --no-headless
-```
-
-### Celery (production)
-
-Запуск через Celery-воркеры:
+`src/bp1/pipeline.py::run_bp1()` — точка входа этапа 1 конвейера, по
+тому же контракту, что `run_bp2`…`run_bp7`: без аргументов, сама
+открывает сессию БД и Redis-клиент, досоздаёт в той же транзакции задачи
+без поискового слова для всех активных пар «конкурент × источник», вызывает
+`AdaptiveRunner.run_all()` и сворачивает результат в сводку прогона. Поле
+`search_tasks_created` показывает число созданных в этом прогоне задач.
+Через неё этап 1 запускается кнопкой в админке,
+`core/pipeline/cli.py` и по расписанию Celery — как и остальные шесть
+этапов (см. `core/pipeline/registry.py`).
 
 ```bash
-# Отправить задачи в очередь
-python -m src.bp1.cli run --mode celery
-
-# Запустить воркер
-celery -A core.celery_app worker --loglevel=info
+python -m core.pipeline.cli 1          # этап 1 (реализация — по TRUE_PARSING)
+python -m core.pipeline.cli 1 real     # разово настоящий сбор
+python -m core.pipeline.cli 1 stub     # разово заглушка
+python -m core.pipeline.cli all        # весь конвейер 1..7
+python -m src.bp1.search_task_coverage # только создать задачи, без сбора
 ```
+
+Синхронизация только добавляет отсутствующие задачи с пустым `trigger_id`.
+Она не удаляет строки, не меняет `is_active` и не трогает ручные задачи с
+поисковым словом. Чтобы исключить отдельную пару из сбора, деактивируйте её
+задачу: удалённая строка будет создана заново при следующем запуске.
+
+Так замыкается расширение источников: BP-3 находит кандидата, BP-7 переносит
+подходящий домен в `source`, а ближайший реальный прогон BP-1 автоматически
+создаёт по нему задачи для всех активных конкурентов и начинает сбор.
+
+Рядом с этой точкой входа у этапа 1 есть вторая реализация — заглушка
+(`core/scripts/stages/bp1_stub.py`, шесть синтетических новостей, без
+сети и LLM), нужная для дешёвой сквозной проверки этапов 2-7. Какая из
+двух выполняется по умолчанию — решает настройка `TRUE_PARSING` в
+`.env` (см. `core/scripts/SCRIPTS_README.md`, «Три способа наполнить
+этап 1»); режимы ниже (Direct/Celery/адаптивный CLI) — более низкий
+уровень, `run_bp1()` их не заменяет, а вызывает `AdaptiveRunner` тем же
+способом, что и команда `all` объединённого CLI.
+
+### CLI этапа
+
+Единая точка входа — `python -m src.bp1.cli`. Прежние два интерфейса
+(`src/bp1/cli.py` с `run --mode direct|celery` и `src/bp1/adaptive/cli.py`)
+объединены: рабочие сценарии были размазаны по двум командам с разными
+флагами для одного и того же.
+
+Четыре команды сбора — тонкие обёртки над заданиями
+[`src/bp1/jobs.py`](src/bp1/jobs.py); вся логика живёт там, поэтому
+планировщик задач вызывает те же функции напрямую, без CLI.
+
+```bash
+# 1. Один источник по всем активным конкурентам
+python -m src.bp1.cli source lenta.ru
+
+# 2. Один конкурент по всем активным источникам
+#    (конкурента, которого нет в БД, задание создаёт само)
+python -m src.bp1.cli competitor "Сбербанк"
+python -m src.bp1.cli competitor "Сбербанк" --inn 7707083893
+
+# 3. Полный прогон: все источники x все конкуренты
+python -m src.bp1.cli all
+python -m src.bp1.cli all --no-ensure-matrix   # только заведённые связки
+
+# 4. Поставить новый источник на учёт (категоризация + БД + кэш)
+python -m src.bp1.cli add-source https://www.lenta.ru/news
+```
+
+Общие флаги команд сбора: `--no-headless` (показать окно браузера),
+`--timeout` (мс), `--max-concurrent` (параллельных задач). По умолчанию
+значения берутся из настроек.
 
 ### Вспомогательные команды
 
 ```bash
-# Список активных задач
+# Активные связки источник-конкурент
 python -m src.bp1.cli list
 
-# Очистить Redis от ключей задач
+# Категоризация источника без записи в БД
+python -m src.bp1.cli classify lenta.ru
+
+# Кэш адаптера источника (в любой форме записи источника)
+python -m src.bp1.cli cache --show lenta.ru
+python -m src.bp1.cli cache --clear lenta.ru
+
+# Последний собранный RawItem по задаче
+python -m src.bp1.cli quality --task-id 26
+
+# Сброс ключей дедупликации BP-1 в Redis
 python -m src.bp1.cli clear-redis
-```
-
-### Адаптивный CLI (BP-1 Adaptive)
-
-```bash
-# Запуск всех задач из БД (учитывает is_active SearchTask/Source/Competitor)
-python -m src.bp1.adaptive.cli run
-
-# Сбор по конкретному источнику + конкуренту (создаёт Source/Competitor/SearchTask
-# и запускает именно эту задачу — адаптивный поиск по паре)
-python -m src.bp1.adaptive.cli run --source lenta.ru --competitor "ООО АРХИТЕХ ИИ"
-
-# Гибридный режим с fallback
-python -m src.bp1.adaptive.cli run --source lenta.ru --mode hybrid --fallback
-
-# Классификация источника
-python -m src.bp1.adaptive.cli classify --source lenta.ru
-
-# Регистрация нового источника (нормализация + классификация + БД + Redis)
-python -m src.bp1.adaptive.cli add-source --url "https://www.lenta.ru/news"
-
-# Управление кэшем адаптеров (источник в любом виде: lenta.ru / https://lenta.ru/)
-python -m src.bp1.adaptive.cli cache --show --source lenta.ru
-python -m src.bp1.adaptive.cli cache --clear --source lenta.ru
-
-# Управление профилями браузеров (HITL)
-python -m src.bp1.adaptive.cli profile --show --source lenta.ru
-
-# Отчёт качества по задаче
-python -m src.bp1.adaptive.cli quality --report --task-id 26
 ```
 
 ## Программный запуск
@@ -228,6 +254,153 @@ async def main():
 asyncio.run(main())
 ```
 
+## Подключение к Celery: tasks и beat
+
+Планировщик задач должен опираться на [`src/bp1/jobs.py`](src/bp1/jobs.py),
+а не напрямую на `BPRunner`/`AdaptiveRunner`. Это отдельный, специально
+спроектированный для очереди слой — тонкий над `AdaptiveRunner`, но с
+контрактом, который переживает сериализацию брокером:
+
+- **только примитивы на входе** (`str`/`int`/`bool`/`None`) — сессии,
+  Redis-клиенты и ORM-модели наружу не выносятся;
+- **самодостаточность** — каждое задание само открывает сессию БД и Redis
+  и закрывает их в `finally`; обёртке не нужно готовить контекст;
+- **JSON-сериализуемый результат** — обычный `dict` без Pydantic-моделей и
+  `datetime`, годится как return value Celery-задачи;
+- **идемпотентность** — источники, конкуренты и связки `SearchTask`
+  создаются по принципу «найти или создать», поэтому повторный запуск
+  (в том числе после ретрая Celery) не плодит дубли;
+- **async** — в синхронном Celery-воркере оборачивается `asyncio.run(...)`.
+
+Четыре задания: [`collect_source()`](src/bp1/jobs.py), `collect_competitor()`,
+`collect_all()`, `register_source()` — см. сигнатуры и докстринги в
+`jobs.py`; это те же операции, что стоят за командами CLI `source` /
+`competitor` / `all` / `add-source`.
+
+### 1. Обёртка над `app.task`
+
+`celery_tasks.py` уже даёт готовый пример обёртки (для низкоуровневого
+`run_parser_async` по одному `task_id`); для заданий планировщика паттерн
+тот же — задача просто зовёт `asyncio.run()` над функцией из `jobs.py`:
+
+```python
+# src/bp1/celery_tasks.py (дополнение к существующей run_parser_task)
+import asyncio
+
+from core.celery_app import (
+    CELERY_DEFAULT_RETRY_DELAY,
+    CELERY_MAX_RETRIES,
+    CELERY_RETRY_BACKOFF_MAX,
+    app,
+)
+from src.bp1 import jobs
+
+
+@app.task(
+    bind=True,
+    max_retries=CELERY_MAX_RETRIES,
+    default_retry_delay=CELERY_DEFAULT_RETRY_DELAY,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=CELERY_RETRY_BACKOFF_MAX,
+    retry_jitter=True,
+)
+def collect_all_task(self, headless: bool = True) -> dict:
+    """Полный прогон: все активные источники x все активные конкуренты."""
+    return asyncio.run(jobs.collect_all(headless=headless))
+
+
+@app.task(bind=True, autoretry_for=(Exception,))
+def collect_source_task(self, source: str, headless: bool = True) -> dict:
+    """Один источник по всем активным конкурентам."""
+    return asyncio.run(jobs.collect_source(source, headless=headless))
+
+
+@app.task(bind=True, autoretry_for=(Exception,))
+def collect_competitor_task(
+    self, competitor: str, inn: str | None = None
+) -> dict:
+    """Один конкурент по всем активным источникам."""
+    return asyncio.run(jobs.collect_competitor(competitor, inn=inn))
+```
+
+Задание — обычный `dict`, поэтому результат читается стандартно:
+
+```python
+result = collect_all_task.delay(headless=True)
+result.get(timeout=600)   # -> {'job': 'collect_all', 'status': 'ok', 'success_rate': 0.86, ...}
+```
+
+### 2. Регистрация модуля в едином Celery-приложении
+
+`core/celery_app.py` — одно Celery-приложение на весь проект; модули с
+задачами регистрируются явно в `include` (автообнаружение по конвенции
+`<пакет>.tasks` не используется — у BP-1 модуль называется
+`celery_tasks.py`). Сейчас строка для BP-1 закомментирована — раскомментировать
+её и есть акт «подключения» пакета к воркеру:
+
+```python
+# core/celery_app.py
+app = Celery(
+    'kodik',
+    broker=settings.celery_broker_url,
+    backend=settings.celery_result_backend_url,
+    include=[
+        'src.bp1.celery_tasks',   # было закомментировано — раскомментировать
+    ],
+)
+```
+
+Без этой строки процесс воркера не импортирует модуль с задачами: `.delay()`
+из другого процесса отправит сообщение в очередь, но обработать его будет
+некому (задача останется `PENDING` навсегда).
+
+Запуск воркера:
+
+```bash
+celery -A core.celery_app worker --loglevel=info
+```
+
+### 3. Периодический запуск через Celery Beat
+
+`app.conf.beat_schedule` в `core/celery_app.py` заведён пустым намеренно —
+структура готова принимать записи, конкретное расписание для каждого BP
+оставлено на явное включение. Чтобы поставить сбор BP-1 на расписание,
+добавляются записи с `crontab`:
+
+```python
+# core/celery_app.py
+from celery.schedules import crontab
+
+app.conf.beat_schedule = {
+    'bp1-collect-all-nightly': {
+        'task': 'src.bp1.celery_tasks.collect_all_task',
+        'schedule': crontab(hour=3, minute=0),   # каждую ночь в 03:00 UTC
+        'kwargs': {'headless': True},
+    },
+    'bp1-collect-hh-hourly': {
+        'task': 'src.bp1.celery_tasks.collect_source_task',
+        'schedule': crontab(minute=0),           # раз в час
+        'kwargs': {'source': 'hh.ru', 'headless': True},
+    },
+}
+```
+
+Запуск планировщика (отдельный процесс, обычно рядом с воркером):
+
+```bash
+celery -A core.celery_app beat --loglevel=info
+
+# или воркер + beat в одном процессе (для разработки, не для production)
+celery -A core.celery_app worker -B --loglevel=info
+```
+
+Расписание в `crontab()` — по `app.conf.timezone` (`UTC`, задан в
+`core/celery_app.py`). Каждая задача из `beat_schedule` обязана быть
+идемпотентной и не зависеть от порядка запуска относительно других задач —
+оба свойства уже обеспечены слоем `jobs.py` («найти или создать» вместо
+жёсткого создания, самодостаточная сессия/Redis на задание).
+
 ## Парсеры
 
 ### Единый контракт
@@ -248,20 +421,52 @@ class BaseParser(ABC):
 
 ### Выходной формат
 
-```python
-class ParsedResponse(BaseModel):
-    meta: dict      # search_task_id, source, competitor, trigger, source_request_url, fetched_at
-    items: list[ParsedItem]  # массив результатов
+`meta`/`items` — бизнес-контракт, закреплённый `ABOUT_PROJECT/ABOUT.md` и
+проверяемый тестом-контрактом
+([`test_raw_data_contract.py`](kodik/tests/bp1/test_raw_data_contract.py));
+`metrics` — диагностика конкретного прогона (сработавшая стратегия, статус
+Quality Gate и т.п.), в persisted `raw_data` **не попадает**
+(`exclude=True` в модели), доступна только в памяти вызывающему коду.
 
-class ParsedItem(BaseModel):
+```python
+class ParsedMeta(BaseModel):        # persisted: raw_data.meta, extra='forbid'
+    search_task_id: int | None
+    source: str
+    competitor: str
+    trigger: str | None
+    source_request_url: str
+    fetched_at: str
+
+class ParsedItem(BaseModel):        # persisted: raw_data.items[], extra='forbid'
     url: str              # ссылка на событие (обязательна)
     title: str            # заголовок (обязателен)
     text: str | None      # тело/описание
     published_at: str | None  # сырая дата
     region: str | None    # регион
     media_name: str | None    # СМИ/публикатор
-    extra: dict           # источник-специфичные поля (file_path и др.)
+    extra: dict           # источник-специфичные поля (ИНН, статус, файл и др.)
+
+class ParsedMetrics(BaseModel):     # НЕ persisted, extra='allow' (открытая диагностика)
+    probed_url: str | None
+    strategy_used: str | None
+    quality_status: str | None
+    quality_levels: dict[str, Any] | None
+    relevance_mode: str | None
+    news_total: int | None
+    relevance_filtered: int | None
+    file_saved: bool | None
+
+class ParsedResponse(BaseModel):
+    meta: ParsedMeta
+    items: list[ParsedItem]
+    metrics: ParsedMetrics = Field(default_factory=ParsedMetrics, exclude=True)
 ```
+
+`RawDataService.persist()` (`storage.py`) сохраняет ровно
+`response.model_dump()`, поэтому `metrics` физически не может попасть в БД
+или на диск — единственный путь избежать повторения инцидента, когда
+адаптивный мост когда-то дописывал служебные поля прямо в `meta`
+(разбор — в `REFACTORING_PLAN.md`).
 
 ### ✅ FedresursAdapter (fedresurs.ru)
 
@@ -291,26 +496,6 @@ result = await parser.parse(
 )
 ```
 
-### ✅ KadArbitrParser (kad.arbitr.ru)
-
-RPA-парсер картотеки арбитражных дел через Playwright. Ищет дела по ИНН участника.
-
-**Использование:**
-```python
-from src.bp1.collectors.kad_arbitr_rpa import KadArbitrParser, ParsingRequest, validate_inn
-
-parser = KadArbitrParser()
-request = ParsingRequest(
-    inn="7712345678",       # валидируется через validate_inn()
-    output_dir="./out",
-    headless=True,
-    retry_count=3,
-    use_stealth=True,       # подключает модуль stealth для антиобнаружения
-)
-result = await parser.search_by_inn(request)
-print(result.success, result.file_path, result.error)
-```
-
 ### ✅ AdaptiveBridgeParser (универсальный)
 
 Мост между адаптивной подсистемой и `BaseParser`. Автоматически классифицирует источник, выбирает стратегию и извлекает данные без ручной настройки.
@@ -335,15 +520,20 @@ response = await parser.parse(
 ### Ключевые возможности
 
 - **Классификация источников** — [`SourceClassifier`](src/bp1/adaptive/strategies/classifier.py:168) определяет тип сайта (новостной, реестр, API, SPA), антибот-защиту (Cloudflare, DataDome, QRATOR, Akamai, Incapsula), CAPTCHA (reCAPTCHA, hCaptcha), SPA-фреймворки (React, Vue, Nuxt, Next.js, Angular) и рекомендует стратегию.
-- **Иерархия стратегий с деградацией** — [`AgenticOrchestrator`](src/bp1/adaptive/strategies/orchestrator.py:245) пробует стратегии по порядку `FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL`. При ошибке или контенте < 300 символов переходит к следующей.
-- **Интеллектуальный парсинг** — [`AdaptiveParser`](src/bp1/adaptive/processing/parser.py:206) извлекает реальные CSS-селекторы и схему данных через LLM, кэширует адаптеры в Redis (TTL 7 дней).
+- **Классификация учится на фактах** — классификация уточняется по РЕАЛЬНОМУ HTML (а не вслепую по имени источника) и переписывается по факту сработавшей стратегии: если закэшировано `FAST`, а сбор реально прошёл через `STEALTH`, кэш обновляется, и следующий прогон не проходит всю лестницу деградации заново. Флаги защиты только усиливаются (`False → True`) и не сбрасываются одним снимком HTML.
+- **LLM-категоризация подключена к бою** — [`LLMClient.classify_with_llm`](src/bp1/adaptive/processing/llm.py) (промпт `SITE_CLASSIFICATION_PROMPT_V2`, 20 типов сайта) вызывается один раз на источник, когда адаптер выводится впервые. Уточняет признаки защиты там, где эвристика по ключевым словам ничего не находит; сбой LLM не ломает сбор.
+- **Иерархия стратегий с деградацией** — [`AgenticOrchestrator`](src/bp1/adaptive/strategies/orchestrator.py) пробует стратегии по порядку `FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL`. При ошибке, контенте < 300 символов или «пустом JS-каркасе» (нет ссылок) переходит к следующей. **Заведомо бесполезные стратегии пропускаются**: при известной CAPTCHA — сразу `STEALTH/WAYBACK/HITL`, при антиботе без SPA — без `CRAWL4AI`.
+- **Интеллектуальный парсинг** — [`AdaptiveParser`](src/bp1/adaptive/processing/parser.py) извлекает реальные CSS-селекторы и схему данных через LLM, кэширует адаптеры в Redis (TTL 7 дней).
+- **Самокоррекция адаптера** — если закэшированный адаптер дважды подряд не проходит Quality Gate, он сбрасывается (селекторы выводятся заново), а у LLM запрашивается диагностическая рекомендация (`extra.adapter_review`). Успешный прогон обнуляет счётчик.
 - **Чанкирование больших страниц** — `HtmlCleaner → StructuredChunker → параллельное извлечение → ResultMerger` для HTML, не помещающегося в контекст LLM.
-- **5 уровней контроля качества** — [`DataQualityGate`](src/bp1/adaptive/core/quality.py): SCHEMA, TYPES, BUSINESS, VOLUME, CONSISTENCY с Quarantine-паттерном.
+- **5 уровней контроля качества** — [`DataQualityGate`](src/bp1/adaptive/core/quality.py): SCHEMA, TYPES, BUSINESS, VOLUME, CONSISTENCY с Quarantine-паттерном. Результаты по уровням доходят до сводки прогона.
 - **HITL для CAPTCHA** — [`HITLManager`](src/bp1/adaptive/strategies/hitl.py) запускает видимый браузер, детектирует момент решения CAPTCHA и кэширует cookies в профиль.
-- **Регистрация источников** — [`SourceRegistrationService`](src/bp1/adaptive/integration/sources.py:302) по ссылке нормализует адрес, классифицирует сайт, добавляет `Source` в БД и кэширует классификацию.
+- **Регистрация источников** — [`SourceRegistrationService`](src/bp1/adaptive/integration/sources.py) по ссылке нормализует адрес, классифицирует сайт, добавляет `Source` в БД, кэширует классификацию и (в CLI `add-source`) проверяет, отвечает ли поисковый эндпоинт.
 - **Source-aware выбор поискового параметра** — для гос. источников (реестры) поиск по ИНН, для остальных — по названию конкурента.
 - **Per-source шаблоны URL** — `SearchUrlTemplateRegistry` задаёт специфичные пути поиска (например, `hh.ru → /search/vacancy?text=`), с fallback на универсальный `/search?q=`.
-- **MCP-сервер** — [`MCPServer`](src/bp1/adaptive/integration/mcp_server.py:45) позволяет ИИ-агентам управлять сбором (классификация, парсинг, кэш, список стратегий).
+- **Пробинг поиска** — [`SearchUrlProber`](src/bp1/adaptive/integration/search_probe.py) перебирает имена query-параметров (`q`, `query`, `text`, …), пробует POST-форму и упрощает запрос (без кавычек / без ОПФ / первое значимое слово), проверяя, есть ли цель в выдаче.
+- **Параллельный сбор** — `AdaptiveRunner.run_all()` выполняет задачи одновременно (`max_concurrent`), каждая со своей сессией БД.
+- **Метрики прогона** — `run_bp1()` возвращает `success_rate`, разбивку по фактически сработавшим стратегиям, по уровням Quality Gate и список источников с низким качеством; отсутствие `crawl4ai`/`playwright` фиксируется предупреждением до прогона.
 
 ### Адаптивный поиск (Adaptive Search)
 
@@ -414,18 +604,18 @@ print(registry.build_url('hh.ru', 'ООО АРХИТЕХ ИИ'))
 #### Использование в CLI
 
 ```bash
-# Сбор по конкретному источнику + конкуренту: автоматически создаёт
-# Source/Competitor/SearchTask и запускает адаптивный поиск по этой паре.
-python -m src.bp1.adaptive.cli run --source hh.ru --competitor "ООО АРХИТЕХ ИИ"
+# Регистрация нового источника (классификация + БД + Redis) перед поиском
+python -m src.bp1.cli add-source https://hh.ru
 
-# Гибридный режим с fallback
-python -m src.bp1.adaptive.cli run --source lenta.ru --mode hybrid --fallback
+# Сбор по источнику: связки Source/Competitor/SearchTask достраиваются
+# автоматически по всем активным конкурентам.
+python -m src.bp1.cli source hh.ru
+
+# Сбор по конкуренту (по всем активным источникам)
+python -m src.bp1.cli competitor "ООО АРХИТЕХ ИИ"
 
 # Все активные задачи (учитывает is_active всех трёх уровней)
-python -m src.bp1.adaptive.cli run
-
-# Регистрация нового источника (классификация + БД + Redis) перед поиском
-python -m src.bp1.adaptive.cli add-source --url "https://hh.ru"
+python -m src.bp1.cli all
 ```
 
 #### Использование в коде
@@ -515,7 +705,7 @@ orch.register_strategy(MyStrategy.strategy_type, MyStrategy())
 
 ### Ключевые компоненты
 
-- **`RawDataRepository`** — репозиторий для CRUD-операций: `save()`, `find_by_id()`, `find_by_trigger()`, `find_pending()`, `update_status()`, `find_by_prefix()`, `delete()`. Поддерживает дедупликацию через `BaseDeduplicator`.
+- **`RawDataRepository`** — репозиторий для CRUD-операций: `save()`, `find_by_id()`, `find_by_content_hash()`, `find_by_trigger()`, `find_pending()`, `update_status()`, `find_by_prefix()`, `delete()`. По умолчанию дедуплицирует по хэшу содержимого `items` (`ContentHashDeduplicator`); стратегия заменяется через параметр `deduplicator`.
 - **`StorageFactory`** — фабрика бэкендов: `create(backend_type)` и `register(name, backend_class)`. Доступен бэкенд `disk`.
 - **`DiskBackend`** — JSONB-файлы на диске.
 
@@ -524,7 +714,7 @@ import asyncio
 from src.bp1.raw_storage import RawDataRepository, RawDataFile, StorageFactory
 
 async def main():
-    storage = StorageFactory.create('disk', base_dir='./data/raw')
+    storage = StorageFactory.create('disk', base_path='./data/raw')
     repo = RawDataRepository(storage_backend=storage)
 
     file = RawDataFile(...)  # модель с meta + items
@@ -540,10 +730,11 @@ asyncio.run(main())
 
 ## Хэширование и дедупликация
 
-BP-1 использует двухуровневую систему дедупликации:
+BP-1 использует трёхуровневую систему дедупликации:
 
 1. **Redis** — хранит последний хэш для каждой `search_task_id`. При совпадении хэша строка RawItem не создаётся, обновляется только `updated_at`.
-2. **MD5 от items** — [`calculate_content_hash()`](src/bp1/tasks.py:28) считает хэш только от содержимого `items` (без `meta` и `file_path`), что позволяет детектировать смысловые изменения данных. Из `items` исключается поле `extra.file_path`.
+2. **MD5 от items** — [`calculate_content_hash()`](src/bp1/storage.py:46) считает хэш только от содержимого `items` (без `meta` и `file_path`), что позволяет детектировать смысловые изменения данных. Из `items` исключается поле `extra.file_path`.
+3. **Bronze Layer** — `RawDataRepository` дедуплицирует файлы выгрузок по SHA-256 от содержимого `items` (`ContentHashDeduplicator`, см. [raw_storage/README.md](src/bp1/raw_storage/README.md)): повторное сохранение той же выгрузки возвращает путь к уже существующему файлу вместо создания второго.
 
 ## Функции и методы пакета (справочник)
 
@@ -556,6 +747,18 @@ BP-1 использует двухуровневую систему дедупл
 | [`copy_html_file()`](src/bp1/storage.py) | Копирование HTML с retry (Windows PermissionError fallback) |
 | [`save_raw_json()`](src/bp1/storage.py) | Сохранение raw JSON на диск |
 | [`ensure_directories()`](src/bp1/storage.py:144) | Создание директорий для хранения данных |
+
+### `jobs.py`
+
+Публичный API для CLI и планировщика (Celery task/beat) — см.
+[«Подключение к Celery»](#подключение-к-celery-tasks-и-beat).
+
+| Функция | Назначение |
+|---------|-----------|
+| [`collect_source()`](src/bp1/jobs.py) | Один источник по всем активным конкурентам (`status='source_not_found'`, если источника нет в БД) |
+| [`collect_competitor()`](src/bp1/jobs.py) | Один конкурент по всем активным источникам; конкурента, которого нет в БД, создаёт сам |
+| [`collect_all()`](src/bp1/jobs.py) | Полный прогон: все активные источники × все активные конкуренты (`ensure_matrix` — достраивать связки или нет) |
+| [`register_source()`](src/bp1/jobs.py) | Поставить источник на учёт: нормализация URL, классификация, запись `Source`, кэш, проверка поискового эндпоинта |
 
 ### `tasks.py`
 
@@ -600,7 +803,6 @@ BP-1 использует двухуровневую систему дедупл
 | `SourceRegistrationService` | Регистрация источников по ссылке |
 | `SearchParamResolver` | Source-aware выбор поискового параметра (ИНН / название) |
 | `SearchUrlTemplateRegistry` | Per-source шаблоны URL поиска (fallback `/search?q=`) |
-| `MCPServer` / `run_mcp_server` | MCP-интерфейс для ИИ-агентов |
 
 ### `raw_storage/`
 
@@ -651,20 +853,81 @@ pytest kodik/tests/bp1/ --cov=src.bp1 -v
 | [`test_parser.py`](kodik/tests/bp1/adaptive/test_parser.py) | AdaptiveParser — извлечение, селекторы, кэш |
 | [`test_chunking.py`](kodik/tests/bp1/adaptive/test_chunking.py) | StructuredChunker, HtmlCleaner, ResultMerger |
 | [`test_quality.py`](kodik/tests/bp1/adaptive/test_quality.py) | DataQualityGate — уровни качества, Quarantine |
-| [`test_llm.py`](kodik/tests/bp1/adaptive/test_llm.py) | LLMClient, AIAgent |
-| [`test_llm_smoke.py`](kodik/tests/bp1/adaptive/test_llm_smoke.py) | Smoke-тест LLM-модуля |
-| [`test_mcp.py`](kodik/tests/bp1/adaptive/test_mcp.py) | MCPServer — JSON-RPC инструменты |
+| [`test_llm.py`](kodik/tests/bp1/adaptive/test_llm.py) | LLMClient, AIAgent — все методы, эвристический fallback и путь с ключом API |
+| [`test_llm_smoke.py`](kodik/tests/bp1/adaptive/test_llm_smoke.py) | ✅ Сквозной smoke-тест LLM-модуля **на реальных сохранённых HTML-страницах** (`data/html_pages`) — см. [«Тесты LLM на реальных данных»](#тесты-llm-на-реальных-данных) |
+| [`test_json_utils.py`](kodik/tests/bp1/adaptive/test_json_utils.py) | ✅ `parse_json` — устойчивый разбор ответа LLM (чистый JSON, markdown-фенс ` ```json `, текст до/после, невалидный ввод) |
+| [`test_prompt_builders.py`](kodik/tests/bp1/adaptive/test_prompt_builders.py) | ✅ `build_classification_prompt`/`build_analysis_prompt`/`build_chunk_prompt`/`build_strategy_prompt`/`build_result_analysis_prompt`/`build_article_text_prompt` — подстановка реальных значений в промпты |
 | [`test_integration.py`](kodik/tests/bp1/adaptive/test_integration.py) | AdaptiveRunner, AdaptiveBridgeParser |
-| [`test_source_registration.py`](kodik/tests/bp1/adaptive/test_source_registration.py) | SourceRegistrationService, нормализация URL |
+| [`test_source_registration.py`](kodik/tests/bp1/adaptive/test_source_registration.py) | SourceRegistrationService, нормализация URL, проверка поискового эндпоинта |
+| [`test_runner_source_aware.py`](kodik/tests/bp1/adaptive/test_runner_source_aware.py) | Source-aware выбор параметра (ИНН vs название), пробинг |
+| [`test_runner_concurrency.py`](kodik/tests/bp1/adaptive/test_runner_concurrency.py) | Параллельное выполнение `run_all` (лимит, порядок, сессии) |
+| [`test_search_probe.py`](kodik/tests/bp1/adaptive/test_search_probe.py) | Перебор параметров, POST-форма, переформулировки |
 
-### Интеграционный тест
+### Тесты общего контура
+
+| Файл тестов | Что тестируется |
+|-------------|-----------------|
+| [`test_cli.py`](kodik/tests/bp1/test_cli.py) | Безопасная очистка ключей Redis (`clear-redis`) |
+| [`test_raw_storage.py`](kodik/tests/bp1/test_raw_storage.py) | Дедупликация Bronze Layer по хэшу содержимого |
+| [`test_pipeline_metrics.py`](kodik/tests/bp1/test_pipeline_metrics.py) | Сводка прогона: success_rate, стратегии, уровни качества |
+| [`test_jobs.py`](kodik/tests/bp1/test_jobs.py) | ✅ Задания планировщика (`jobs.py`): идемпотентное «найти или создать», построение матрицы пар для всех трёх режимов сбора, JSON-сериализуемость результата, отсутствующий источник не даёт побочных эффектов. БД и Redis подменены фейками — тесты идут без внешних сервисов |
+| [`test_raw_data_contract.py`](kodik/tests/bp1/test_raw_data_contract.py) | ✅ Контракт `raw_data` (`ParsedMeta`/`ParsedItem`/`ParsedMetrics`) против примера из `ABOUT_PROJECT/ABOUT.md`: закрытые поля `meta`/`items` (`extra='forbid'`), `metrics` не сериализуется в persisted `raw_data` |
+
+### Тесты LLM на реальных данных
+
+`test_llm_smoke.py` и `test_llm.py` — не игрушечные примеры на трёх строках
+HTML. Фикстура `html_page` берёт **настоящие, реально скачанные страницы**
+живых источников из [`data/html_pages/`](src/bp1/data/html_pages/)
+(`lenta.ru`, `hh.ru`, `rbc.ru`, `iz.ru`, `kodik.ru`, `ria.ru` и др. —
+снимки, сделанные адаптивным движком в ходе обычной работы) и прогоняет их
+через весь реальный конвейер LLM-модуля:
+
+`SourceClassifier.classify` → `LLMClient.analyze_structure` (с
+авто-чанкированием) → `HtmlCleaner` → `StructuredChunker` → параллельное
+извлечение по чанкам → `ResultMerger` → `AIAgent.choose_strategy` /
+`AIAgent.analyze_result`.
+
+Единственное, что в pytest подменяется — сетевой транспорт: вызов
+`openai.AsyncOpenAI` перехватывается фейком, который возвращает
+заранее заданный (но валидный по формату) ответ модели. Так тесты остаются
+быстрыми, детерминированными и не требуют `LLM_API_KEY` в CI, но при этом
+реально исполняют логику классификации, чанкирования, промптов и мержа на
+неадаптированной боевой разметке сайтов — в отличие от синтетических
+фикстур, здесь никто заранее не подгонял HTML под селекторы.
+
+Оба пути покрыты явно:
+- **эвристический fallback** (без `LLM_API_KEY`) — `test_smoke_*_heuristic`;
+- **путь с LLM** (`LLM_API_KEY` задан, ответ приходит от фейкового клиента
+  в реальном формате OpenAI Chat Completions) — `test_smoke_*_real_path`.
+
+Для проверки **с настоящим обращением к провайдеру** (без фейка) есть
+отдельный ручной скрипт — не автотест, `pytest` его не подхватывает
+(`testpaths = ["tests"]` в `pyproject.toml` сюда не заглядывает):
+
+```bash
+# Требует реальный LLM_API_KEY в .env; делает настоящие вызовы к провайдеру
+python -m src.bp1.adaptive.llm_test
+```
+
+Он прогоняет тот же самый конвейер (классификация → анализ структуры →
+чанкирование → прямой анализ → выбор стратегии → анализ результата) на
+первой странице из `data/html_pages/`, печатая селекторы, схему данных,
+confidence и метаданные на каждом этапе — удобно для ручной проверки
+качества промптов после их правки, до того как полагаться на детерминированные
+фейковые тесты.
+
+### Реальный прогон всего этапа
+
+Сквозной прогон на живой БД/Redis выполняется точкой входа этапа:
 
 ```bash
 # Требует: PostgreSQL + Redis + активные search_task в БД
-python -m src.bp1.test_parser
+python -m core.pipeline.cli 1 real
 ```
 
-Тест использует реальную БД и Redis, выполняет все активные задачи и выводит детальный отчёт.
+Возвращает сводку прогона (`success_rate`, разбивка по стратегиям и
+уровням Quality Gate). Прежний ручной скрипт `src/bp1/test_parser.py`
+удалён — его роль закрывают автотесты выше и эта команда.
 
 ## Настройка
 
@@ -677,13 +940,42 @@ DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/kodik
 # Redis
 REDIS_URL=redis://localhost:6379/0
 
-# Директории для хранения данных
-BP1_HTML_DIR=src/bp1/data/html_pages
-BP1_RAW_DIR=src/bp1/data/raw
+# Корень для хранения данных. Поддиректории html_pages/ и raw/
+# вычисляются от него (settings.bp1_html_dir / settings.bp1_raw_dir —
+# свойства, отдельными переменными окружения не задаются).
+BP1_DATA_ROOT=./src/bp1/data
 
-# LLM (для адаптивного извлечения)
-# OPENAI_API_KEY=sk-...
+# LLM (для адаптивного извлечения, классификации и обогащения)
+LLM_API_KEY=sk-...
+LLM_MODEL=gpt-4o-mini
+# LLM_BASE_URL=https://...   # для совместимых с OpenAI провайдеров
 ```
+
+### Ключевые эксплуатационные настройки
+
+Меняются без правки кода; значения — по умолчанию.
+
+```ini
+# Охват сбора
+BP1_MAX_NEWS_PER_SOURCE=20       # новостей с источника за прогон
+BP1_MAX_PAGINATION_PAGES=10      # верхний предел страниц пагинации
+BP1_MAX_CONCURRENT_TASKS=5       # параллельных задач в run_all
+BP1_MAX_CONCURRENT_FETCHES=5     # параллельных докачек статей
+
+# Релевантность и обогащение (LLM)
+BP1_RELEVANCE_MODE=rank          # off | filter | rank
+BP1_RELEVANCE_THRESHOLD=0.6      # порог для режима filter
+BP1_ENRICHMENT_ENABLED=true
+
+# Circuit breaker источников
+SOURCE_CIRCUIT_TTL_SECONDS=86400
+SOURCE_DISABLE_THRESHOLD=3       # подряд отказов -> is_active=False
+```
+
+`BP1_RELEVANCE_MODE=rank` (а не `filter`) — намеренный выбор по умолчанию:
+BP-1 отвечает за сырой сбор (Bronze Layer), а решение «что из собранного
+оставить» принадлежит этапу нормализации (BP-2). `rank` только размечает
+и сортирует по `relevance`, ничего не отбрасывая.
 
 ### Инициализация данных
 
@@ -711,6 +1003,9 @@ python -m core.scripts.stages.bp1
 
 ## План развития
 
-- [x] Реализовать RPA-парсер для kad.arbitr.ru
-- [x] Реализовать адаптивный движок (классификация, стратегии, LLM, HITL, MCP)
+- [x] Реализовать адаптивный движок (классификация, стратегии, LLM, HITL)
 - [x] Интегрировать адаптивный движок с BP-1 пайплайном
+- [x] Выделить `jobs.py` — контракт заданий, готовый для Celery task/beat
+- [ ] Подключить `jobs.py`/`celery_tasks.py` к `beat_schedule` в проде
+      (сейчас `include`/`beat_schedule` в `core/celery_app.py` пустые —
+      рецепт подключения см. в разделе «Подключение к Celery: tasks и beat»)

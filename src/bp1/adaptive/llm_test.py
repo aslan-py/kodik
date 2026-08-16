@@ -22,16 +22,21 @@
     expected_fields = ''            (пустой список полей)
     competitor      = 'ООО "Архитект ИИ"'
 
+НЕ автотест: ручной отладочный скрипт, требует реального LLM-ключа
+(`LLM_API_KEY` в `.env`) и делает настоящие вызовы к провайдеру. pytest
+его не подхватывает — `testpaths = ["tests"]` в `pyproject.toml` сюда не
+заглядывает.
+
 Использование (из корня проекта kodik/):
     python -m src.bp1.adaptive.llm_test
 """
 
 # from __future__ import annotations
 import asyncio
-import os
 import sys
 from pathlib import Path
 
+from core.config import settings
 from src.bp1.adaptive.processing.html_cleaner import HtmlCleaner
 from src.bp1.adaptive.processing.llm import AIAgent, LLMClient
 from src.bp1.adaptive.processing.merger import ResultMerger
@@ -51,12 +56,12 @@ HTML_DIR = PROJECT_ROOT / 'src' / 'bp1' / 'data' / 'html_pages'
 COMPETITOR = 'ООО "Архитект ИИ"'
 EXPECTED_FIELDS: list[str] = []  # expected_fields = ''
 
-# --- Константы LLM (берутся из переменных окружения, см. .env) ---
-# Ключ задаётся через LLM_API_KEY (или OPENAI_API_KEY) в .env / окружении.
-# Хардкод секретов в исходниках недопустим — не коммитьте реальные ключи.
-LLM_API_KEY = os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY') or ''
-LLM_MODEL = os.getenv('LLM_MODEL', 'deepseek-v4-flash')
-LLM_BASE_URL = os.getenv('LLM_BASE_URL', 'https://api.deepseek.com')
+# --- Константы LLM (берутся из core.config.settings, см. .env) ---
+# Ключ задаётся через LLM_API_KEY в .env. Хардкод секретов в исходниках
+# недопустим — не коммитьте реальные ключи.
+LLM_API_KEY = settings.llm_api_key or ''
+LLM_MODEL = settings.llm_model
+LLM_BASE_URL = settings.llm_base_url or 'https://api.deepseek.com'
 LLM_TEMPERATURE = 0.0
 LLM_MAX_TOKENS = 4096
 
@@ -265,8 +270,8 @@ async def main() -> None:
 
     if not LLM_API_KEY or LLM_API_KEY.startswith(('sk-...', 'sk-добавить')):
         print('ОШИБКА: не задан LLM_API_KEY.')
-        print('Задайте переменную окружения LLM_API_KEY (или OPENAI_API_KEY)')
-        print('в .env / окружении и перезапустите тест.')
+        print('Задайте переменную окружения LLM_API_KEY в .env')
+        print('и перезапустите тест.')
         sys.exit(1)
 
     client = LLMClient(

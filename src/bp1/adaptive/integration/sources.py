@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.cache import UnifiedCache
+from ..hostname import KNOWN_REGISTRY_DOMAINS, try_extract_host
 from ..schemas import (
     SiteType,
     SourceClassification,
@@ -32,19 +33,14 @@ def extract_host(url_or_domain: str) -> str:
     """Возвращает hostname в нижнем регистре без ведущего ``www.``.
 
     Принимает и полный URL (``https://www.lenta.ru/news/1``), и голый домен
-    (``lenta.ru``). Для не-URL поднимает ``ValueError``.
+    (``lenta.ru``). Для не-URL поднимает ``ValueError`` (в отличие от
+    ``core.cache._canonical_source_name``, здесь невалидный ввод должен
+    быть виден пользователю, а не тихо проглочен как ключ кэша). Разбор
+    hostname — общий с ``core.cache`` (``adaptive.hostname.try_extract_host``).
     """
-    value = url_or_domain.strip()
-    if not value or any(ch.isspace() for ch in value):
+    host = try_extract_host(url_or_domain)
+    if host is None:
         raise ValueError('Некорректная ссылка на сайт')
-    if '://' not in value:
-        value = f'https://{value}'
-    host = urlsplit(value).hostname
-    if not host:
-        raise ValueError('Некорректная ссылка на сайт')
-    host = host.lower()
-    if host.startswith('www.'):
-        host = host[4:]
     return host
 
 
@@ -163,14 +159,8 @@ def build_search_url(source_name: str, search_param: str) -> str:
 # Домены государственных реестров/органов, где поиск даёт положительный ответ
 # именно по ИНН. Дублирует классификацию (SourceType.REGISTRY), но добавляет
 # надёжный fallback для неизвестных госдоменов без скачивания страницы.
-_REGISTRY_INN_DOMAINS = (
-    'fedresurs.ru',
-    'fips.ru',
-    'zakupki.gov.ru',
-    'kad.arbitr.ru',
-    'nalog.ru',
-    'egrul.nalog.ru',
-)
+# Общий список — adaptive/hostname.py::KNOWN_REGISTRY_DOMAINS.
+_REGISTRY_INN_DOMAINS = KNOWN_REGISTRY_DOMAINS
 
 # Типы сайтов, где предпочтителен поиск по ИНН (госреестры/госорганы).
 _INN_SITE_TYPES = frozenset({SiteType.GOVERNMENT, SiteType.LEGAL})
@@ -302,10 +292,20 @@ class SearchParamResolver:
 class SourceRegistrationService:
     """Регистрация источника: классификация + запись в БД + кэш в Redis."""
 
-    def __init__(self, session: AsyncSession, redis_client=None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        redis_client=None,
+        prober=None,
+    ) -> None:
         self.session = session
         self._cache = UnifiedCache(redis_client=redis_client)
         self._classifier = SourceClassifier()
+        # Проубер для проверки поискового эндпоинта при регистрации
+        # (Шаг 19 плана рефакторинга). Инжектируется, чтобы тесты и
+        # программные вызовы не ходили в сеть; при probe_search=True и
+        # отсутствии явного проубера создаётся транспорт по умолчанию.
+        self._prober = prober
 
     async def classify(self, url: str) -> SourceClassification:
         """Классифицирует сайт по hostname и исходному URL."""
@@ -315,8 +315,58 @@ class SourceRegistrationService:
             source_url=url,
         )
 
+    def _default_prober(self):
+        """Проубер с реальным HTTP-транспортом (GET + POST)."""
+        from .runner import AdaptiveRunner
+        from .search_probe import SearchUrlProber
+
+        return SearchUrlProber(
+            fetch=AdaptiveRunner._default_probe_fetch,
+            looks_like_search_results=AdaptiveRunner._default_looks_like,
+            post=AdaptiveRunner._default_probe_post,
+        )
+
+    async def probe_search_endpoint(self, source_name: str):
+        """Проверяет, отвечает ли поисковый эндпоинт источника.
+
+        Шаг 19 плана рефакторинга: раньше пробинг выполнялся только в
+        ``AdaptiveRunner`` при первой боевой задаче, поэтому ``add-source``
+        не сообщал, работает ли поиск на источнике вообще.
+
+        Ограничение (осознанное): на этапе регистрации конкурента ещё нет,
+        поэтому проверять «нашлась ли цель в выдаче» не по чему —
+        выполняется health-check с нейтральным запросом и без
+        ``target_name``. Это подтверждает, что эндпоинт отвечает
+        осмысленным HTML, но не доказывает, что выбранный query-параметр
+        действительно понимается сайтом.
+
+        Returns:
+            ``ProbedUrl`` найденного варианта или ``None``.
+        """
+        prober = self._prober or self._default_prober()
+        base_url = SearchUrlTemplateRegistry().build_base_url(source_name)
+        # Нейтральный запрос: имя самого источника. Не привязан к
+        # конкуренту (его на этом этапе нет) и безопасен для любого сайта.
+        neutral_query = extract_host(source_name).split('.')[0]
+        try:
+            return await prober.probe_async(
+                base_url=base_url,
+                search_query=neutral_query,
+                target_name='',
+            )
+        except Exception as e:
+            logger.warning(
+                'Проверка поискового эндпоинта %s не выполнена: %s',
+                source_name,
+                e,
+            )
+            return None
+
     async def register(
-        self, url: str, redis_client=None
+        self,
+        url: str,
+        redis_client=None,
+        probe_search: bool = False,
     ) -> SourceRegistrationResult:
         """Добавляет источник в БД и сохраняет классификацию в хранилище.
 
@@ -324,6 +374,11 @@ class SourceRegistrationService:
         2. Классифицирует сайт.
         3. Создаёт ``Source``, если такого имени ещё нет (идемпотентно).
         4. Кэширует классификацию в Redis (ключ ``bp1:classification:{host}``).
+        5. При ``probe_search=True`` — проверяет поисковый эндпоинт и
+           кэширует результат на уровне источника (Шаг 19 плана).
+
+        ``probe_search`` выключен по умолчанию: программные вызовы и тесты
+        не должны неожиданно ходить в сеть. CLI ``add-source`` включает его.
         """
         if redis_client is not None:
             self._cache.redis = redis_client
@@ -352,10 +407,30 @@ class SourceRegistrationService:
 
         await self._cache.set_classification(host, classification)
 
+        search_probe = None
+        if probe_search:
+            search_probe = await self.probe_search_endpoint(source_name)
+            if search_probe is not None:
+                # Кэшируем на уровне ИСТОЧНИКА (ключ без поискового
+                # запроса). Пер-конкурентный ключ здесь заполнить нельзя:
+                # конкурента на этапе регистрации нет, а чужой search_url
+                # искал бы не ту компанию. Эта запись используется как
+                # подсказка "какой query-параметр понимает сайт" при первом
+                # боевом пробинге (AdaptiveRunner._get_or_probe_url).
+                try:
+                    await self._cache.set_probed_url(source_name, search_probe)
+                except Exception as e:
+                    logger.warning(
+                        'Не удалось закэшировать probed URL для %s: %s',
+                        source_name,
+                        e,
+                    )
+
         return SourceRegistrationResult(
             host=host,
             source_name=source_name,
             created=created,
             source_id=source_id,
             classification=classification,
+            search_probe=search_probe,
         )

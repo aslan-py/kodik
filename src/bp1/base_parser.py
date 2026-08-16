@@ -15,12 +15,101 @@ from pydantic import BaseModel, ConfigDict, Field
 # ============================================================================
 
 
+class ParsedMeta(BaseModel):
+    """
+    Метаданные одной выгрузки (``raw_data.meta``) — контракт BP-1 -> BP-2.
+
+    Состав и порядок полей закреплены ``ABOUT_PROJECT/ABOUT.md`` (раздел
+    BP-1, «Содержимое raw_data»). Список полей закрыт (``extra='forbid'``):
+    всё, что не факт о самом запросе (сработавшая стратегия, статус
+    качества, служебные счётчики парсинга), относится к
+    ``ParsedResponse.metrics``, а не сюда. Раньше это правило не
+    соблюдалось — адаптивный мост дописывал в ``meta`` собственные
+    диагностические поля (``probed_url``/``strategy_used``/
+    ``quality_status``), и контракт для BP-2 расходился с ABOUT.md без
+    единого места, которое бы это ловило.
+    """
+
+    search_task_id: int | None = Field(
+        None, description='Ссылка на задачу-конфигурацию (= ключ в Redis)'
+    )
+    source: str = Field(..., description='С какого ресурса собрали')
+    competitor: str = Field(..., description='По какому конкуренту искали')
+    trigger: str | None = Field(
+        None, description='По какому слову искали (может быть null)'
+    )
+    source_request_url: str = Field(
+        ..., description='НАШ поисковый запрос, один на всю выгрузку'
+    )
+    fetched_at: str = Field(
+        ...,
+        description='Время съёма; в content-хэш не включается (иначе '
+        'всегда changed)',
+    )
+    items_count: int = Field(
+        0,
+        ge=0,
+        description='Число материалов, переданных в BP-2',
+    )
+    empty_reason: str | None = Field(
+        None,
+        description='Стабильный код причины пустого списка материалов',
+    )
+
+    model_config = ConfigDict(extra='forbid')
+
+
+class ParsedMetrics(BaseModel):
+    """
+    Служебные поля, результаты парсинга и метрики (``raw_data.metrics``).
+
+    Не входит в бизнес-контракт BP-2 (см. ``ParsedMeta``/``ParsedItem``) —
+    только для аудита и наблюдаемости (Шаг 20 плана рефакторинга bp1, T6).
+    Список полей открыт (``extra='allow'``): разные парсеры/движки
+    (RPA-адаптеры, адаптивный сбор) собирают разную диагностику, и не у
+    каждого прогона есть все поля — в отличие от ``ParsedMeta``/
+    ``ParsedItem``, здесь фиксировать закрытый список избыточно и вредно
+    (пришлось бы трогать контракт при каждой новой метрике).
+    """
+
+    probed_url: str | None = Field(
+        None, description='URL после поиска (пробинга); null — fallback'
+    )
+    strategy_used: str | None = Field(
+        None, description='Реально сработавшая стратегия сбора'
+    )
+    quality_status: str | None = Field(
+        None, description='Итог DataQualityGate: ok/low_quality'
+    )
+    quality_levels: dict[str, Any] | None = Field(
+        None, description='Пер-уровневая сводка DataQualityGate'
+    )
+    relevance_mode: str | None = Field(
+        None, description='Режим фильтра релевантности: off/filter/rank'
+    )
+    news_total: int | None = Field(
+        None, description='Сколько новостей найдено до фильтрации'
+    )
+    relevance_filtered: int | None = Field(
+        None, description='Сколько новостей отсеяно фильтром релевантности'
+    )
+    file_saved: bool | None = Field(
+        None, description='Удалось ли сохранить HTML-снимок на диск'
+    )
+
+    model_config = ConfigDict(extra='allow')
+
+
 class ParsedItem(BaseModel):
     """
     Одна единица информации (вакансия, новость, компания, судебное дело).
 
     Это минимальный набор полей, который должен вернуть каждый парсер.
-    Все специфичные для источника данные помещаются в extra.
+    Все специфичные для источника данные помещаются в extra. Список
+    полей на верхнем уровне закрыт (``extra='forbid'``) — источник-
+    специфичные факты обязаны идти через ``extra``, а не через новое поле
+    рядом с ``url``/``title``/...; так контракт нельзя случайно расширить
+    мимо ``extra``.
     """
 
     # Обязательные поля
@@ -42,6 +131,7 @@ class ParsedItem(BaseModel):
     )
 
     model_config = ConfigDict(
+        extra='forbid',
         json_schema_extra={
             'example': {
                 'url': 'https://fedresurs.ru/company/123',
@@ -56,7 +146,7 @@ class ParsedItem(BaseModel):
                     'director': 'Иванов И.И.',
                 },
             }
-        }
+        },
     )
 
 
@@ -66,9 +156,21 @@ class ParsedResponse(BaseModel):
 
     Один запрос может вернуть несколько событий (например, список вакансий
     или список компаний). Каждое событие -> отдельный ParsedItem.
+
+    Это ЕДИНСТВЕННЫЙ путь, которым ``raw_data`` попадает в БД (см.
+    ``src/bp1/storage.py::RawDataService.persist`` — сохраняет
+    ``response.model_dump()`` как есть). Persisted raw_data (файл на диске
+    и ``RawItem.raw_data`` в БД) содержит РОВНО два раздела: ``meta``
+    (факты о запросе) и ``items`` (факты о событиях) — соответствует
+    контракту из ``ABOUT_PROJECT/ABOUT.md``. ``metrics`` — диагностика
+    текущего прогона (реально сработавшая стратегия, статус Quality Gate
+    и т.п.), доступна в памяти как ``response.metrics`` (используется
+    ``adaptive/integration/runner.py`` для собственных отчётов), но
+    исключена из ``model_dump()`` тем же способом, что и
+    ``html_file_path`` — см. ``exclude=True`` ниже.
     """
 
-    meta: dict[str, Any] = Field(
+    meta: ParsedMeta = Field(
         ...,
         description='Метаданные запроса (search_task_id, источник, '
         'конкурент, триггер)',
@@ -76,8 +178,23 @@ class ParsedResponse(BaseModel):
     items: list[ParsedItem] = Field(
         ..., description='Список извлеченных событий'
     )
+    # Диагностика прогона (не бизнес-данные) — доступна в памяти вызывающему
+    # коду (runner.py), но исключена из model_dump()/persisted raw_data:
+    # ABOUT.md документирует raw_data строго как meta+items.
+    metrics: ParsedMetrics = Field(
+        default_factory=ParsedMetrics,
+        exclude=True,
+        description='Служебные поля, результаты парсинга и метрики сбора '
+        '(не относятся к бизнес-данным событий; не сериализуется в '
+        'persisted raw_data)',
+    )
+    # Внутренний путь к скачанному HTML-снимку — только для копирования
+    # файла раннером/сервисом персистентности (см. storage.py). Не должен
+    # попадать в persisted raw_data, поэтому исключён из model_dump().
+    html_file_path: str | None = Field(default=None, exclude=True)
 
     model_config = ConfigDict(
+        extra='forbid',
         json_schema_extra={
             'example': {
                 'meta': {
@@ -85,6 +202,8 @@ class ParsedResponse(BaseModel):
                     'source': 'fedresurs.ru',
                     'competitor': 'Бегемот',
                     'trigger': 'ООО Ромашка',
+                    'source_request_url': 'https://fedresurs.ru/entities?'
+                    'searchString=ООО+Ромашка',
                     'fetched_at': '2026-07-18T10:00:00Z',
                 },
                 'items': [
@@ -101,8 +220,10 @@ class ParsedResponse(BaseModel):
                         },
                     }
                 ],
+                # metrics не показан здесь: исключён из model_dump()
+                # (exclude=True), поэтому не попадает в persisted raw_data.
             }
-        }
+        },
     )
 
 

@@ -40,6 +40,7 @@ redis>=5.0,<6.0           # клиент Redis (синхронный, для Cel
 # ===== Task Queue =====
 celery>=5.3,<6.0          # распределённая очередь задач
 flower>=2.0,<3.0          # веб-панель мониторинга Celery воркеров/задач
+croniter>=2.0,<7.0        # расчёт и валидация cron-слотов pipeline
 
 # ===== Browser Automation =====
 # ВНИМАНИЕ: pip ставит только библиотеку. Сами браузеры (бинарники ~150 МБ)
@@ -50,6 +51,12 @@ playwright>=1.40,<2.0     # браузерная автоматизация (RPA
 
 # ===== HTML Parsing =====
 beautifulsoup4>=4.12,<5.0 # парсинг HTML (BP-1 Adaptive: classifier/parser/llm)
+
+# ===== Main-content extraction (BP-1 Adaptive, Фича 2) =====
+# Детерминированное извлечение полного текста статьи вместо сниппета.
+# Опциональны: без них каскад деградирует к LLM/сниппету.
+trafilatura>=1.6,<3.0     # извлечение основного контента (preferred)
+readability-lxml>=0.8,<1.0  # fallback-экстрактор основного контента
 
 # ===== LLM & AI-краулинг (BP-1 Adaptive) =====
 openai>=1.0.0             # OpenAI SDK (llm.py: AsyncOpenAI)

@@ -17,3 +17,4 @@ class ChannelCreate(BaseModel):
 
 class ChannelUpdate(BaseModel):
     name: str | None = None
+    is_active: bool | None = None

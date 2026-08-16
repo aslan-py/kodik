@@ -2,6 +2,7 @@ from core.enums import RejectReason
 from src.bp2.pipeline import (
     REASONS_COUNTED_BEFORE_WRITE,
     count_rejected_by_reason,
+    summarize_raw_items,
 )
 
 
@@ -58,3 +59,29 @@ def test_noise_limit_excluded_from_breakdown():
     """
     assert RejectReason.noise_limit not in REASONS_COUNTED_BEFORE_WRITE
     assert 'noise_limit' not in count_rejected_by_reason([])
+
+
+def test_raw_summary_distinguishes_empty_input_from_rejected_rows():
+    """BP-2 сообщает пустой вход отдельно от причин фильтрации."""
+
+    class _Raw:
+        def __init__(self, raw_data):
+            self.raw_data = raw_data
+
+    summary = summarize_raw_items(
+        [
+            _Raw(
+                {
+                    'meta': {'empty_reason': 'no_extractable_items'},
+                    'items': [],
+                }
+            ),
+            _Raw({'meta': {}, 'items': [{'title': 'Материал'}]}),
+        ]
+    )
+
+    assert summary == {
+        'source_items': 1,
+        'empty_raw_items': 1,
+        'empty_by_reason': {'no_extractable_items': 1},
+    }

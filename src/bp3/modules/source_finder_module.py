@@ -37,9 +37,9 @@ class SourceFinderModule(BaseModule):
                 response = client.search(
                     query=f'Найди новые источники новостей о компании {name}',
                     topic='news',
-                    max_results=2,
-                    search_depth='basic',
-                    time_range='week',
+                    max_results=settings.bp3_search_max_results,
+                    search_depth=settings.bp3_search_depth.value,
+                    time_range=settings.bp3_search_time_range,
                     exclude_domains=exclude_domains,
                     include_answer=False,
                     include_raw_content=False,

@@ -57,8 +57,6 @@ docker compose up -d
 - **Регистрация источников** — `SourceRegistrationService` по ссылке
   нормализует адрес, классифицирует сайт, добавляет `Source` в БД и
   кэширует классификацию в Redis для повторного использования.
-- **MCP-сервер** — позволяет ИИ-агентам управлять сбором данных через
-  Model Context Protocol.
 - **Source-aware выбор поискового параметра** — для гос. источников
   (`SourceType.REGISTRY` / `SiteType.GOVERNMENT` / известные госдомены) поиск
   ведётся по ИНН, для всех остальных — **по названию конкурента**
@@ -108,8 +106,7 @@ src/bp1/adaptive/
 └── integration/             # Интеграция с BP-1
     ├── bridge.py            # AdaptiveBridgeParser
     ├── runner.py            # AdaptiveRunner
-    ├── sources.py           # SourceRegistrationService (регистрация источников)
-    └── mcp_server.py        # MCPServer
+    └── sources.py           # SourceRegistrationService (регистрация источников)
 ```
 
 Все публичные классы доступны напрямую из пакета:
@@ -119,7 +116,7 @@ from src.bp1.adaptive import (
     AdaptiveParser, AdaptiveRunner, AdaptiveBridgeParser,
     SourceClassifier, SourceRegistrationService, AgenticOrchestrator,
     LLMClient, AIAgent, UnifiedCache, DataQualityGate, HITLManager,
-    ProfileManager, MCPServer, run_mcp_server,
+    ProfileManager,
 )
 ```
 
@@ -709,65 +706,35 @@ print(resp.items[0].title, resp.items[0].url)
 
 ## CLI
 
-Точка входа: `python -m src.bp1.adaptive.cli`.
+Собственного CLI у адаптивного контура больше нет: он объединён с CLI
+этапа — `python -m src.bp1.cli` (см. [../README.md](../README.md)).
+Команды сбора — обёртки над заданиями [`../jobs.py`](../jobs.py).
 
 ```bash
-# Классификация источника
-python -m src.bp1.adaptive.cli classify --source lenta.ru
+# Категоризация источника без записи в БД
+python -m src.bp1.cli classify lenta.ru
 
-# Запуск адаптивного сбора (все активные задачи)
-python -m src.bp1.adaptive.cli run
-
-# Запуск конкретной задачи
-python -m src.bp1.adaptive.cli run --task-id 40
-
-# Запуск с указанием режима и fallback
-python -m src.bp1.adaptive.cli run --source lenta.ru --mode hybrid --fallback
+# Сбор: по источнику / по конкуренту / всё
+python -m src.bp1.cli source lenta.ru
+python -m src.bp1.cli competitor "ООО АРХИТЕХ ИИ"
+python -m src.bp1.cli all
 
 # Видимый браузер (для отладки HITL/STEALTH)
-python -m src.bp1.adaptive.cli run --task-id 40 --no-headless
+python -m src.bp1.cli source lenta.ru --no-headless
 
 # Управление кэшем адаптеров
-python -m src.bp1.adaptive.cli cache --show --source lenta.ru
-python -m src.bp1.adaptive.cli cache --clear --source lenta.ru
-
-# Управление профилями браузеров
-python -m src.bp1.adaptive.cli profile --show --source lenta.ru
+python -m src.bp1.cli cache --show lenta.ru
+python -m src.bp1.cli cache --clear lenta.ru
 
 # Отчёт качества по задаче
-python -m src.bp1.adaptive.cli quality --report --task-id 40
+python -m src.bp1.cli quality --task-id 40
 ```
 
----
-
-## MCP-сервер
-
-[`MCPServer`](integration/mcp_server.py) реализует Model Context Protocol поверх
-JSON-RPC 2.0 через stdio (без внешнего пакета `mcp`). Позволяет ИИ-агентам
-(Claude, GPT и др.) управлять сбором данных.
-
-```bash
-python -m src.bp1.adaptive.mcp_server
-```
-
-Либо программно:
-
-```python
-from src.bp1.adaptive import run_mcp_server, MCPServer
-
-run_mcp_server()                     # запуск через stdio
-
-# Или более тонкое управление.
-server = MCPServer()
-tools = server.list_tools()
-print([t.name for t in tools])
-```
-
-Инструменты:
-- `classify_source` — классифицировать источник.
-- `run_adaptive_parse` — выполнить адаптивный парсинг.
-- `list_strategies` — список стратегий обхода.
-- `get_adapter` / `clear_adapter` — управление кэшем адаптеров.
+Команды `profile` и режимы `--mode hybrid --fallback` в объединённый CLI
+не переносились: профили HITL правятся на диске
+(`src/bp1/data/profiles/`), а режим прогона задаётся настройкой
+`BP1_ADAPTIVE_MODE` — флаг в CLI дублировал её и расходился с прогоном
+через конвейер.
 
 ---
 
@@ -842,7 +809,6 @@ pytest tests/bp1/adaptive/test_engines.py -v
 pytest tests/bp1/adaptive/test_quality.py -v
 pytest tests/bp1/adaptive/test_parser.py -v
 pytest tests/bp1/adaptive/test_hitl.py -v
-pytest tests/bp1/adaptive/test_mcp.py -v
 pytest tests/bp1/adaptive/test_integration.py -v
 pytest tests/bp1/adaptive/test_source_registration.py -v   # регистрация источников
 

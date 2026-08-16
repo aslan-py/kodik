@@ -1,4 +1,4 @@
-"""Раздел «Настройки валидации» (BP-2 и BP-3).
+"""Раздел «Настройки справочников» (BP-2 и BP-3).
 
 Что отсеиваем и как размечаем: регионы, чёрный список доменов, стоп-слова,
 лимиты анти-шума (BP-2), категории и отделы (BP-3).
@@ -9,7 +9,7 @@ Region — без `is_active`: это статический справочни�
 
 from fastadmin import WidgetType, register
 
-from api.admin.base import MENU_ADMIN_NORMALIZATION, KodikModelAdmin
+from api.admin.base import MENU_ADMIN_REFERENCES, KodikModelAdmin
 from core.database import AsyncSessionLocal
 from src.bp2.models import BlackDomain, Region, StopWord, TopicLimit
 from src.bp3.models import Category, Department
@@ -17,7 +17,7 @@ from src.bp3.models import Category, Department
 
 @register(Region, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class RegionAdmin(KodikModelAdmin):
-    menu_section = MENU_ADMIN_NORMALIZATION
+    menu_section = MENU_ADMIN_REFERENCES
     verbose_name = 'Регион'
     verbose_name_plural = 'Регионы'
 
@@ -79,7 +79,7 @@ class RegionAdmin(KodikModelAdmin):
 
 @register(BlackDomain, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class BlackDomainAdmin(KodikModelAdmin):
-    menu_section = MENU_ADMIN_NORMALIZATION
+    menu_section = MENU_ADMIN_REFERENCES
     verbose_name = 'Домен в чёрном списке'
     verbose_name_plural = 'Чёрный список'
 
@@ -121,7 +121,7 @@ class BlackDomainAdmin(KodikModelAdmin):
 
 @register(StopWord, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class StopWordAdmin(KodikModelAdmin):
-    menu_section = MENU_ADMIN_NORMALIZATION
+    menu_section = MENU_ADMIN_REFERENCES
     verbose_name = 'Стоп-слово'
     verbose_name_plural = 'Стоп-слова'
 
@@ -162,7 +162,7 @@ class StopWordAdmin(KodikModelAdmin):
 
 @register(TopicLimit, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class TopicLimitAdmin(KodikModelAdmin):
-    menu_section = MENU_ADMIN_NORMALIZATION
+    menu_section = MENU_ADMIN_REFERENCES
     verbose_name = 'Лимит анти-шума'
     verbose_name_plural = 'Лимиты анти-шума'
 
@@ -204,7 +204,7 @@ class TopicLimitAdmin(KodikModelAdmin):
 
 @register(Category, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class CategoryAdmin(KodikModelAdmin):
-    menu_section = MENU_ADMIN_NORMALIZATION
+    menu_section = MENU_ADMIN_REFERENCES
     verbose_name = 'Категория'
     verbose_name_plural = 'Категории'
 
@@ -243,7 +243,7 @@ class CategoryAdmin(KodikModelAdmin):
 
 @register(Department, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class DepartmentAdmin(KodikModelAdmin):
-    menu_section = MENU_ADMIN_NORMALIZATION
+    menu_section = MENU_ADMIN_REFERENCES
     verbose_name = 'Отдел'
     verbose_name_plural = 'Отделы'
 

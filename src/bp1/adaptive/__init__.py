@@ -10,17 +10,17 @@
 - ``core`` — инфраструктура (кэширование, контроль качества).
 - ``processing`` — обработка HTML и извлечение данных (парсер, LLM).
 - ``strategies`` — стратегии обхода источников.
-- ``integration`` — интеграция с BP-1 и внешними интерфейсами (MCP, CLI).
+- ``integration`` — интеграция с BP-1 и внешними интерфейсами (CLI).
 """
 
 from .core.cache import UnifiedCache
 from .core.quality import DataQualityGate
 from .integration.bridge import AdaptiveBridgeParser
-from .integration.mcp_server import MCPServer, run_mcp_server
 from .integration.runner import AdaptiveRunner
 from .logger import get_logger
 from .processing.llm import AIAgent, LLMClient
 from .processing.parser import AdaptiveParser
+from .processing.relevance import RelevanceFilter
 from .schemas import (
     AdapterConfig,
     AdapterState,
@@ -34,6 +34,7 @@ from .schemas import (
     QualityGateLevel,
     QualityGateReport,
     QuarantineRecord,
+    RelevanceMode,
     SiteType,
     SourceClassification,
     SourceRegistrationResult,
@@ -70,13 +71,14 @@ __all__ = [
     'HITLResponse',
     'HITLStrategy',
     'LLMClient',
-    'MCPServer',
     'PageSubType',
     'PipelineReport',
     'ProfileManager',
     'QualityGateLevel',
     'QualityGateReport',
     'QuarantineRecord',
+    'RelevanceFilter',
+    'RelevanceMode',
     'SiteType',
     'SourceClassification',
     'SourceClassifier',
@@ -89,5 +91,4 @@ __all__ = [
     'UnifiedCache',
     'UnifiedConfig',
     'get_logger',
-    'run_mcp_server',
 ]

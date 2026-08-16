@@ -15,8 +15,7 @@ CRUD.
 from fastadmin import WidgetType, register
 
 from api.admin.base import (
-    MENU_ACTIONS,
-    MENU_SHOWCASE,
+    MENU_FINAL_TABLES,
     KodikModelAdmin,
     ReadOnlyModelAdmin,
 )
@@ -27,7 +26,7 @@ from src.bp6.models import ActionItem
 
 @register(ShowcaseEvent, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class ShowcaseEventAdmin(ReadOnlyModelAdmin):
-    menu_section = MENU_SHOWCASE
+    menu_section = MENU_FINAL_TABLES
     verbose_name = 'Событие витрины'
     verbose_name_plural = 'События'
 
@@ -69,7 +68,7 @@ class ShowcaseEventAdmin(ReadOnlyModelAdmin):
 
 @register(ActionItem, sqlalchemy_sessionmaker=AsyncSessionLocal)
 class ActionItemAdmin(KodikModelAdmin):
-    menu_section = MENU_ACTIONS
+    menu_section = MENU_FINAL_TABLES
     verbose_name = 'Задача'
     verbose_name_plural = 'Задачи'
 

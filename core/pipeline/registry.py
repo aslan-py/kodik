@@ -6,6 +6,13 @@
 (заглушки). Заменить заглушку на финальную реализацию, когда она появится, —
 значит поменять одну ссылку здесь, форма реестра не меняется.
 
+Этап 1 — первый, у которого есть ОБЕ реализации одновременно: `run` —
+настоящий адаптивный сбор (`src/bp1/pipeline.py::run_bp1`), `run_stub` —
+заглушка (`core/scripts/stages/bp1_stub`, шесть синтетических новостей).
+Какая выполняется — решает `core.config.settings.true_parsing`, с
+возможностью разового переопределения (см. `core/pipeline/runner.py`).
+У остальных этапов заглушки нет, только основная реализация.
+
 CLI (core/pipeline/cli.py) — сегодня единственный потребитель. API и
 FastAdmin — следующие итерации (см. proposal.md, Non-goals), реестр
 рассчитан дёргаться и оттуда без переписывания.
@@ -20,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import AsyncSessionLocal
 from core.scripts.stages import bp1_stub
 from src.bp1.models import RawItem
+from src.bp1.pipeline import run_bp1
 from src.bp2.models import NormalizedItem
 from src.bp2.pipeline import run_bp2
 from src.bp3.models import CategorizedEvent
@@ -47,6 +55,20 @@ class StageDescriptor:
     # новыми правилами, без повторного сбора исходных. None у этапов, для
     # которых такой концепции не существует (сегодня — только этап 2).
     run_reparse: Callable[[], Awaitable[dict]] | None = None
+    # Альтернативная точка входа — заглушка вместо основной реализации.
+    # None — у этапа только одна реализация (её is_stub статично описан
+    # выше). Сегодня заполнено только у этапа 1: run — настоящий сбор,
+    # run_stub — заглушка.
+    run_stub: Callable[[], Awaitable[dict]] | None = None
+    # requires считается выполненным только при наличии хотя бы одной
+    # АКТИВНОЙ строки (model.is_active), а не просто хотя бы одной. Нужно
+    # там, где неактивная строка не годится — see cascade.count_rows.
+    requires_active: bool = False
+    # Заменяет типовое "сначала прогоните предыдущий этап" в ошибке
+    # preflight — для этапов, у которых предыдущего этапа в конвейере нет
+    # (сегодня — только реальный сбор этапа 1, чинится не прогоном
+    # другого этапа, а заведением задач сбора).
+    missing_data_hint: str | None = None
 
 
 async def _run_stub(
@@ -72,14 +94,18 @@ STAGES: dict[int, StageDescriptor] = {
     1: StageDescriptor(
         number=1,
         title='Сбор (BP-1)',
-        run=functools.partial(
+        run=run_bp1,
+        # Реальный BP-1 сам создаёт недостающие SearchTask из активных
+        # Source × Competitor до обхода, поэтому пустая таблица задач —
+        # допустимое начальное состояние, а не ошибка preflight.
+        requires=None,
+        is_stub=False,
+        run_stub=functools.partial(
             _run_stub,
             'BP-1 (минимальная заглушка raw_item)',
             bp1_stub.clear,
             bp1_stub.seed,
         ),
-        requires=None,  # вход в цепочку, предусловий нет
-        is_stub=True,
     ),
     2: StageDescriptor(
         number=2,

@@ -4,12 +4,16 @@
 для единого управления конфигурацией модуля.
 """
 
-from pathlib import Path
+from core.config import settings
 
 # ── Пути и файловая система ──────────────────────────────────────────────────
-DEFAULT_BASE_PATH_RAW = OUTPUT_DIR = str(
-    Path(__file__).resolve() / 'src' / 'data' / 'raw'
-)
+# Единый источник истины — settings.bp1_raw_dir (настраивается через
+# BP1_RAW_DIR/BP1_DATA_ROOT в .env, см. README.md). Раньше путь строился
+# отдельно через ``Path(__file__).resolve() / 'src' / 'data' / 'raw'`` —
+# ``Path(__file__).resolve()`` указывает на сам файл constants.py (не на
+# директорию пакета), поэтому итоговый путь не существовал ни при каком
+# значении рабочей директории процесса.
+DEFAULT_BASE_PATH_RAW = OUTPUT_DIR = settings.bp1_raw_dir
 JSON_INDENT = 2
 FILE_EXTENSION = '.json'
 JSON_GLOB_PATTERN = '*.json'

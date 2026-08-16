@@ -87,9 +87,20 @@ async def clear_from(session: AsyncSession, model: type) -> int:
     return total
 
 
-async def count_rows(session: AsyncSession, model: type) -> int:
-    """Сколько строк в таблице (для сводок в конце скриптов)."""
-    return await session.scalar(select(func.count()).select_from(model))
+async def count_rows(
+    session: AsyncSession, model: type, *, active_only: bool = False
+) -> int:
+    """Сколько строк в таблице (для сводок в конце скриптов).
+
+    active_only=True — считать только активные строки (model.is_active).
+    Нужно там, где неактивная строка не годится как признак готовности
+    данных: вызывающий код может считать только записи, которые реально
+    участвуют в следующем шаге.
+    """
+    stmt = select(func.count()).select_from(model)
+    if active_only:
+        stmt = stmt.where(model.is_active.is_(True))
+    return await session.scalar(stmt)
 
 
 def run_stage(

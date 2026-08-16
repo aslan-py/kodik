@@ -34,10 +34,10 @@ batch = RawDataFile(
             url='https://fedresurs.ru/sfactmessages/123',
             title='Недостоверность сведений',
             text='<!DOCTYPE html><html>...</html>',  # полный HTML
-            date='07.07.2026',
+            published_at='07.07.2026',  # сырая дата строкой
             region=None,
-            media=None,
-            salary=None,
+            media_name=None,  # СМИ/публикатор
+            extra={},  # источник-специфичные поля (напр. зарплата у hh)
         ),
     ],
 )
@@ -129,7 +129,7 @@ async def main():
                 url='https://fedresurs.ru/sfactmessages/...',
                 title='Недостоверность сведений',
                 text='<!DOCTYPE html><html>...</html>',
-                date='07.07.2026',
+                published_at='07.07.2026',
             ),
         ],
     )
@@ -207,10 +207,10 @@ backend = StorageFactory.create('disk', base_path='data/raw')
 | `url` | `str` | URL конкретного элемента |
 | `title` | `str` | Заголовок элемента |
 | `text` | `str` | Полный текст или HTML-код элемента |
-| `date` | `str \| None` | Дата элемента |
-| `region` | `str \| None` | Регион |
-| `media` | `str \| None` | Медиа-источник |
-| `salary` | `str \| None` | Зарплата (если применимо) |
+| `published_at` | `str \| None` | Сырая дата строкой (BP-2 парсит в `date`) |
+| `region` | `str \| None` | Сырое имя региона (не id) |
+| `media_name` | `str \| None` | Имя публикатора: у hh пусто, у новостей — СМИ |
+| `extra` | `dict` | Источник-специфичные сырые факты; `{}` если их нет. У hh здесь зарплата — нормализуется в `extra.salary_from`/`salary_to`/`currency` |
 
 ### `ProcessingStatus`
 
@@ -274,10 +274,10 @@ data/raw/
       "url": "https://fedresurs.ru/sfactmessages/...",
       "title": "Недостоверность сведений",
       "text": "<!DOCTYPE html><html>...</html>",
-      "date": "07.07.2026",
+      "published_at": "07.07.2026",
       "region": null,
-      "media": null,
-      "salary": null
+      "media_name": null,
+      "extra": {}
     }
   ]
 }
@@ -287,21 +287,43 @@ data/raw/
 
 ## Дедупликация
 
-Модуль поддерживает дедупликацию через внедряемый `BaseDeduplicator`. По умолчанию используется `NoOpDeduplicator` (всегда `False`). Дедупликация выполняется по `raw_id` файла выгрузки.
+Модуль поддерживает дедупликацию через внедряемый `BaseDeduplicator`. По умолчанию используется `ContentHashDeduplicator` — дедупликация по **хэшу содержимого `items`** (`utils/hashing.py::compute_items_hash`), а не по `raw_id`.
+
+Почему не по `raw_id`: `RawDataFile.raw_id` получает свежий случайный UUID при каждом конструировании (`core/models.py`, `default_factory=uuid4`), поэтому совпадение по нему практически никогда не происходит — проверка была бы бесполезной. Реальный смысл имеет дубликат по содержимому: та же выгрузка сохраняется повторно (например, при ретрае).
 
 ```python
-from raw_storage.core.interfaces import BaseDeduplicator
+# Поведение по умолчанию: повторное сохранение того же содержимого
+# не создаёт вторую запись, а возвращает путь к уже существующей.
+repo = RawDataRepository(storage_backend=backend)
+path_a = await repo.save(batch)
+path_b = await repo.save(batch)  # тот же набор items
+assert path_a == path_b
+```
+
+Своя стратегия дедупликации подключается через параметр `deduplicator`:
+
+```python
+from src.bp1.raw_storage.core.interfaces import (
+    BaseDeduplicator,
+    NoOpDeduplicator,
+)
 
 
-class FileIdDeduplicator(BaseDeduplicator):
-    async def is_duplicate(self, raw_id: str) -> bool:
-        # Реализация: проверка по индексу или БД
+class MyDeduplicator(BaseDeduplicator):
+    async def is_duplicate(self, identifier: str) -> bool:
+        # identifier — хэш содержимого items
         ...
 
 
 repo = RawDataRepository(
     storage_backend=backend,
-    deduplicator=FileIdDeduplicator(),
+    deduplicator=MyDeduplicator(),
+)
+
+# Явно отключить дедупликацию (каждое сохранение создаёт новый файл):
+repo = RawDataRepository(
+    storage_backend=backend,
+    deduplicator=NoOpDeduplicator(),
 )
 ```
 

@@ -70,6 +70,12 @@ def calculate_content_hash(data: dict[str, Any]) -> str:
 def copy_html_file(parser_file_path: str, dest_dir: str) -> str | None:
     """Скопировать HTML-файл в целевой каталог с повторными попытками.
 
+    Если исходный файл уже находится по целевому пути, сравнение
+    разрешённых абсолютных путей останавливает обработку до ``copy2`` и
+    ручного fallback. Это защищает файл от обнуления при самокопировании
+    на Windows, где такая операция может завершиться ``PermissionError``
+    вместо ожидаемого ``SameFileError``.
+
     На Windows источник может быть временно занят другим процессом
     (не освобождён дескриптор браузера/краулера), из-за чего
     ``shutil.copy2`` бросает ``PermissionError``. При ошибке повторяем
@@ -85,6 +91,9 @@ def copy_html_file(parser_file_path: str, dest_dir: str) -> str | None:
     os.makedirs(dest_dir, exist_ok=True)
     html_filename = os.path.basename(parser_file_path)
     dest_path = os.path.join(dest_dir, html_filename)
+
+    if Path(parser_file_path).resolve() == Path(dest_path).resolve():
+        return dest_path
 
     # 1. Попытки через shutil.copy2.
     for attempt in range(1, _COPY_MAX_RETRIES + 1):
@@ -200,6 +209,7 @@ class RawDataService:
 
     async def save_raw_item(
         self,
+        *,
         search_task_id: int,
         data: dict[str, Any],
         content_hash: str,

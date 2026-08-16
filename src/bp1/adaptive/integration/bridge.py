@@ -65,61 +65,106 @@ class AdaptiveBridgeParser(BaseParser):
         if result.status == 'error':
             raise RuntimeError(result.error or 'adaptive parse failed')
 
-        items = [
-            ParsedItem(
-                # Полный абсолютный URL события (иначе не работает dedup_key
-                # и media_domain в BP-2). Если ссылка относительная, она уже
-                # превращена в абсолютную при извлечении.
-                url=item.get('url', ''),
-                title=item.get('title', '') or item.get('text', ''),
-                text=item.get('text'),
-                published_at=item.get('published_at'),
-                region=item.get('region'),
-                media_name=item.get('media_name'),
-                # Поле trigger/competitor (для meta) не должно попадать в
-                # items — они переносятся в meta (см. ниже).
-                extra=item.get('extra', {}),
-            )
-            for item in result.items
-        ]
-
-        # Продвижение новостей (extra.news) в отдельные ParsedItem:
-        # каждая статья из списка новостей поисковой страницы становится
-        # самостоятельным событием с полным текстом (ex_text) в text.
-        # Это позволяет BP-2 обрабатывать каждую новость отдельно.
-        #
-        # Оригинальные items и extra.news сохраняются (обратная совместимость
-        # с потребителями, читающими extra['news']).
+        # AdaptiveParser отдаёт «сырые» элементы своего внутреннего формата:
+        # обычные события как есть, плюс — для источников с поиском —
+        # служебный элемент «страница результатов поиска» с полным списком
+        # новостей в extra.news (см.
+        # processing/parser.py::_make_search_page_item).
+        # Эта страница сама по себе не событие БП-1 (её нет в контракте
+        # ABOUT.md), поэтому в items она не попадает — раскладывается на:
+        #   - настоящие события (каждая новость -> отдельный ParsedItem);
+        #   - служебные поля (quality_levels/relevance_mode/...) -> metrics.
+        items: list[ParsedItem] = []
         promoted: list[ParsedItem] = []
-        for base in items:
-            news = base.extra.get('news') or []
-            if news:
-                base.extra['search_page'] = True
-            for entry in news:
-                if not isinstance(entry, dict):
-                    continue
-                ex_url = entry.get('ex_url', '')
-                ex_title = entry.get('ex_title', '') or base.title
-                ex_text = entry.get('ex_text')
-                if not ex_url:
-                    continue
-                promoted.append(
-                    ParsedItem(
-                        url=ex_url,
-                        title=ex_title,
-                        text=ex_text,
-                        published_at=None,
-                        region=None,
-                        media_name=base.media_name,
-                        extra={
-                            'news_source': 'adaptive_news',
-                            # Parent (search) page.
-                            'search_page_url': base.url,
-                        },
+        run_metrics: dict[str, Any] = {}
+        html_file_path: str | None = None
+
+        for raw_item in result.items:
+            extra = dict(raw_item.get('extra') or {})
+            # Ключ 'news' есть в extra ТОЛЬКО у служебной страницы поиска
+            # (_make_search_page_item в parser.py всегда его проставляет,
+            # даже пустым списком при нулевой выдаче) — проверяем именно
+            # наличие ключа, а не истинность списка. Раньше здесь стояло
+            # `if news:` (истинность после pop), из-за чего поиск с нулевой
+            # выдачей (news == []) не считался страницей поиска: ветка
+            # переноса метрик не срабатывала, и вся служебная диагностика
+            # (quality_levels/relevance_mode/...) утекала в meta/items
+            # вместо metrics — тот самый баг, который эта переработка
+            # должна была устранить.
+            is_search_page = 'news' in extra
+            news = extra.pop('news', None) or []
+
+            if is_search_page:
+                # Служебные метрики сбора относятся ко всей выгрузке, а не
+                # к конкретному событию — переносим в metrics (раздел
+                # ABOUT.md для служебных полей), а не оставляем в items.
+                for key in (
+                    'relevance_mode',
+                    'news_total',
+                    'relevance_filtered',
+                    'quality_levels',
+                    'file_saved',
+                ):
+                    if key in extra:
+                        run_metrics[key] = extra.pop(key)
+                if 'file_path' in extra:
+                    html_file_path = extra.pop('file_path')
+
+                base_media_name = raw_item.get('media_name')
+                for entry in news:
+                    if not isinstance(entry, dict):
+                        continue
+                    ex_url = entry.get('ex_url', '')
+                    if not ex_url:
+                        continue
+                    ex_title = entry.get('ex_title', '') or raw_item.get(
+                        'title', ''
                     )
+                    ex_text = entry.get('ex_text')
+                    promoted.append(
+                        ParsedItem(
+                            # Полный абсолютный URL события (иначе не
+                            # работает dedup_key и media_domain в BP-2).
+                            url=ex_url,
+                            title=ex_title,
+                            text=ex_text,
+                            published_at=None,
+                            region=None,
+                            media_name=base_media_name,
+                            # Временно пусто (по запросу) — диагностика
+                            # (ex_method/relevance/enrichment/...) писалась
+                            # сюда раньше, но признана неструктурированным
+                            # мусором. title/text уже несут ex_title/ex_text
+                            # как обязательные поля контракта — данные не
+                            # теряются.
+                            extra={},
+                        )
+                    )
+                # Служебная страница результатов поиска — не самостоятельное
+                # событие, в items не попадает (см. пояснение выше).
+                continue
+
+            items.append(
+                ParsedItem(
+                    url=raw_item.get('url', ''),
+                    title=raw_item.get('title', '') or raw_item.get('text', ''),
+                    text=raw_item.get('text'),
+                    published_at=raw_item.get('published_at'),
+                    region=raw_item.get('region'),
+                    media_name=raw_item.get('media_name'),
+                    extra=extra,
                 )
+            )
 
         items = items + promoted
+        if not items:
+            empty_reason = (
+                'all_items_filtered'
+                if run_metrics.get('news_total', 0) > 0
+                else 'no_extractable_items'
+            )
+        else:
+            empty_reason = None
 
         meta: dict[str, Any] = {
             'search_task_id': kwargs.get('search_task_id'),
@@ -131,9 +176,32 @@ class AdaptiveBridgeParser(BaseParser):
             'source_request_url': kwargs.get('source_request_url') or url,
             # Время съёма; в хэш НЕ включается, иначе всегда 'changed'.
             'fetched_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
+            'items_count': len(items),
+            'empty_reason': empty_reason,
         }
 
-        return ParsedResponse(meta=meta, items=items)
+        probed_url = kwargs.get('probed_url')
+        metrics: dict[str, Any] = {
+            # Информация о пробинге (URL после поиска; если None — fallback).
+            'probed_url': (
+                probed_url.search_url if probed_url is not None else None
+            ),
+            # Шаг 20 плана рефакторинга (T6): реально сработавшая стратегия
+            # и статус качества. Раньше терялись при конвертации
+            # AdaptiveParseResult -> ParsedResponse, из-за чего в отчёте
+            # прогона фигурировала лишь ПРЕДСКАЗАННАЯ стратегия
+            # (classification.recommended_strategy), а не фактическая.
+            'strategy_used': result.strategy_used.value,
+            'quality_status': result.status,
+            **run_metrics,
+        }
+
+        return ParsedResponse(
+            meta=meta,
+            items=items,
+            metrics=metrics,
+            html_file_path=html_file_path,
+        )
 
     def get_source_name(self) -> str:
         return self._source_name

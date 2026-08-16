@@ -20,6 +20,7 @@ from .integration.runner import AdaptiveRunner
 from .logger import get_logger
 from .processing.llm import AIAgent, LLMClient
 from .processing.parser import AdaptiveParser
+from .processing.relevance import RelevanceFilter
 from .schemas import (
     AdapterConfig,
     AdapterState,
@@ -33,6 +34,7 @@ from .schemas import (
     QualityGateLevel,
     QualityGateReport,
     QuarantineRecord,
+    RelevanceMode,
     SiteType,
     SourceClassification,
     SourceRegistrationResult,
@@ -75,6 +77,8 @@ __all__ = [
     'QualityGateLevel',
     'QualityGateReport',
     'QuarantineRecord',
+    'RelevanceFilter',
+    'RelevanceMode',
     'SiteType',
     'SourceClassification',
     'SourceClassifier',

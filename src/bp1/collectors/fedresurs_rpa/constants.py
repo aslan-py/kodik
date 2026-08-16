@@ -58,6 +58,10 @@ QRATOR_CHALLENGE_WAIT_MS = 25000
 QRATOR_POST_NAVIGATION_WAIT_MS = 3000
 QRATOR_LOGO_CLICK_WAIT_MS = 5000
 
+# Длина ИНН (валидация в utils.validate_inn)
+INN_LEGAL_ENTITY_LENGTH = 10
+INN_INDIVIDUAL_LENGTH = 12
+
 
 # Путь для сохранения HTML файлов (относительно пакета fedresurs_rpa)
 OUTPUT_DIR = str(

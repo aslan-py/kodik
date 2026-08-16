@@ -4,11 +4,14 @@
 - compute_sha256 — низкоуровневый SHA-256 от байтов
 - compute_content_hash — высокоуровневый: очищает HTML от динамических
   атрибутов (Angular _nghost-*, _ngcontent-*) и вычисляет хеш
+- compute_items_hash — хеш содержимого items для дедупликации по смыслу
+  (используется ContentHashDeduplicator, core/deduplication.py)
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 
 # Паттерны для удаления динамических данных из HTML перед хешированием.
@@ -59,3 +62,25 @@ def compute_content_hash(html_content: str) -> str:
     cleaned = _ANGULAR_ANIM_RE.sub('_ngcontent-_', cleaned)
     cleaned = _AUTOCOMPLETE_RE.sub('autocomplete=""', cleaned)
     return compute_sha256(cleaned.encode('utf-8'))
+
+
+def compute_items_hash(items: list[dict]) -> str:
+    """Вычислить SHA-256 хеш содержимого items для дедупликации по смыслу.
+
+    Хеш считается от канонического JSON (сортировка ключей) списка items —
+    два ``RawDataFile`` с одинаковым содержимым items, но разными случайными
+    ``raw_id``/``meta.fetched_at`` (``core/models.py``: ``raw_id`` — всегда
+    свежий UUID при конструировании), дают одинаковый хеш и распознаются
+    как дубликат содержимого. Тот же принцип — в ``calculate_content_hash()``
+    классического контура (``src/bp1/storage.py``): хеш только от items, не
+    от meta/file_path.
+
+    Args:
+        items: Список элементов данных как plain dict (например,
+            ``[item.model_dump() for item in raw_data_file.items]``).
+
+    Returns:
+        SHA-256 хеш в hex.
+    """
+    payload = json.dumps(items, ensure_ascii=False, sort_keys=True, default=str)
+    return compute_sha256(payload.encode('utf-8'))

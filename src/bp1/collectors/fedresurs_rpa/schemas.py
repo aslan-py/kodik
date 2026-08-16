@@ -64,11 +64,6 @@ class SearchResult(BaseModel):
     user_agent_used: str | None = None  # User-Agent для операции
 
     @property
-    def html_content(self) -> str | None:
-        """Обратная совместимость: html_content возвращает raw_text."""
-        return self.raw_text
-
-    @property
     def director_name(self) -> str | None:
         """Извлечь имя директора из extra (обратная совместимость)."""
         if not self.extra:

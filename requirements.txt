@@ -52,6 +52,12 @@ playwright>=1.40,<2.0     # браузерная автоматизация (RPA
 # ===== HTML Parsing =====
 beautifulsoup4>=4.12,<5.0 # парсинг HTML (BP-1 Adaptive: classifier/parser/llm)
 
+# ===== Main-content extraction (BP-1 Adaptive, Фича 2) =====
+# Детерминированное извлечение полного текста статьи вместо сниппета.
+# Опциональны: без них каскад деградирует к LLM/сниппету.
+trafilatura>=1.6,<3.0     # извлечение основного контента (preferred)
+readability-lxml>=0.8,<1.0  # fallback-экстрактор основного контента
+
 # ===== LLM & AI-краулинг (BP-1 Adaptive) =====
 openai>=1.0.0             # OpenAI SDK (llm.py: AsyncOpenAI)
 crawl4ai>=0.4.0           # AI-краулинг (engines.py: Crawl4AIStrategy)

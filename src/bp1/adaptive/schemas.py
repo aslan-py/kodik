@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -279,6 +279,27 @@ class SourceRegistrationResult(BaseModel):
     created: bool
     source_id: int | None = None
     classification: SourceClassification
+    # Результат проверки поискового эндпоинта при регистрации (Шаг 19
+    # плана рефакторинга): None — проверка не выполнялась или эндпоинт не
+    # ответил. Заполняется, когда register() вызван с probe_search=True.
+    search_probe: ProbedUrl | None = None
+
+
+class ProbedUrl(BaseModel):
+    """Результат пробинга поискового URL (SearchUrlProber).
+
+    Описывает найденный в ходе пробинга поисковый URL источника в форме,
+    пригодной для повторного использования без повторного пробинга: кэшируется
+    в Redis (TTL 7 дней).
+    """
+
+    source_name: str
+    search_url: str
+    search_method: Literal['GET', 'POST'] = 'GET'
+    search_params: dict[str, str] = Field(default_factory=dict)
+    result_count_selector: str | None = None
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    probed_at: datetime = Field(default_factory=_utcnow)
 
 
 # ============================================================================
@@ -294,6 +315,14 @@ class QualityGateLevel(StrEnum):
     BUSINESS = 'BUSINESS'
     VOLUME = 'VOLUME'
     CONSISTENCY = 'CONSISTENCY'
+
+
+class RelevanceMode(StrEnum):
+    """Режим фильтрации релевантности (Фича 1)."""
+
+    OFF = 'off'
+    FILTER = 'filter'
+    RANK = 'rank'
 
 
 class QualityGateReport(BaseModel):

@@ -5,6 +5,12 @@ AdaptiveRunner — единая точка входа для адаптивно�
 - 'adaptive': только адаптивный парсинг
 - 'hybrid': адаптивный + legacy fallback
 - 'fallback': adaptive → legacy → browser → wayback → HITL
+
+Класс собран из двух подмешиваемых наборов методов (см. ``probing.py`` —
+резолвинг поискового URL, ``batch.py`` — пакетный/конкурентный запуск),
+чтобы одна логическая сущность ``AdaptiveRunner`` не жила в одном файле
+на 1000+ строк — методы каждой зоны ответственности при этом остаются
+обычными методами `self.*`, без изменения публичного API.
 """
 
 from __future__ import annotations
@@ -15,25 +21,68 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config import settings
-from src.bp1.models import Source
 from src.bp1.storage import RawDataService
 from src.bp1.tasks import get_search_task_config
 
-from ..core.cache import UnifiedCache
-from ..core.quality import DataQualityGate
-from ..schemas import PipelineReport, PipelineStage, UnifiedConfig
-from ..strategies.classifier import SourceClassifier
-from .bridge import AdaptiveBridgeParser
-from .sources import SearchParamResolver, build_search_url, extract_host
+from ...core.cache import UnifiedCache
+from ...core.quality import DataQualityGate
+from ...schemas import (
+    PipelineReport,
+    PipelineStage,
+    SourceClassification,
+    UnifiedConfig,
+)
+from ...strategies.classifier import SourceClassifier
+from ..bridge import AdaptiveBridgeParser
+from ..search_probe import SearchUrlProber
+from ..sources import SearchParamResolver, build_search_url, extract_host
+from .batch import _BatchMixin
+from .probing import _ProbingMixin
 
 logger = logging.getLogger(__name__)
 
 
-class AdaptiveRunner:
+def _collect_quality_levels(response: Any) -> dict[str, Any]:
+    """Достаёт сводку уровней Quality Gate из ответа парсера.
+
+    Уровни кладёт ``AdaptiveBridgeParser`` в ``response.metrics``
+    (см. ``ParsedMetrics`` в ``base_parser.py``, Шаг 20 плана рефакторинга,
+    T6). Возвращает пустой словарь, если парсер их не проставил
+    (специализированные RPA-адаптеры вроде fedresurs не проходят через
+    ``DataQualityGate``).
+    """
+    metrics = getattr(response, 'metrics', None)
+    levels = getattr(metrics, 'quality_levels', None)
+    return levels or {}
+
+
+def check_strategy_chain(orchestrator: Any) -> dict[str, bool]:
+    """Проверяет, какие стратегии деградации реально доступны.
+
+    ``Crawl4AIStrategy``/``StealthStrategy``/``BrowserStrategy`` зависят от
+    опциональных пакетов (``crawl4ai``, ``playwright``). Если пакет не
+    установлен, стратегия молча падает в рантайме и эффективная цепочка
+    деградации короче ожидаемой — раньше это никак не было видно (T6:
+    «нет наблюдаемости за тихой деградацией цепочки»).
+
+    Returns:
+        ``{имя стратегии: доступна ли}`` — импорт проверяется без запуска
+        браузера, поэтому вызов дешёвый.
+    """
+    import importlib.util
+
+    availability = {
+        'crawl4ai': importlib.util.find_spec('crawl4ai') is not None,
+        'playwright': importlib.util.find_spec('playwright') is not None,
+    }
+    registered = getattr(orchestrator, '_strategies', {}) or {}
+    availability['registered_count'] = len(registered)
+    return availability
+
+
+class AdaptiveRunner(_ProbingMixin, _BatchMixin):
     """
     Единая точка входа для адаптивного сбора данных.
 
@@ -50,6 +99,7 @@ class AdaptiveRunner:
         quality_gate_enabled: bool = True,
         cache_profiles: bool = True,
         max_concurrent: int = 5,
+        use_probing: bool = True,
     ):
         self.mode = mode
         self.headless = headless
@@ -57,6 +107,7 @@ class AdaptiveRunner:
         self.quality_gate_enabled = quality_gate_enabled
         self.cache_profiles = cache_profiles
         self.max_concurrent = max_concurrent
+        self.use_probing = use_probing
 
         # Единая конфигурация пайплайна (UnifiedConfig).
         self.config = UnifiedConfig(
@@ -74,6 +125,21 @@ class AdaptiveRunner:
         self._classifier = SourceClassifier()
         self._search_param_resolver = SearchParamResolver()
         self._logger = logging.getLogger(__name__)
+        # Фабрика сессий для конкурентного режима run_all (Шаг 17 плана
+        # рефакторинга): каждая параллельная задача работает со СВОЕЙ
+        # сессией — ``AsyncSession`` нельзя использовать одновременно из
+        # нескольких корутин (asyncpg: "another operation is in progress").
+        # Подменяется в тестах, чтобы не требовать живую БД.
+        self._session_factory: Any = None
+        # Пробинг поискового URL: по умолчанию включён. Fetch-функция
+        # подключается реальным HTTP-загрузчиком по умолчанию (чтобы пробинг
+        # не падал на заглушке NotImplementedError), но может быть заменена
+        # через bind_probe_fetch на любой другой загрузчик (браузер/httpx).
+        self._prober = SearchUrlProber(
+            fetch=self._default_probe_fetch,
+            looks_like_search_results=self._default_looks_like,
+            post=self._default_probe_post,
+        )
 
     def _bind_redis(self, redis_client: Any) -> None:
         """Привязывает Redis-клиент к кэшу для хранения классификаций."""
@@ -125,6 +191,92 @@ class AdaptiveRunner:
             )
             return None
 
+    @staticmethod
+    def _check_task_active(
+        config: dict[str, Any], task_id: int
+    ) -> dict[str, Any] | None:
+        """Возвращает результат-пропуск, если задача, её источник или
+        конкурент неактивны, иначе ``None`` (можно продолжать ``run_task``).
+
+        Флаг ``is_active`` у SearchTask может быть True, но если сам
+        источник или конкурент выключены (is_active=False), задачу
+        пропускаем — адаптивный парсинг ведётся только по активным source
+        и competitor.
+        """
+        if not config['is_active']:
+            return {'status': 'skipped', 'reason': 'inactive'}
+        if not config.get('source_is_active', True):
+            return {
+                'status': 'skipped',
+                'reason': 'source_inactive',
+                'search_task_id': task_id,
+            }
+        if not config.get('competitor_is_active', True):
+            return {
+                'status': 'skipped',
+                'reason': 'competitor_inactive',
+                'search_task_id': task_id,
+            }
+        return None
+
+    async def _resolve_classification(
+        self, source_name: str
+    ) -> SourceClassification:
+        """Классифицирует источник с кэшированием в Redis."""
+        classification = await self._cache.get_classification(source_name)
+        if classification is None:
+            classification = await self._classifier.classify(
+                source_name=source_name,
+                source_url=source_name,
+            )
+            await self._cache.set_classification(source_name, classification)
+        else:
+            self._logger.info(
+                'Классификация источника %s взята из кэша (стратегия=%s)',
+                source_name,
+                classification.recommended_strategy,
+            )
+        return classification
+
+    async def _execute_parse(
+        self,
+        source_name: str,
+        url: str,
+        competitor: str,
+        trigger: str,
+        competitor_inn: str | None,
+        parse_kwargs: dict[str, Any],
+    ) -> Any:
+        """Выбирает специализированный RPA-парсер или универсальный
+        адаптивный (``_get_parser_for_source``) и выполняет парсинг.
+        """
+        parser = self._get_parser_for_source(source_name)
+        if parser is not None:
+            # Специализированный RPA-адаптер (fedresurs.ru и др.).
+            # Такой парсер ожидает базовый URL источника, а не URL
+            # поиска (например, FedresursAdapter принимает
+            # 'https://fedresurs.ru').
+            parser_url = f'https://{extract_host(source_name)}'
+            if competitor_inn:
+                parse_kwargs['inn'] = competitor_inn
+                parse_kwargs['name'] = competitor
+            elif trigger and trigger.isdigit() and len(trigger) in (10, 12):
+                parse_kwargs['inn'] = trigger
+                parse_kwargs['name'] = competitor
+            else:
+                parse_kwargs['name'] = trigger or competitor
+            return await parser.parse(parser_url, **parse_kwargs)
+
+        # Универсальный адаптивный парсер. Передаём реальное имя
+        # источника (hostname), чтобы адаптер/классификация/профиль
+        # кэшировались именно под этим источником, а не под общим
+        # именем 'adaptive'.
+        return await self._parser.parse(
+            url,
+            source_name=source_name,
+            **parse_kwargs,
+        )
+
     async def run_task(
         self,
         task_id: int,
@@ -170,46 +322,19 @@ class AdaptiveRunner:
         # 1. Получаем конфигурацию задачи.
         config = await get_search_task_config(task_id, session)
 
-        if not config['is_active']:
-            return {'status': 'skipped', 'reason': 'inactive'}
+        skip = self._check_task_active(config, task_id)
+        if skip is not None:
+            return skip
 
         source_name = config['source']
         competitor = config['competitor']
         trigger = config['trigger']
         competitor_inn = config['competitor_inn']
 
-        # Адаптивный парсинг ведётся только по активным source и competitor.
-        # Флаг is_active у SearchTask может быть True, но если сам источник
-        # или конкурент выключены (is_active=False), задачу пропускаем.
-        if not config.get('source_is_active', True):
-            return {
-                'status': 'skipped',
-                'reason': 'source_inactive',
-                'search_task_id': task_id,
-            }
-        if not config.get('competitor_is_active', True):
-            return {
-                'status': 'skipped',
-                'reason': 'competitor_inactive',
-                'search_task_id': task_id,
-            }
-
         # 2. Классифицируем источник (с кэшированием в Redis).
         self._bind_redis(redis_client)
         self._parser.bind_redis(redis_client)
-        classification = await self._cache.get_classification(source_name)
-        if classification is None:
-            classification = await self._classifier.classify(
-                source_name=source_name,
-                source_url=source_name,
-            )
-            await self._cache.set_classification(source_name, classification)
-        else:
-            self._logger.info(
-                'Классификация источника %s взята из кэша (стратегия=%s)',
-                source_name,
-                classification.recommended_strategy,
-            )
+        classification = await self._resolve_classification(source_name)
         _add_stage(
             'classify',
             detail={'strategy': classification.recommended_strategy},
@@ -291,43 +416,47 @@ class AdaptiveRunner:
             'source_request_url': source_request_url,
         }
 
+        # 3.2. Пробинг поискового URL: кэш → пробинг → fallback.
+        #      Итоговый ``url`` (для парсинга) и ``probed`` (для метаданных
+        #      и повторного кэширования) получаем до вызова парсера.
+        url, probed = await self._get_or_probe_url(
+            source_name=source_name,
+            search_param=search_param,
+            target_name=competitor or trigger or '',
+            redis_client=redis_client,
+        )
+        if probed is not None:
+            parse_kwargs['probed_url'] = probed
+        # В meta сохраняется исходный (не пробованный) URL задачи, чтобы
+        # source_request_url не менялся от того, что кэш нагрелся.
+
         # 4. Выполняем парсинг.
         #    Для источников с готовым RPA-адаптером (fedresurs.ru и др.)
         #    используем специализированный парсер из ParserFactory, который
         #    применяет полноценный RPA-сценарий (обход QRATOR, поиск по ИНН,
-        #    открытие карточки компании). Иначе — универсальный адаптивный.
+        #    открытие карточки компании). Иначе — универсальный адаптивный
+        #    (см. ``_execute_parse``).
         try:
-            parser = self._get_parser_for_source(source_name)
-            if parser is not None:
-                # Специализированный RPA-адаптер (fedresurs.ru и др.).
-                # Такой парсер ожидает базовый URL источника, а не URL
-                # поиска (например, FedresursAdapter принимает
-                # 'https://fedresurs.ru').
-                parser_url = f'https://{extract_host(source_name)}'
-                if competitor_inn:
-                    parse_kwargs['inn'] = competitor_inn
-                    parse_kwargs['name'] = competitor
-                elif trigger and trigger.isdigit() and len(trigger) in (10, 12):
-                    parse_kwargs['inn'] = trigger
-                    parse_kwargs['name'] = competitor
-                else:
-                    parse_kwargs['name'] = trigger or competitor
-                response = await parser.parse(parser_url, **parse_kwargs)
-            else:
-                # Универсальный адаптивный парсер. Передаём реальное имя
-                # источника (hostname), чтобы адаптер/классификация/профиль
-                # кэшировались именно под этим источником, а не под общим
-                # именем 'adaptive'.
-                response = await self._parser.parse(
-                    url,
-                    source_name=source_name,
-                    **parse_kwargs,
-                )
+            response = await self._execute_parse(
+                source_name,
+                url,
+                competitor,
+                trigger,
+                competitor_inn,
+                parse_kwargs,
+            )
+            # Шаг 20 плана рефакторинга (T6): реально сработавшая стратегия
+            # и уровни Quality Gate. ``getattr(response, 'strategy_used')``
+            # здесь всегда давал None — у ParsedResponse такого поля нет,
+            # оно приходит в metrics (см. bridge.py/ParsedMetrics).
+            metrics = getattr(response, 'metrics', None)
             _add_stage(
                 'parse',
                 detail={
                     'items': len(response.items),
-                    'strategy': getattr(response, 'strategy_used', None),
+                    'strategy': getattr(metrics, 'strategy_used', None),
+                    'quality_status': getattr(metrics, 'quality_status', None),
+                    'quality_levels': _collect_quality_levels(response),
                 },
             )
             # Источник успешно спарсен — снимаем временную блокировку и
@@ -359,9 +488,7 @@ class AdaptiveRunner:
         #    (хэширование, дедупликация по Redis, HTML/JSON на диск, RawItem).
         service = RawDataService(session, redis_client)
         data_dict = response.model_dump()
-        html_source_path = None
-        if response.items and response.items[0].extra.get('file_path'):
-            html_source_path = response.items[0].extra['file_path']
+        html_source_path = getattr(response, 'html_file_path', None)
 
         persisted = await service.persist(
             search_task_id=task_id,
@@ -384,199 +511,18 @@ class AdaptiveRunner:
         report.total_duration_ms = int((time.monotonic() - report_start) * 1000)
         report.overall_status = 'ok'
 
-        persisted['strategy'] = classification.recommended_strategy
+        # Шаг 20 плана рефакторинга (T6): в сводку идёт РЕАЛЬНО сработавшая
+        # стратегия. Раньше сюда попадала classification.recommended_strategy
+        # — предсказание до попытки, из-за чего разбивка по стратегиям в
+        # отчётах показывала намерение, а не факт.
+        metrics = getattr(response, 'metrics', None)
+        persisted['strategy'] = (
+            getattr(metrics, 'strategy_used', None)
+            or classification.recommended_strategy
+        )
+        persisted['strategy_recommended'] = classification.recommended_strategy
+        persisted['quality_status'] = getattr(metrics, 'quality_status', None)
+        persisted['quality_levels'] = _collect_quality_levels(response)
+        persisted['source'] = source_name
         persisted['pipeline_report'] = report.model_dump(mode='json')
         return persisted
-
-    async def _record_source_failure(
-        self,
-        source_name: str,
-        session: AsyncSession,
-    ) -> None:
-        """Зафиксировать полный отказ источника (all strategies failed).
-
-        Двухуровневая логика (фича 1+2 circuit breaker):
-
-        1. Блокируем источник в Redis на TTL circuit breaker (временная
-           блокировка, чтобы не тратить ресурсы на повторные попытки).
-        2. Инкрементируем счётчик подряд идущих отказов. Если он достиг
-           ``settings.source_disable_threshold`` — отключаем ``Source``
-           в БД (``is_active=False``) и сбрасываем счётчик.
-        """
-        ttl = settings.source_circuit_ttl_seconds
-        threshold = settings.source_disable_threshold
-
-        await self._cache.block_source(source_name, ttl=ttl)
-
-        fail_count = await self._cache.increment_fail_count(source_name)
-        self._logger.warning(
-            'Источник %s недоступен, попытка отказа %d/%d (blocked %ss)',
-            source_name,
-            fail_count,
-            threshold,
-            ttl,
-        )
-
-        if fail_count >= threshold:
-            stmt = select(Source).where(Source.name == source_name)
-            source = (await session.execute(stmt)).scalar_one_or_none()
-            if source is not None and source.is_active:
-                source.is_active = False
-                await session.commit()
-                self._logger.warning(
-                    'Источник %s отключён в БД (is_active=False) после '
-                    '%d подряд отказов',
-                    source_name,
-                    fail_count,
-                )
-            await self._cache.reset_fail_count(source_name)
-
-    async def run_all(
-        self,
-        session: AsyncSession,
-        redis_client: Any,
-        task_ids: list[int] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Запустить все активные задачи.
-
-        Учитываются флаги активности трёх уровней: сама SearchTask, её
-        Source и Competitor. Если любой из них выключен (is_active=False),
-        задача пропускается — адаптивный поиск ведётся только по активным
-        источникам и конкурентам.
-        """
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from src.bp1.models import SearchTask
-
-        if task_ids:
-            stmt = (
-                select(SearchTask)
-                .where(SearchTask.id.in_(task_ids))
-                .options(
-                    selectinload(SearchTask.source),
-                    selectinload(SearchTask.competitor),
-                )
-            )
-        else:
-            stmt = (
-                select(SearchTask)
-                .where(SearchTask.is_active.is_(True))
-                .options(
-                    selectinload(SearchTask.source),
-                    selectinload(SearchTask.competitor),
-                )
-            )
-
-        result = await session.execute(stmt)
-        tasks = result.scalars().all()
-
-        results: list[dict[str, Any]] = []
-        for task in tasks:
-            if not task.source.is_active or not task.competitor.is_active:
-                results.append(
-                    {
-                        'status': 'skipped',
-                        'search_task_id': task.id,
-                        'reason': (
-                            'source_inactive'
-                            if not task.source.is_active
-                            else 'competitor_inactive'
-                        ),
-                    }
-                )
-                continue
-            results.append(await self.run_task(task.id, session, redis_client))
-        return results
-
-    async def run_source_competitor(
-        self,
-        source: str,
-        competitor: str,
-        session: AsyncSession,
-        redis_client: Any,
-    ) -> dict[str, Any]:
-        """Выполнить сбор для конкретной пары источник + конкурент.
-
-        В отличие от run_all (который берёт все активные задачи из БД),
-        этот метод строит отдельный запрос к БД по конкретному источнику
-        и конкуренту:
-        1. Находит или создаёт Source (по нормализованному имени).
-        2. Находит или создаёт Competitor.
-        3. Находит или создаёт SearchTask (связку без триггера).
-        4. Запускает run_task для этой задачи.
-        """
-        from src.bp1.models import Competitor, SearchTask, Source
-
-        from .sources import SourceRegistrationService, normalize_source_url
-
-        self._bind_redis(redis_client)
-
-        # 1. Источник: ищем по нормализованному имени, иначе регистрируем.
-        source_name = normalize_source_url(source)
-        src_stmt = select(Source).where(Source.name == source_name)
-        src = (await session.execute(src_stmt)).scalar_one_or_none()
-        if src is None:
-            reg = await SourceRegistrationService(
-                session, redis_client=redis_client
-            ).register(source)
-            src_id = reg.source_id
-            self._logger.info(
-                'Источник %s зарегистрирован (source_id=%s)',
-                source_name,
-                src_id,
-            )
-        else:
-            src_id = src.id
-            # Адаптивный поиск ведётся только по активным источникам.
-            if not src.is_active:
-                return {
-                    'status': 'skipped',
-                    'reason': 'source_inactive',
-                    'source': source_name,
-                }
-
-        # 2. Конкурент: ищем по имени, иначе создаём.
-        comp_stmt = select(Competitor).where(Competitor.name == competitor)
-        comp = (await session.execute(comp_stmt)).scalar_one_or_none()
-        if comp is None:
-            comp = Competitor(name=competitor)
-            session.add(comp)
-            await session.flush()
-            self._logger.info(
-                'Конкурент %s создан (id=%s)', competitor, comp.id
-            )
-        else:
-            # Адаптивный поиск ведётся только по активным конкурентам.
-            if not comp.is_active:
-                return {
-                    'status': 'skipped',
-                    'reason': 'competitor_inactive',
-                    'competitor': competitor,
-                }
-
-        # 3. SearchTask: ищем существующую связку без триггера, иначе создаём.
-        task_stmt = select(SearchTask).where(
-            SearchTask.source_id == src_id,
-            SearchTask.competitor_id == comp.id,
-            SearchTask.trigger_id.is_(None),
-        )
-        task = (await session.execute(task_stmt)).scalar_one_or_none()
-        if task is None:
-            task = SearchTask(
-                source_id=src_id,
-                competitor_id=comp.id,
-                trigger_id=None,
-                is_active=True,
-            )
-            session.add(task)
-            await session.flush()
-            self._logger.info(
-                'Задача создана (search_task_id=%s) для source=%s',
-                task.id,
-                source_name,
-            )
-        await session.commit()
-
-        # 4. Запускаем сбор.
-        return await self.run_task(task.id, session, redis_client)

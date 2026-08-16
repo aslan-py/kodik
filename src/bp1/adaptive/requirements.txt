@@ -19,6 +19,11 @@ openai>=1.0.0             # OpenAI SDK (llm.py: AsyncOpenAI)
 # Без неё BROWSER-стратегия (orchestrator.py) падает при старте браузера.
 playwright>=1.40,<2.0     # браузерная автоматизация (BROWSER/STEALTH-стратегии)
 
+# ===== Main-content extraction (Фича 2: полный текст вместо сниппета) =====
+# Опциональны: без них каскад деградирует к LLM/сниппету.
+trafilatura>=1.6,<3.0     # детерминированное извлечение основного контента
+readability-lxml>=0.8,<1.0  # fallback-экстрактор основного контента
+
 # ===== ORM / Database =====
 sqlalchemy>=2.0,<3.0      # AsyncSession (runner.py, cli.py)
 

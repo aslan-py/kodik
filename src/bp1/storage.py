@@ -209,6 +209,7 @@ class RawDataService:
 
     async def save_raw_item(
         self,
+        *,
         search_task_id: int,
         data: dict[str, Any],
         content_hash: str,

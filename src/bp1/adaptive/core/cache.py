@@ -13,11 +13,11 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from core.config import settings
 
-from ..schemas import AdapterState, SourceClassification
+from ..hostname import try_extract_host
+from ..schemas import AdapterState, ProbedUrl, SourceClassification
 
 # TTL адаптера по умолчанию — 7 дней (в секундах).
 ADAPTER_TTL_SECONDS = settings.bp1_adapter_ttl_seconds
@@ -28,6 +28,16 @@ CLASSIFICATION_TTL_SECONDS = settings.bp1_classification_ttl_seconds
 # TTL кэша полного текста статьи по умолчанию — 7 дней (в секундах).
 ARTICLE_TEXT_TTL_SECONDS = settings.bp1_article_text_ttl_seconds
 
+# TTL кэша пробинга поискового URL по умолчанию — 7 дней (в секундах).
+PROBED_URL_TTL_SECONDS = settings.bp1_probed_url_ttl_seconds
+
+# Версия схемы кэша полного текста статьи. Меняется при несовместимых
+# изменениях каскада извлечения (adaptive/processing/parser.py) или формата
+# хранимой записи — включена в ключ кэша (``_article_text_path``), чтобы
+# записи, посчитанные по старой логике/схеме, естественно "осиротели" и не
+# использовались новым кодом (без ручной миграции файлов на диске).
+ARTICLE_TEXT_CACHE_VERSION = 2
+
 
 def _canonical_source_name(source_name: str) -> str:
     """Приводит имя источника к каноническому hostname в нижнем регистре.
@@ -36,26 +46,15 @@ def _canonical_source_name(source_name: str) -> str:
     голый домен (``lenta.ru``) или с ``www``. Чтобы адаптер, классификация и
     профиль находились независимо от формы ввода, ключ приводится к единому
     hostname. Если значение не похоже на корректный источник/URL — возвращается
-    исходная строка без изменений (fallback).
+    исходная строка без изменений (fallback: ключ кэша не должен ронять
+    пайплайн на невалидном вводе).
 
-    Логика продублирована из ``integration.sources.extract_host`` намеренно,
-    чтобы избежать циклического импорта (``sources`` импортирует ``cache``).
+    Разбор hostname — общий с ``integration.sources.extract_host``
+    (``adaptive.hostname.try_extract_host``); здесь остаётся только
+    контракт «не бросать исключение, а откатиться на исходную строку».
     """
-    value = (source_name or '').strip()
-    if not value or any(ch.isspace() for ch in value):
-        return source_name
-    try:
-        host = urlsplit(
-            value if '://' in value else f'https://{value}'
-        ).hostname
-        if not host:
-            return source_name
-    except Exception:
-        return source_name
-    host = host.lower()
-    if host.startswith('www.'):
-        host = host[4:]
-    return host
+    host = try_extract_host(source_name)
+    return host if host is not None else source_name
 
 
 class UnifiedCache:
@@ -166,6 +165,89 @@ class UnifiedCache:
         await self.redis.delete(self._classification_key(source_name))
 
     # ========================================================================
+    # Пробинг поискового URL (Redis)
+    # ========================================================================
+
+    def _probed_url_key(self, source_name: str) -> str:
+        return f'bp1:probed_url:{_canonical_source_name(source_name)}'
+
+    def _probed_url_key_for_query(
+        self, source_name: str, search_param: str
+    ) -> str:
+        """Составной ключ кэша probed URL: источник + хэш поискового запроса.
+
+        Ключ привязывает закэшированный probed URL к конкретному поисковому
+        параметру конкурента. Без этого ``bp1:probed_url:{host}``
+        перезаписывался бы последней задачей на источнике, и для другого
+        конкурента на том же источнике использовался бы чужой URL (нужно
+        было искать заново).
+        """
+        digest = hashlib.md5(search_param.encode('utf-8')).hexdigest()[:12]
+        return f'bp1:probed_url:{_canonical_source_name(source_name)}:{digest}'
+
+    async def get_probed_url(
+        self, source_name: str, search_param: str | None = None
+    ) -> ProbedUrl | None:
+        """Получить закэшированный probed URL источника из Redis.
+
+        Если передан ``search_param`` — ищем по составному ключу
+        (источник + хэш запроса), чтобы у разных конкурентов на одном
+        источнике были независимые записи. Иначе — по ключу только источника
+        (обратная совместимость).
+
+        Возвращает ``None``, если ключа нет или значение повреждено.
+        """
+        if self.redis is None:
+            return None
+        key = (
+            self._probed_url_key_for_query(source_name, search_param)
+            if search_param is not None
+            else self._probed_url_key(source_name)
+        )
+        raw = await self.redis.get(key)
+        if not raw:
+            return None
+        try:
+            return ProbedUrl.model_validate_json(raw)
+        except Exception:
+            return None
+
+    async def set_probed_url(
+        self,
+        source_name: str,
+        probed: ProbedUrl,
+        ttl: int = PROBED_URL_TTL_SECONDS,
+        search_param: str | None = None,
+    ) -> None:
+        """Сохранить probed URL источника в Redis (TTL 7 дней).
+
+        Если передан ``search_param`` — пишем по составному ключу
+        (источник + хэш запроса), иначе — по ключу только источника
+        (обратная совместимость).
+        """
+        if self.redis is None:
+            return
+        key = (
+            self._probed_url_key_for_query(source_name, search_param)
+            if search_param is not None
+            else self._probed_url_key(source_name)
+        )
+        await self.redis.set(key, probed.model_dump_json(), ex=ttl)
+
+    async def clear_probed_url(
+        self, source_name: str, search_param: str | None = None
+    ) -> None:
+        """Удалить probed URL источника из Redis."""
+        if self.redis is None:
+            return
+        key = (
+            self._probed_url_key_for_query(source_name, search_param)
+            if search_param is not None
+            else self._probed_url_key(source_name)
+        )
+        await self.redis.delete(key)
+
+    # ========================================================================
     # Профили браузеров (диск)
     # ========================================================================
 
@@ -223,34 +305,51 @@ class UnifiedCache:
     # ========================================================================
 
     def _article_text_path(self, url: str) -> Path:
-        digest = hashlib.md5(url.encode('utf-8')).hexdigest()
+        digest = hashlib.md5(
+            f'{ARTICLE_TEXT_CACHE_VERSION}:{url}'.encode()
+        ).hexdigest()
         return self._snapshots_dir / f'article_{digest}.json'
 
     async def get_article_text(self, url: str) -> dict | None:
-        """Получить кэшированный полный текст статьи (``{"text", "method"}``).
+        """Получить кэшированный полный текст статьи.
 
-        Возвращает ``None``, если кэш пуст или файл повреждён.
+        Возвращает ``{"text", "method", "length", "complete",
+        "possibly_incomplete"}`` или ``None``, если кэш пуст, файл повреждён,
+        либо запись не содержит поля ``complete`` — такая запись считается
+        структурно устаревшей (несмотря на версионирование ключа, это
+        дополнительная защита от случайного использования записи старого
+        формата) и трактуется как промах кэша.
         """
         path = self._article_text_path(url)
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding='utf-8'))
+            data = json.loads(path.read_text(encoding='utf-8'))
         except Exception:
             return None
+        if 'complete' not in data:
+            return None
+        data['possibly_incomplete'] = not data.get('complete', False)
+        return data
 
     async def set_article_text(
         self,
         url: str,
         text: str,
         method: str,
+        possibly_incomplete: bool = False,
         ttl: int = ARTICLE_TEXT_TTL_SECONDS,
     ) -> None:
         """Сохранить полный текст статьи в кэш по ``url``."""
         path = self._article_text_path(url)
         path.write_text(
             json.dumps(
-                {'text': text, 'method': method},
+                {
+                    'text': text,
+                    'method': method,
+                    'length': len(text),
+                    'complete': not possibly_incomplete,
+                },
                 ensure_ascii=False,
             ),
             encoding='utf-8',

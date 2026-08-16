@@ -11,12 +11,15 @@ from src.bp1.adaptive.integration.sources import (
     extract_host,
     normalize_source_url,
 )
-from src.bp1.adaptive.schemas import SourceClassification, SourceType
+from src.bp1.adaptive.schemas import (
+    ProbedUrl,
+    SourceClassification,
+    SourceType,
+)
 from src.bp1.models import Source
 
 from .constants import (
     COMPETITOR_INN,
-    REDIS_CLASSIFICATION_KEY,
     SEARCH_QUERY,
     SEARCH_URL,
     SEARCH_URL_FEDRESURS_INN,
@@ -34,8 +37,12 @@ from .constants import (
     SRC_LENTA_NORMALIZED,
     SRC_LENTA_UPPER,
     SRC_LENTA_WWW,
+    SRC_TEST_NEWS_HOST,
+    SRC_TEST_NEWS_NORMALIZED,
+    SRC_TEST_NEWS_URL,
     SRC_WHITESPACE,
     SRC_ZH,
+    TEST_NEWS_REDIS_CLASSIFICATION_KEY,
 )
 
 
@@ -242,24 +249,24 @@ async def test_register_creates_source(session):
     fake_redis = _FakeRedis()
     service = SourceRegistrationService(session, redis_client=fake_redis)
 
-    result = await service.register(SRC_LENTA_NEWS, fake_redis)
+    result = await service.register(SRC_TEST_NEWS_URL, fake_redis)
 
     assert result.created is True
-    assert result.source_name == SRC_LENTA_NORMALIZED
-    assert result.host == SRC_LENTA_HOST
+    assert result.source_name == SRC_TEST_NEWS_NORMALIZED
+    assert result.host == SRC_TEST_NEWS_HOST
     assert result.classification.source_type == SourceType.NEWS
 
     # В БД появилась запись Source.
     source = (
         await session.execute(
-            select(Source).where(Source.name == SRC_LENTA_NORMALIZED)
+            select(Source).where(Source.name == SRC_TEST_NEWS_NORMALIZED)
         )
     ).scalar_one_or_none()
     assert source is not None
     assert source.id == result.source_id
 
     # В Redis появился ключ классификации.
-    assert fake_redis._store.get(REDIS_CLASSIFICATION_KEY) is not None
+    assert fake_redis._store.get(TEST_NEWS_REDIS_CLASSIFICATION_KEY) is not None
 
 
 @pytest.mark.asyncio
@@ -268,8 +275,8 @@ async def test_register_is_idempotent(session):
     fake_redis = _FakeRedis()
     service = SourceRegistrationService(session, redis_client=fake_redis)
 
-    first = await service.register(SRC_LENTA_NORMALIZED, fake_redis)
-    second = await service.register(SRC_LENTA_NEWS, fake_redis)
+    first = await service.register(SRC_TEST_NEWS_NORMALIZED, fake_redis)
+    second = await service.register(SRC_TEST_NEWS_URL, fake_redis)
 
     assert first.created is True
     assert second.created is False
@@ -277,7 +284,134 @@ async def test_register_is_idempotent(session):
 
     count = (
         await session.execute(
-            select(Source).where(Source.name == SRC_LENTA_NORMALIZED)
+            select(Source).where(Source.name == SRC_TEST_NEWS_NORMALIZED)
         )
     ).scalar_one_or_none()
     assert count is not None
+
+
+# ============================================================================
+# Шаг 19: проверка поискового эндпоинта при регистрации источника
+# ============================================================================
+
+
+class _FakeSession:
+    """Заглушка AsyncSession: источник всегда "новый"."""
+
+    def __init__(self):
+        self.added: list = []
+
+    async def execute(self, stmt):
+        class _Result:
+            @staticmethod
+            def scalar_one_or_none():
+                return None
+
+        return _Result()
+
+    def add(self, obj):
+        obj.id = 42
+        self.added.append(obj)
+
+    async def flush(self):
+        return None
+
+
+class _FakeProber:
+    """Заглушка SearchUrlProber: возвращает заранее заданный ProbedUrl."""
+
+    def __init__(self, probed=None, error: Exception | None = None):
+        self._probed = probed
+        self._error = error
+        self.calls: list[dict] = []
+
+    async def probe_async(self, base_url, search_query, **kwargs):
+        self.calls.append(
+            {'base_url': base_url, 'search_query': search_query, **kwargs}
+        )
+        if self._error is not None:
+            raise self._error
+        return self._probed
+
+
+def _probed(param: str = 'q') -> ProbedUrl:
+    return ProbedUrl(
+        source_name='lenta.ru',
+        search_url=f'https://lenta.ru/search?{param}=lenta',
+        search_method='GET',
+        search_params={param: 'lenta'},
+        confidence=1.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_register_without_probe_does_not_touch_network():
+    """probe_search выключен по умолчанию: проубер не вызывается."""
+    prober = _FakeProber(probed=_probed())
+    service = SourceRegistrationService(
+        _FakeSession(), redis_client=_FakeRedis(), prober=prober
+    )
+
+    result = await service.register(SRC_LENTA_NEWS)
+
+    assert prober.calls == []
+    assert result.search_probe is None
+
+
+@pytest.mark.asyncio
+async def test_register_with_probe_caches_source_level_url():
+    """probe_search=True: эндпоинт проверен, результат в кэше источника."""
+    fake_redis = _FakeRedis()
+    prober = _FakeProber(probed=_probed('text'))
+    service = SourceRegistrationService(
+        _FakeSession(), redis_client=fake_redis, prober=prober
+    )
+
+    result = await service.register(SRC_LENTA_NEWS, probe_search=True)
+
+    assert result.search_probe is not None
+    assert result.search_probe.search_params == {'text': 'lenta'}
+    # Проубер вызван без target_name (конкурента на этом этапе нет).
+    assert prober.calls[0]['target_name'] == ''
+    # Запись легла в source-level ключ (без хэша поискового запроса).
+    assert fake_redis._store.get('bp1:probed_url:lenta.ru') is not None
+
+
+@pytest.mark.asyncio
+async def test_register_probe_failure_does_not_break_registration():
+    """Сбой проверки эндпоинта не срывает регистрацию источника."""
+    prober = _FakeProber(error=RuntimeError('network down'))
+    service = SourceRegistrationService(
+        _FakeSession(), redis_client=_FakeRedis(), prober=prober
+    )
+
+    result = await service.register(SRC_LENTA_NEWS, probe_search=True)
+
+    assert result.created is True
+    assert result.search_probe is None
+
+
+@pytest.mark.asyncio
+async def test_runner_reuses_registration_param_as_hint():
+    """AdaptiveRunner берёт имя параметра из записи регистрации."""
+    from src.bp1.adaptive.integration.runner import AdaptiveRunner
+
+    fake_redis = _FakeRedis()
+    runner = AdaptiveRunner()
+    runner._cache.redis = fake_redis
+    await runner._cache.set_probed_url('lenta.ru', _probed('text'))
+
+    param = await runner._preferred_param_from_registration('lenta.ru')
+
+    assert param == 'text'
+
+
+@pytest.mark.asyncio
+async def test_runner_param_hint_absent_without_registration():
+    """Без записи регистрации подсказки нет (пробинг идёт как раньше)."""
+    from src.bp1.adaptive.integration.runner import AdaptiveRunner
+
+    runner = AdaptiveRunner()
+    runner._cache.redis = _FakeRedis()
+
+    assert await runner._preferred_param_from_registration('lenta.ru') is None

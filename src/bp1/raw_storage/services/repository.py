@@ -10,13 +10,12 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from ..core.exceptions import NotFoundError, StorageError
-from ..core.interfaces import (
-    BaseDeduplicator,
-    BaseStorage,
-    NoOpDeduplicator,
-)
+from ..constants import CHECKSUM_LOG_LENGTH
+from ..core.deduplication import ContentHashDeduplicator
+from ..core.exceptions import DeduplicationError, NotFoundError
+from ..core.interfaces import BaseDeduplicator, BaseStorage
 from ..core.models import ProcessingStatus, RawDataFile
+from ..utils.hashing import compute_items_hash
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +36,27 @@ class RawDataRepository:
         """
         Args:
             storage_backend: Реализация хранилища (DiskBackend, S3Backend, ...)
-            deduplicator: Проверяльщик дубликатов
-            (по умолчанию NoOpDeduplicator)
+            deduplicator: Проверяльщик дубликатов (по умолчанию
+                ContentHashDeduplicator — дедупликация по хешу содержимого
+                items, см. core/deduplication.py)
         """
         self._storage = storage_backend
-        self._dedup = deduplicator or NoOpDeduplicator()
+        self._dedup = deduplicator or ContentHashDeduplicator(
+            self.find_by_content_hash
+        )
 
     async def save(self, raw_data_file: RawDataFile) -> str:
         """Сохранить файл выгрузки с проверкой дедупликации.
 
-        Дедупликация выполняется по raw_id файла.
+        Дедупликация выполняется по хешу содержимого items
+        (utils.hashing.compute_items_hash), а не по raw_id: каждый
+        RawDataFile получает свежий случайный raw_id при конструировании
+        (core/models.py), поэтому совпадение по нему практически никогда
+        не происходит — реальный смысл имеет дубликат по содержимому (та
+        же выгрузка сохраняется повторно, например при ретрае).
         При обнаружении дубликата возвращает путь существующего файла
-        или выбрасывает StorageError, если пути нет.
+        или выбрасывает DeduplicationError, если пути нет (несогласованное
+        состояние: дедупликатор сообщил о дубликате, а файл не найден).
 
         Args:
             raw_data_file: Модель выгрузки с meta и items.
@@ -56,26 +64,46 @@ class RawDataRepository:
         Returns:
             Путь к сохранённому JSONB-файлу.
         """
-        raw_id_str = str(raw_data_file.raw_id)
+        content_hash = compute_items_hash(
+            [item.model_dump() for item in raw_data_file.items]
+        )
 
-        # Проверяем дедупликацию по raw_id
-        if await self._dedup.is_duplicate(raw_id_str):
+        if await self._dedup.is_duplicate(content_hash):
             logger.info(
-                'Дубликат обнаружен (raw_id: %s), пропуск',
-                raw_id_str,
+                'Дубликат обнаружен (хеш содержимого: %s...), пропуск',
+                content_hash[:CHECKSUM_LOG_LENGTH],
             )
-            # Пытаемся найти существующий файл
-            try:
-                existing = await self.find_by_id(raw_data_file.raw_id)
-                return existing  # возвращаем путь
-            except NotFoundError as err:
-                raise StorageError(
-                    f'Дубликат raw_id {raw_id_str} без существующего файла',
-                ) from err
+            existing = await self.find_by_content_hash(content_hash)
+            if existing is not None:
+                return existing
+            raise DeduplicationError(
+                f'Дубликат (хеш содержимого {content_hash}) без '
+                'существующего файла',
+            )
 
         path = await self._storage.save(raw_data_file)
-        logger.info('RawDataFile %s сохранён в %s', raw_id_str, path)
+        logger.info('RawDataFile %s сохранён в %s', raw_data_file.raw_id, path)
         return path
+
+    async def find_by_content_hash(self, content_hash: str) -> str | None:
+        """Найти путь к файлу с указанным хешем содержимого items.
+
+        В отличие от find_by_id, не бросает NotFoundError при отсутствии
+        совпадения — возвращает None, т.к. используется в проверке
+        дубликатов (ContentHashDeduplicator), где «не найдено» — обычный
+        исход, а не ошибка.
+
+        Сканирует все файлы в хранилище — для частых запросов
+        рекомендуется индекс или кэш (как и у find_by_id/find_pending).
+        """
+        for path in await self.find_by_prefix(''):
+            data = await self._storage.load(path)
+            data_hash = compute_items_hash(
+                [item.model_dump() for item in data.items]
+            )
+            if data_hash == content_hash:
+                return path
+        return None
 
     async def find_by_id(self, raw_id: UUID | str) -> str:
         """Найти путь к файлу выгрузки по уникальному raw_id.

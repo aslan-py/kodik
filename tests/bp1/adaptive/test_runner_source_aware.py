@@ -16,7 +16,11 @@ from urllib.parse import unquote
 import pytest
 
 from src.bp1.adaptive.integration.runner import AdaptiveRunner
-from src.bp1.adaptive.schemas import SourceClassification, SourceType
+from src.bp1.adaptive.schemas import (
+    ProbedUrl,
+    SourceClassification,
+    SourceType,
+)
 
 
 class _FakeRedis:
@@ -117,7 +121,7 @@ def _make_runner(monkeypatch, config, classification):
         runner, '_get_parser_for_source', lambda source_name: None
     )
     monkeypatch.setattr(
-        'src.bp1.adaptive.integration.runner.get_search_task_config',
+        'src.bp1.adaptive.integration.runner.core.get_search_task_config',
         _fake_get_config,
     )
     monkeypatch.setattr(runner._classifier, 'classify', _fake_classify)
@@ -129,7 +133,7 @@ def _make_runner(monkeypatch, config, classification):
     )
     monkeypatch.setattr(runner._cache, 'is_source_blocked', _fake_is_blocked)
     monkeypatch.setattr(
-        'src.bp1.adaptive.integration.runner.RawDataService',
+        'src.bp1.adaptive.integration.runner.core.RawDataService',
         lambda session, redis: _FakeRawDataService(session),
     )
 
@@ -238,3 +242,163 @@ async def test_run_task_non_gov_uses_competitor_name(monkeypatch):
     # URL percent-кодируется (quote_plus), поэтому сравниваем через unquote.
     assert 'Кодик' in unquote(captured.get('url', ''))
     assert '9718283930' not in captured.get('url', '')
+
+
+@pytest.mark.asyncio
+async def test_run_task_uses_cached_probed_url(monkeypatch):
+    """При закэшированном probed URL парсер получает именно его."""
+    config = {
+        'is_active': True,
+        'source_is_active': True,
+        'competitor_is_active': True,
+        'source': 'https://lenta.ru/',
+        'competitor': 'ООО Кодик',
+        'competitor_inn': '9718283930',
+        'trigger': None,
+    }
+    classification = _classification(SourceType.NEWS)
+    runner, fake_session = _make_runner(monkeypatch, config, classification)
+
+    # Кладём probed URL в кэш до запуска задачи. Для не-гос. источника
+    # (NEWS) поисковый параметр = название конкурента ('ООО Кодик').
+    redis = _FakeRedis()
+    probed = ProbedUrl(
+        source_name='lenta.ru',
+        search_url='https://lenta.ru/search/custom?text=cl',
+        search_params={'text': 'cl'},
+        confidence=1.0,
+    )
+    # Прокидываем через настоящий кэш в Redis-заглушку по составному ключу
+    # (источник + хэш поискового запроса), как это делает runner.
+    from src.bp1.adaptive.core.cache import UnifiedCache
+
+    cache = UnifiedCache(redis_client=redis)
+    await cache.set_probed_url('lenta.ru', probed, search_param='ООО Кодик')
+
+    captured: dict = {}
+
+    async def _fake_parse(url, **kwargs):
+        captured['url'] = url
+        captured['probed_url'] = kwargs.get('probed_url')
+
+        class _Resp:
+            def __init__(self):
+                self.items = []
+
+            def model_dump(self):
+                return {'items': []}
+
+        return _Resp()
+
+    runner._parser.parse = _fake_parse
+
+    await runner.run_task(1, fake_session, redis)
+
+    # Используется закэшированный probed URL, а не базовый /search?q=.
+    assert captured.get('url') == 'https://lenta.ru/search/custom?text=cl'
+    assert captured.get('probed_url') is not None
+
+
+@pytest.mark.asyncio
+async def test_run_task_fallback_when_probe_fails(monkeypatch):
+    """При неудачном пробинге используется fallback URL."""
+    config = {
+        'is_active': True,
+        'source_is_active': True,
+        'competitor_is_active': True,
+        'source': 'https://lenta.ru/',
+        'competitor': 'ООО Кодик',
+        'competitor_inn': '9718283930',
+        'trigger': None,
+    }
+    classification = _classification(SourceType.NEWS)
+    runner, fake_session = _make_runner(monkeypatch, config, classification)
+    redis = _FakeRedis()
+
+    captured: dict = {}
+
+    async def _fake_parse(url, **kwargs):
+        captured['url'] = url
+
+        class _Resp:
+            def __init__(self):
+                self.items = []
+
+            def model_dump(self):
+                return {'items': []}
+
+        return _Resp()
+
+    runner._parser.parse = _fake_parse
+
+    # Проубер с fetch, который всегда бросает исключение — probe вернёт None,
+    # поэтому сработает fallback (без обращения к реальной сети).
+    def _failing_fetch(url: str) -> str:
+        raise OSError('network down')
+
+    runner.bind_probe_fetch(_failing_fetch)
+
+    await runner.run_task(1, fake_session, redis)
+
+    # Fallback = базовый шаблон lenta.ru -> /search?q=<percent-encoded query>.
+    url = captured.get('url', '')
+    assert url.startswith('https://lenta.ru/search?q=')
+    assert 'Кодик' in unquote(url)
+
+
+@pytest.mark.asyncio
+async def test_run_task_fallback_is_cached_by_query(monkeypatch):
+    """Fallback кэшируется по составному ключу (источник + запрос).
+
+    Два разных конкурента на одном источнике получают независимые
+    закэшированные fallback URL — для второго конкурента не берётся
+    URL, закэшированный для первого.
+    """
+    config_a = {
+        'is_active': True,
+        'source_is_active': True,
+        'competitor_is_active': True,
+        'source': 'https://lenta.ru/',
+        'competitor': 'ООО Кодик',
+        'competitor_inn': None,
+        'trigger': None,
+    }
+    classification = _classification(SourceType.NEWS)
+    redis = _FakeRedis()
+
+    def _failing_fetch(url: str) -> str:
+        raise OSError('network down')
+
+    async def _fake_parse(url, **kwargs):
+        class _Resp:
+            def __init__(self):
+                self.items = []
+
+            def model_dump(self):
+                return {'items': []}
+
+        return _Resp()
+
+    # Задача по конкуренту A.
+    runner_a, _ = _make_runner(monkeypatch, config_a, classification)
+    runner_a._parser.parse = _fake_parse
+    runner_a.bind_probe_fetch(_failing_fetch)
+    await runner_a.run_task(1, _FakeSession(), redis)
+
+    # Кэш для A записан; пробинг больше не должен выполняться для A.
+    config_b = dict(config_a, competitor='ООО Бета')
+    runner_b, _ = _make_runner(monkeypatch, config_b, classification)
+    runner_b._parser.parse = _fake_parse
+
+    called: dict = {}
+
+    def _counting_fetch(url: str) -> str:
+        called['n'] = called.get('n', 0) + 1
+        raise OSError('network down')
+
+    runner_b.bind_probe_fetch(_counting_fetch)
+    await runner_b.run_task(2, _FakeSession(), redis)
+
+    # Для конкурента B пробинг был выполнен заново (свой ключ в кэше),
+    # потому что у A и B разные search_param и, как следствие, разные ключи.
+    assert called.get('n', 0) >= 1

@@ -46,6 +46,26 @@ def _find_row_scope(
     return anchor_node
 
 
+def _find_unique_field_node_in_ancestors(
+    row: Any,
+    selector: str,
+    container: Any,
+) -> Any | None:
+    """Find a field in the nearest ancestor where it occurs only once.
+
+    An adapter may select a title as the row anchor while the card's link
+    lives in a parent wrapper. Requiring a unique match prevents links from
+    neighbouring cards in a list from being paired with the current title.
+    """
+    for ancestor in row.parents:
+        matches = ancestor.select(selector)
+        if len(matches) == 1:
+            return matches[0]
+        if ancestor is container:
+            break
+    return None
+
+
 def _multi_items_from_matches(
     field_matches: dict[str, list[Any]],
     field_selectors: dict[str, str],
@@ -103,6 +123,10 @@ def _multi_items_from_matches(
                 item['url'] = str(anchor_node.get('href')).strip()
                 continue
             node = row.select_one(selector)
+            if node is None and field == 'url':
+                node = _find_unique_field_node_in_ancestors(
+                    row, selector, container
+                )
             if node is not None:
                 value = _node_field_value(field, node)
                 if value:

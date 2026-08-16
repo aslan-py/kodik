@@ -523,6 +523,10 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
         persisted['strategy_recommended'] = classification.recommended_strategy
         persisted['quality_status'] = getattr(metrics, 'quality_status', None)
         persisted['quality_levels'] = _collect_quality_levels(response)
+        persisted['source_items'] = len(response.items)
+        persisted['empty_reason'] = getattr(
+            getattr(response, 'meta', None), 'empty_reason', None
+        )
         persisted['source'] = source_name
         persisted['pipeline_report'] = report.model_dump(mode='json')
         return persisted

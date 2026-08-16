@@ -74,6 +74,8 @@ def test_meta_field_order_matches_about_md():
         'trigger',
         'source_request_url',
         'fetched_at',
+        'items_count',
+        'empty_reason',
     ]
 
 

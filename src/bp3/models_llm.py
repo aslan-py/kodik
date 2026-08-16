@@ -72,7 +72,6 @@ class Pipeline:
 # ========== Pydantic‑схемы для structured output ==========
 class CategorizedItem(BaseModel):
     id: int
-    text: str | None = None
     category: str | None = None
 
 

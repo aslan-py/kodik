@@ -277,6 +277,34 @@ def build_normalized_rows(
     return rows
 
 
+def summarize_raw_items(raw_items: Sequence) -> dict[str, object]:
+    """Вернуть счётчики входа BP-2 без изменения старых снимков.
+
+    Поля ``items_count`` и ``empty_reason`` появились позже первых
+    снимков, поэтому для истории используем безопасные значения по
+    умолчанию и читаем только канонический ``raw_data.items``.
+    """
+    source_items = 0
+    empty_raw_items = 0
+    empty_by_reason: dict[str, int] = {}
+
+    for raw_item in raw_items:
+        raw_data = raw_item.raw_data or {}
+        items = raw_data.get('items') or []
+        source_items += len(items)
+        if items:
+            continue
+        empty_raw_items += 1
+        reason = (raw_data.get('meta') or {}).get('empty_reason', 'empty_items')
+        empty_by_reason[str(reason)] = empty_by_reason.get(str(reason), 0) + 1
+
+    return {
+        'source_items': source_items,
+        'empty_raw_items': empty_raw_items,
+        'empty_by_reason': empty_by_reason,
+    }
+
+
 REASONS_COUNTED_BEFORE_WRITE = (
     RejectReason.black_domain,
     RejectReason.stop_word,
@@ -365,6 +393,8 @@ async def run_bp2(
         else:
             raw_items = await crud.select_pending_raw_items()
 
+        input_summary = summarize_raw_items(raw_items)
+
         # Шаги 2-6 — разбить, провалидировать, нормализовать, отфильтровать
         rows = build_normalized_rows(
             raw_items,
@@ -390,6 +420,7 @@ async def run_bp2(
 
         return {
             'raw_items': len(raw_items),
+            **input_summary,
             'rows': len(rows),
             'rejected_by_reason': count_rejected_by_reason(rows),
             'noise_rejected': noise_rejected,

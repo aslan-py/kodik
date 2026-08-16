@@ -36,7 +36,7 @@ class FakeRedisManager:
 
 
 @pytest.mark.asyncio
-async def test_run_bp1_syncs_before_crawl_in_same_session(monkeypatch):
+async def test_run_bp1_commits_coverage_before_crawl(monkeypatch):
     events = []
     session_context = FakeSessionContext(events)
     redis_manager = FakeRedisManager(events)
@@ -77,6 +77,11 @@ async def test_run_bp1_syncs_before_crawl_in_same_session(monkeypatch):
     crawl_event = next(item for item in events if item[0] == 'crawl')
     assert events.index(sync_event) < events.index(crawl_event)
     assert sync_event[1] is crawl_event[1] is session_context
+    assert any(
+        event[0] == 'commit'
+        and events.index(sync_event) < index < events.index(crawl_event)
+        for index, event in enumerate(events)
+    )
     assert result == {
         'tasks': 2,
         'saved': 1,
@@ -87,6 +92,9 @@ async def test_run_bp1_syncs_before_crawl_in_same_session(monkeypatch):
         'by_strategy': {},
         'quality_levels': {},
         'low_quality_sources': [],
+        'source_items': 0,
+        'empty_results': 0,
+        'empty_by_reason': {},
         'search_tasks_created': 3,
     }
 

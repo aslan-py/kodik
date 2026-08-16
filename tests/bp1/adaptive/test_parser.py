@@ -885,6 +885,37 @@ def test_page_items_prefers_title_own_href_over_unrelated_links():
     assert pairs[1][1] == 'https://example.com/vacancy/2'
 
 
+def test_page_items_finds_card_link_outside_title_scope():
+    """URL карточки может находиться над вложенным заголовком."""
+    html = """
+    <html><body>
+      <div class="result">
+        <div class="card">
+          <a class="overlay" href="/about/news/one"></a>
+          <div class="content"><h3>News 1</h3></div>
+        </div>
+      </div>
+    </body></html>
+    """
+
+    pairs = _page_items(
+        html,
+        EXAMPLE_SOURCE_NAME,
+        COMPETITOR,
+        TRIGGER,
+        selectors={
+            'container': 'div.result',
+            'title': 'h3',
+            'url': 'a[href]',
+        },
+        base_url='https://example.com/',
+    )
+
+    assert pairs == [
+        ('News 1', 'https://example.com/about/news/one', '/about/news/one')
+    ]
+
+
 def test_default_max_news_value():
     """DEFAULT_MAX_NEWS задана и имеет положительное значение."""
     assert isinstance(DEFAULT_MAX_NEWS, int)

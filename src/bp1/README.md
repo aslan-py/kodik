@@ -8,6 +8,8 @@ BP-1 — первый слой ETL-пайплайна системы конку�
 - **Адаптивный движок (adaptive)** — полностью реализован: автоматическая классификация источников, иерархия стратегий обхода с деградацией (FAST → CRAWL4AI → BROWSER → WAYBACK → STEALTH → HITL), интеллектуальное извлечение через LLM, кэширование адаптеров и CLI
 - **Остальные источники** — обрабатываются универсальным `AdaptiveBridgeParser` (авто-детекция структуры сайта без ручной настройки)
 - **Адаптивный поиск (Adaptive Search)** — полностью реализован: source-aware выбор поискового параметра (ИНН для гос. источников, название конкурента для остальных), per-source шаблоны URL поиска (например, `hh.ru → /search/vacancy?text=`), пропуск задач по `is_active`, circuit breaker (авто-блокировка источника при сбоях)
+- **Задания для планировщика (`jobs.py`)** — четыре самодостаточных задания (`collect_source`, `collect_competitor`, `collect_all`, `register_source`) с контрактом «только примитивы на входе / JSON-сериализуемый результат / идемпотентность», спроектированы так, чтобы оборачиваться в Celery task и Celery beat без адаптеров (см. [«Подключение к Celery: tasks и beat»](#подключение-к-celery-tasks-и-beat))
+- **Контракт `raw_data` (`meta`/`metrics`)** — метаданные выгрузки (`ParsedMeta`) и диагностика прогона (`ParsedMetrics`) разделены и закреплены тестом-контрактом против `ABOUT_PROJECT/ABOUT.md`, чтобы не расходиться незаметно (см. [«Выходной формат»](#выходной-формат))
 - **Raw Storage** — модуль хранения сырых данных (Bronze Layer) реализован и протестирован
 - **CI/CD** — 100% тестов проходят (pytest), линтер (ruff) чист
 
@@ -22,9 +24,10 @@ src/bp1/
 ├── storage.py               # ✅ RawDataService — единая персистентность (хэш, Redis, HTML/JSON, RawItem)
 ├── runner.py                # Оркестратор BPRunner (direct / celery режимы)
 ├── tasks.py                 # Основная логика: run_parser_async, получение конфигурации задачи
-├── celery_tasks.py          # Celery-обёртка для production-запуска
+├── celery_tasks.py          # Celery-обёртка для run_parser_async (низкий уровень, по task_id)
 ├── cli.py                   # Единый CLI этапа (source/competitor/all/add-source)
-├── jobs.py                  # Задания сбора — публичный API для CLI и планировщика
+├── jobs.py                  # ✅ Задания сбора: collect_source/collect_competitor/collect_all/
+│                            #    register_source — публичный API для CLI, Celery task и beat
 ├── pipeline.py              # run_bp1() — точка входа этапа 1 + сводка прогона
 │
 ├── parsers/                 # Адаптеры парсеров (реализуют BaseParser)
@@ -251,6 +254,153 @@ async def main():
 asyncio.run(main())
 ```
 
+## Подключение к Celery: tasks и beat
+
+Планировщик задач должен опираться на [`src/bp1/jobs.py`](src/bp1/jobs.py),
+а не напрямую на `BPRunner`/`AdaptiveRunner`. Это отдельный, специально
+спроектированный для очереди слой — тонкий над `AdaptiveRunner`, но с
+контрактом, который переживает сериализацию брокером:
+
+- **только примитивы на входе** (`str`/`int`/`bool`/`None`) — сессии,
+  Redis-клиенты и ORM-модели наружу не выносятся;
+- **самодостаточность** — каждое задание само открывает сессию БД и Redis
+  и закрывает их в `finally`; обёртке не нужно готовить контекст;
+- **JSON-сериализуемый результат** — обычный `dict` без Pydantic-моделей и
+  `datetime`, годится как return value Celery-задачи;
+- **идемпотентность** — источники, конкуренты и связки `SearchTask`
+  создаются по принципу «найти или создать», поэтому повторный запуск
+  (в том числе после ретрая Celery) не плодит дубли;
+- **async** — в синхронном Celery-воркере оборачивается `asyncio.run(...)`.
+
+Четыре задания: [`collect_source()`](src/bp1/jobs.py), `collect_competitor()`,
+`collect_all()`, `register_source()` — см. сигнатуры и докстринги в
+`jobs.py`; это те же операции, что стоят за командами CLI `source` /
+`competitor` / `all` / `add-source`.
+
+### 1. Обёртка над `app.task`
+
+`celery_tasks.py` уже даёт готовый пример обёртки (для низкоуровневого
+`run_parser_async` по одному `task_id`); для заданий планировщика паттерн
+тот же — задача просто зовёт `asyncio.run()` над функцией из `jobs.py`:
+
+```python
+# src/bp1/celery_tasks.py (дополнение к существующей run_parser_task)
+import asyncio
+
+from core.celery_app import (
+    CELERY_DEFAULT_RETRY_DELAY,
+    CELERY_MAX_RETRIES,
+    CELERY_RETRY_BACKOFF_MAX,
+    app,
+)
+from src.bp1 import jobs
+
+
+@app.task(
+    bind=True,
+    max_retries=CELERY_MAX_RETRIES,
+    default_retry_delay=CELERY_DEFAULT_RETRY_DELAY,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=CELERY_RETRY_BACKOFF_MAX,
+    retry_jitter=True,
+)
+def collect_all_task(self, headless: bool = True) -> dict:
+    """Полный прогон: все активные источники x все активные конкуренты."""
+    return asyncio.run(jobs.collect_all(headless=headless))
+
+
+@app.task(bind=True, autoretry_for=(Exception,))
+def collect_source_task(self, source: str, headless: bool = True) -> dict:
+    """Один источник по всем активным конкурентам."""
+    return asyncio.run(jobs.collect_source(source, headless=headless))
+
+
+@app.task(bind=True, autoretry_for=(Exception,))
+def collect_competitor_task(
+    self, competitor: str, inn: str | None = None
+) -> dict:
+    """Один конкурент по всем активным источникам."""
+    return asyncio.run(jobs.collect_competitor(competitor, inn=inn))
+```
+
+Задание — обычный `dict`, поэтому результат читается стандартно:
+
+```python
+result = collect_all_task.delay(headless=True)
+result.get(timeout=600)   # -> {'job': 'collect_all', 'status': 'ok', 'success_rate': 0.86, ...}
+```
+
+### 2. Регистрация модуля в едином Celery-приложении
+
+`core/celery_app.py` — одно Celery-приложение на весь проект; модули с
+задачами регистрируются явно в `include` (автообнаружение по конвенции
+`<пакет>.tasks` не используется — у BP-1 модуль называется
+`celery_tasks.py`). Сейчас строка для BP-1 закомментирована — раскомментировать
+её и есть акт «подключения» пакета к воркеру:
+
+```python
+# core/celery_app.py
+app = Celery(
+    'kodik',
+    broker=settings.celery_broker_url,
+    backend=settings.celery_result_backend_url,
+    include=[
+        'src.bp1.celery_tasks',   # было закомментировано — раскомментировать
+    ],
+)
+```
+
+Без этой строки процесс воркера не импортирует модуль с задачами: `.delay()`
+из другого процесса отправит сообщение в очередь, но обработать его будет
+некому (задача останется `PENDING` навсегда).
+
+Запуск воркера:
+
+```bash
+celery -A core.celery_app worker --loglevel=info
+```
+
+### 3. Периодический запуск через Celery Beat
+
+`app.conf.beat_schedule` в `core/celery_app.py` заведён пустым намеренно —
+структура готова принимать записи, конкретное расписание для каждого BP
+оставлено на явное включение. Чтобы поставить сбор BP-1 на расписание,
+добавляются записи с `crontab`:
+
+```python
+# core/celery_app.py
+from celery.schedules import crontab
+
+app.conf.beat_schedule = {
+    'bp1-collect-all-nightly': {
+        'task': 'src.bp1.celery_tasks.collect_all_task',
+        'schedule': crontab(hour=3, minute=0),   # каждую ночь в 03:00 UTC
+        'kwargs': {'headless': True},
+    },
+    'bp1-collect-hh-hourly': {
+        'task': 'src.bp1.celery_tasks.collect_source_task',
+        'schedule': crontab(minute=0),           # раз в час
+        'kwargs': {'source': 'hh.ru', 'headless': True},
+    },
+}
+```
+
+Запуск планировщика (отдельный процесс, обычно рядом с воркером):
+
+```bash
+celery -A core.celery_app beat --loglevel=info
+
+# или воркер + beat в одном процессе (для разработки, не для production)
+celery -A core.celery_app worker -B --loglevel=info
+```
+
+Расписание в `crontab()` — по `app.conf.timezone` (`UTC`, задан в
+`core/celery_app.py`). Каждая задача из `beat_schedule` обязана быть
+идемпотентной и не зависеть от порядка запуска относительно других задач —
+оба свойства уже обеспечены слоем `jobs.py` («найти или создать» вместо
+жёсткого создания, самодостаточная сессия/Redis на задание).
+
 ## Парсеры
 
 ### Единый контракт
@@ -271,20 +421,52 @@ class BaseParser(ABC):
 
 ### Выходной формат
 
-```python
-class ParsedResponse(BaseModel):
-    meta: dict      # search_task_id, source, competitor, trigger, source_request_url, fetched_at
-    items: list[ParsedItem]  # массив результатов
+`meta`/`items` — бизнес-контракт, закреплённый `ABOUT_PROJECT/ABOUT.md` и
+проверяемый тестом-контрактом
+([`test_raw_data_contract.py`](kodik/tests/bp1/test_raw_data_contract.py));
+`metrics` — диагностика конкретного прогона (сработавшая стратегия, статус
+Quality Gate и т.п.), в persisted `raw_data` **не попадает**
+(`exclude=True` в модели), доступна только в памяти вызывающему коду.
 
-class ParsedItem(BaseModel):
+```python
+class ParsedMeta(BaseModel):        # persisted: raw_data.meta, extra='forbid'
+    search_task_id: int | None
+    source: str
+    competitor: str
+    trigger: str | None
+    source_request_url: str
+    fetched_at: str
+
+class ParsedItem(BaseModel):        # persisted: raw_data.items[], extra='forbid'
     url: str              # ссылка на событие (обязательна)
     title: str            # заголовок (обязателен)
     text: str | None      # тело/описание
     published_at: str | None  # сырая дата
     region: str | None    # регион
     media_name: str | None    # СМИ/публикатор
-    extra: dict           # источник-специфичные поля (file_path и др.)
+    extra: dict           # источник-специфичные поля (ИНН, статус, файл и др.)
+
+class ParsedMetrics(BaseModel):     # НЕ persisted, extra='allow' (открытая диагностика)
+    probed_url: str | None
+    strategy_used: str | None
+    quality_status: str | None
+    quality_levels: dict[str, Any] | None
+    relevance_mode: str | None
+    news_total: int | None
+    relevance_filtered: int | None
+    file_saved: bool | None
+
+class ParsedResponse(BaseModel):
+    meta: ParsedMeta
+    items: list[ParsedItem]
+    metrics: ParsedMetrics = Field(default_factory=ParsedMetrics, exclude=True)
 ```
+
+`RawDataService.persist()` (`storage.py`) сохраняет ровно
+`response.model_dump()`, поэтому `metrics` физически не может попасть в БД
+или на диск — единственный путь избежать повторения инцидента, когда
+адаптивный мост когда-то дописывал служебные поля прямо в `meta`
+(разбор — в `REFACTORING_PLAN.md`).
 
 ### ✅ FedresursAdapter (fedresurs.ru)
 
@@ -566,6 +748,18 @@ BP-1 использует трёхуровневую систему дедупл
 | [`save_raw_json()`](src/bp1/storage.py) | Сохранение raw JSON на диск |
 | [`ensure_directories()`](src/bp1/storage.py:144) | Создание директорий для хранения данных |
 
+### `jobs.py`
+
+Публичный API для CLI и планировщика (Celery task/beat) — см.
+[«Подключение к Celery»](#подключение-к-celery-tasks-и-beat).
+
+| Функция | Назначение |
+|---------|-----------|
+| [`collect_source()`](src/bp1/jobs.py) | Один источник по всем активным конкурентам (`status='source_not_found'`, если источника нет в БД) |
+| [`collect_competitor()`](src/bp1/jobs.py) | Один конкурент по всем активным источникам; конкурента, которого нет в БД, создаёт сам |
+| [`collect_all()`](src/bp1/jobs.py) | Полный прогон: все активные источники × все активные конкуренты (`ensure_matrix` — достраивать связки или нет) |
+| [`register_source()`](src/bp1/jobs.py) | Поставить источник на учёт: нормализация URL, классификация, запись `Source`, кэш, проверка поискового эндпоинта |
+
 ### `tasks.py`
 
 | Функция | Назначение |
@@ -659,8 +853,10 @@ pytest kodik/tests/bp1/ --cov=src.bp1 -v
 | [`test_parser.py`](kodik/tests/bp1/adaptive/test_parser.py) | AdaptiveParser — извлечение, селекторы, кэш |
 | [`test_chunking.py`](kodik/tests/bp1/adaptive/test_chunking.py) | StructuredChunker, HtmlCleaner, ResultMerger |
 | [`test_quality.py`](kodik/tests/bp1/adaptive/test_quality.py) | DataQualityGate — уровни качества, Quarantine |
-| [`test_llm.py`](kodik/tests/bp1/adaptive/test_llm.py) | LLMClient, AIAgent |
-| [`test_llm_smoke.py`](kodik/tests/bp1/adaptive/test_llm_smoke.py) | Smoke-тест LLM-модуля |
+| [`test_llm.py`](kodik/tests/bp1/adaptive/test_llm.py) | LLMClient, AIAgent — все методы, эвристический fallback и путь с ключом API |
+| [`test_llm_smoke.py`](kodik/tests/bp1/adaptive/test_llm_smoke.py) | ✅ Сквозной smoke-тест LLM-модуля **на реальных сохранённых HTML-страницах** (`data/html_pages`) — см. [«Тесты LLM на реальных данных»](#тесты-llm-на-реальных-данных) |
+| [`test_json_utils.py`](kodik/tests/bp1/adaptive/test_json_utils.py) | ✅ `parse_json` — устойчивый разбор ответа LLM (чистый JSON, markdown-фенс ` ```json `, текст до/после, невалидный ввод) |
+| [`test_prompt_builders.py`](kodik/tests/bp1/adaptive/test_prompt_builders.py) | ✅ `build_classification_prompt`/`build_analysis_prompt`/`build_chunk_prompt`/`build_strategy_prompt`/`build_result_analysis_prompt`/`build_article_text_prompt` — подстановка реальных значений в промпты |
 | [`test_integration.py`](kodik/tests/bp1/adaptive/test_integration.py) | AdaptiveRunner, AdaptiveBridgeParser |
 | [`test_source_registration.py`](kodik/tests/bp1/adaptive/test_source_registration.py) | SourceRegistrationService, нормализация URL, проверка поискового эндпоинта |
 | [`test_runner_source_aware.py`](kodik/tests/bp1/adaptive/test_runner_source_aware.py) | Source-aware выбор параметра (ИНН vs название), пробинг |
@@ -674,8 +870,53 @@ pytest kodik/tests/bp1/ --cov=src.bp1 -v
 | [`test_cli.py`](kodik/tests/bp1/test_cli.py) | Безопасная очистка ключей Redis (`clear-redis`) |
 | [`test_raw_storage.py`](kodik/tests/bp1/test_raw_storage.py) | Дедупликация Bronze Layer по хэшу содержимого |
 | [`test_pipeline_metrics.py`](kodik/tests/bp1/test_pipeline_metrics.py) | Сводка прогона: success_rate, стратегии, уровни качества |
+| [`test_jobs.py`](kodik/tests/bp1/test_jobs.py) | ✅ Задания планировщика (`jobs.py`): идемпотентное «найти или создать», построение матрицы пар для всех трёх режимов сбора, JSON-сериализуемость результата, отсутствующий источник не даёт побочных эффектов. БД и Redis подменены фейками — тесты идут без внешних сервисов |
+| [`test_raw_data_contract.py`](kodik/tests/bp1/test_raw_data_contract.py) | ✅ Контракт `raw_data` (`ParsedMeta`/`ParsedItem`/`ParsedMetrics`) против примера из `ABOUT_PROJECT/ABOUT.md`: закрытые поля `meta`/`items` (`extra='forbid'`), `metrics` не сериализуется в persisted `raw_data` |
 
-### Реальный прогон
+### Тесты LLM на реальных данных
+
+`test_llm_smoke.py` и `test_llm.py` — не игрушечные примеры на трёх строках
+HTML. Фикстура `html_page` берёт **настоящие, реально скачанные страницы**
+живых источников из [`data/html_pages/`](src/bp1/data/html_pages/)
+(`lenta.ru`, `hh.ru`, `rbc.ru`, `iz.ru`, `kodik.ru`, `ria.ru` и др. —
+снимки, сделанные адаптивным движком в ходе обычной работы) и прогоняет их
+через весь реальный конвейер LLM-модуля:
+
+`SourceClassifier.classify` → `LLMClient.analyze_structure` (с
+авто-чанкированием) → `HtmlCleaner` → `StructuredChunker` → параллельное
+извлечение по чанкам → `ResultMerger` → `AIAgent.choose_strategy` /
+`AIAgent.analyze_result`.
+
+Единственное, что в pytest подменяется — сетевой транспорт: вызов
+`openai.AsyncOpenAI` перехватывается фейком, который возвращает
+заранее заданный (но валидный по формату) ответ модели. Так тесты остаются
+быстрыми, детерминированными и не требуют `LLM_API_KEY` в CI, но при этом
+реально исполняют логику классификации, чанкирования, промптов и мержа на
+неадаптированной боевой разметке сайтов — в отличие от синтетических
+фикстур, здесь никто заранее не подгонял HTML под селекторы.
+
+Оба пути покрыты явно:
+- **эвристический fallback** (без `LLM_API_KEY`) — `test_smoke_*_heuristic`;
+- **путь с LLM** (`LLM_API_KEY` задан, ответ приходит от фейкового клиента
+  в реальном формате OpenAI Chat Completions) — `test_smoke_*_real_path`.
+
+Для проверки **с настоящим обращением к провайдеру** (без фейка) есть
+отдельный ручной скрипт — не автотест, `pytest` его не подхватывает
+(`testpaths = ["tests"]` в `pyproject.toml` сюда не заглядывает):
+
+```bash
+# Требует реальный LLM_API_KEY в .env; делает настоящие вызовы к провайдеру
+python -m src.bp1.adaptive.llm_test
+```
+
+Он прогоняет тот же самый конвейер (классификация → анализ структуры →
+чанкирование → прямой анализ → выбор стратегии → анализ результата) на
+первой странице из `data/html_pages/`, печатая селекторы, схему данных,
+confidence и метаданные на каждом этапе — удобно для ручной проверки
+качества промптов после их правки, до того как полагаться на детерминированные
+фейковые тесты.
+
+### Реальный прогон всего этапа
 
 Сквозной прогон на живой БД/Redis выполняется точкой входа этапа:
 
@@ -764,3 +1005,7 @@ python -m core.scripts.stages.bp1
 
 - [x] Реализовать адаптивный движок (классификация, стратегии, LLM, HITL)
 - [x] Интегрировать адаптивный движок с BP-1 пайплайном
+- [x] Выделить `jobs.py` — контракт заданий, готовый для Celery task/beat
+- [ ] Подключить `jobs.py`/`celery_tasks.py` к `beat_schedule` в проде
+      (сейчас `include`/`beat_schedule` в `core/celery_app.py` пустые —
+      рецепт подключения см. в разделе «Подключение к Celery: tasks и beat»)

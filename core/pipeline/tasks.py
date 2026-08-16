@@ -1,6 +1,7 @@
 """Celery entry points for persisted pipeline-stage executions."""
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -21,6 +22,25 @@ from core.pipeline.models import PipelineRun, PipelineSchedule, PipelineStageRun
 from core.pipeline.runner import run_stage
 from core.pipeline.schedule import get_effective_schedule
 from core.pipeline.service import PipelineRunConflict, PipelineRunService
+
+logger = logging.getLogger(__name__)
+
+
+def _pipeline_log(event: str, **fields: object) -> None:
+    """Write a compact, searchable lifecycle record without request payloads."""
+    fragments = [f'pipeline_event={event}']
+    for name, value in fields.items():
+        if value is not None:
+            fragments.append(f'{name}={value}')
+    logger.info(' '.join(fragments))
+
+
+def _result_summary(result: object) -> str:
+    if not isinstance(result, dict):
+        return 'result=unavailable'
+    keys = ('tasks', 'saved', 'rows', 'source_items', 'error', 'skipped')
+    values = [f'{key}:{result[key]}' for key in keys if key in result]
+    return ','.join(values) if values else 'result=empty'
 
 
 def _run_async(coroutine):
@@ -43,6 +63,7 @@ async def _run_stage_task(
             .with_for_update()
         )
         if run is None:
+            _pipeline_log('stage_missing_run', run_id=run_id, stage=stage)
             return {
                 'ok': False,
                 'stage': stage,
@@ -57,12 +78,20 @@ async def _run_stage_task(
             .with_for_update()
         )
         if stage_run is None:
+            _pipeline_log('stage_missing', run_id=run_id, stage=stage)
             return {'ok': False, 'stage': stage, 'error': 'Stage run not found'}
         if stage_run.status in {
             PipelineStageStatus.succeeded,
             PipelineStageStatus.failed,
             PipelineStageStatus.skipped,
         }:
+            _pipeline_log(
+                'stage_skipped',
+                run_id=run_id,
+                stage=stage,
+                status=stage_run.status.value,
+                task_id=task_id,
+            )
             return {
                 'ok': stage_run.status == PipelineStageStatus.succeeded,
                 'stage': stage,
@@ -78,6 +107,13 @@ async def _run_stage_task(
         stage_run.started_at = stage_run.started_at or now
         stage_run.heartbeat_at = now
         await session.commit()
+        _pipeline_log(
+            'stage_started',
+            run_id=run_id,
+            stage=stage,
+            status='running',
+            task_id=task_id,
+        )
 
     try:
         parameters = run.parameters
@@ -130,6 +166,15 @@ async def _run_stage_task(
                 'message': envelope['error'],
             }
         await session.commit()
+    _pipeline_log(
+        'stage_finished' if envelope['ok'] else 'stage_failed',
+        run_id=run_id,
+        stage=stage,
+        status='succeeded' if envelope['ok'] else 'failed',
+        task_id=task_id,
+        summary=_result_summary(envelope.get('result')),
+        error_kind=envelope.get('error_kind'),
+    )
     return envelope
 
 
@@ -179,6 +224,7 @@ async def _mark_pipeline_run_failed(run_id: str) -> dict[str, object]:
             ),
         }
         await session.commit()
+        _pipeline_log('run_failed', run_id=run_id, status='failed')
         return {'updated': True}
 
 
@@ -212,7 +258,14 @@ async def _finalize_pipeline_run(run_id: str) -> dict[str, object]:
             ]
         }
         await session.commit()
-        return {'ok': not failures, 'status': run.status.value}
+        result = {'ok': not failures, 'status': run.status.value}
+        _pipeline_log(
+            'run_finished',
+            run_id=run_id,
+            status=run.status.value,
+            failed_stages=len(failures),
+        )
+        return result
 
 
 @app.task(name='core.pipeline.tasks.dispatch_scheduled_pipeline')
@@ -235,14 +288,17 @@ async def dispatch_scheduled_pipeline_once(
         .with_for_update()
     )
     if schedule is None:
+        _pipeline_log('schedule_skipped', status='missing_schedule')
         return {'scheduled': False, 'reason': 'schedule row is missing'}
     effective = await get_effective_schedule(session)
     if not effective.enabled:
+        _pipeline_log('schedule_skipped', status='disabled')
         return {'scheduled': False, 'reason': 'schedule is disabled'}
     if (
         schedule.last_scheduled_for is not None
         and schedule.last_scheduled_for >= effective.previous_slot
     ):
+        _pipeline_log('schedule_skipped', status='slot_processed')
         return {'scheduled': False, 'reason': 'slot already processed'}
     schedule.last_scheduled_for = effective.previous_slot
     try:
@@ -253,11 +309,17 @@ async def dispatch_scheduled_pipeline_once(
         )
     except PipelineRunConflict as exc:
         await session.commit()
+        _pipeline_log(
+            'schedule_skipped', run_id=exc.run_id, status='pipeline_busy'
+        )
         return {
             'scheduled': False,
             'reason': 'pipeline is busy',
             'active_run_id': str(exc.run_id),
         }
+    _pipeline_log(
+        'run_queued', run_id=created.run_id, status='queued', source='beat'
+    )
     return {'scheduled': True, 'run_id': str(created.run_id)}
 
 

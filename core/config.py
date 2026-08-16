@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     pipeline_schedule_timezone: str = 'Europe/Moscow'
     pipeline_schedule_poll_seconds: int = 60
     pipeline_run_stale_timeout_seconds: int = 1800
+    grafana_url: str = 'http://localhost:3001'
     flower_basic_auth: str | None = None
 
     @property

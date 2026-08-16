@@ -124,7 +124,6 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
         self._cache = UnifiedCache()
         self._classifier = SourceClassifier()
         self._search_param_resolver = SearchParamResolver()
-        self._prober = SearchUrlProber(fetch=self._fetch_content)
         self._logger = logging.getLogger(__name__)
         # Фабрика сессий для конкурентного режима run_all (Шаг 17 плана
         # рефакторинга): каждая параллельная задача работает со СВОЕЙ
@@ -146,22 +145,6 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
         """Привязывает Redis-клиент к кэшу для хранения классификаций."""
         if self._cache.redis is None:
             self._cache.redis = redis_client
-
-    async def _fetch_content(self, url: str) -> str | None:
-        """Скачивает HTML через оркестратор для перебора параметров.
-
-        Возвращает ``None``, если страница недоступна или пуста.
-        """
-        try:
-            orchestrator = self._parser._adaptive_parser._orchestrator
-            result = await orchestrator.fetch_with_degradation(url)
-            if result.success and result.data:
-                return result.data
-        except Exception as e:
-            self._logger.warning(
-                'Ошибка фетча при переборе параметров (%s): %s', url, e
-            )
-        return None
 
     def _get_parser_for_source(self, source_name: str):
         """Вернуть специализированный RPA-парсер для источника.

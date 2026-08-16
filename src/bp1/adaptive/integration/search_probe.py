@@ -27,13 +27,14 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote_plus, urljoin
 
 from bs4 import BeautifulSoup
 
-from ..schemas import SourceType
+from ..schemas import ProbedUrl, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,9 @@ class ProbeAttempt:
     # Найденный вариант названия конкурента: 'full' (с ОПФ) | 'stripped'
     # (без ОПФ/кавычек) | None. Используется далее при сборе новостей.
     matched_variant: str | None = None
+    # Реально использованный HTTP-метод ('GET' | 'POST') — для form-попыток,
+    # отправленных через найденную POST-форму (см. ``probe_async``).
+    method: str = 'GET'
 
 
 @dataclass
@@ -183,6 +187,7 @@ class ProbePlan:
         target_found: bool = False,
         target_score: int = 0,
         matched_variant: str | None = None,
+        method: str = 'GET',
     ) -> ProbeAttempt:
         attempt = ProbeAttempt(
             kind=kind,
@@ -193,6 +198,7 @@ class ProbePlan:
             target_found=target_found,
             target_score=target_score,
             matched_variant=matched_variant,
+            method=method,
         )
         self.attempts.append(attempt)
         if ok and self.winner is None:
@@ -271,6 +277,13 @@ def looks_like_search_results(html: str) -> bool:
                 return True
 
     return False
+
+
+# Алиас на функцию по умолчанию — нужен отдельным именем, потому что
+# конструктор ``SearchUrlProber`` принимает одноимённый параметр
+# ``looks_like_search_results``, который иначе затенял бы модульную функцию
+# внутри ``__init__`` и ломал бы фолбэк на неё.
+_default_looks_like_search_results = looks_like_search_results
 
 
 # ---------------------------------------------------------------------------
@@ -433,18 +446,20 @@ def score_target_presence(
 
 def extract_form_param(
     html: str, base_url: str
-) -> tuple[str | None, str | None]:
-    """Извлекает из HTML поисковую форму: (query_param, action_url).
+) -> tuple[str | None, str | None, str]:
+    """Извлекает из HTML поисковую форму: (query_param, action_url, method).
 
     Ищет первую ``<form>`` с текстовым ``<input name="...">`` (или
     ``<textarea>``), имя которого похоже на поисковое (или просто первое
     текстовое поле). ``action`` формы нормализуется в абсолютный URL
-    относительно ``base_url``.
+    относительно ``base_url``. ``method`` — атрибут ``<form method="...">``
+    в верхнем регистре (``'GET'`` по умолчанию, если атрибут отсутствует —
+    как в HTML-спеке).
 
-    Возвращает ``(None, None)``, если подходящая форма не найдена.
+    Возвращает ``(None, None, 'GET')``, если подходящая форма не найдена.
     """
     if not html:
-        return None, None
+        return None, None, 'GET'
     soup = BeautifulSoup(html, 'html.parser')
 
     for form in soup.find_all('form'):
@@ -469,9 +484,14 @@ def extract_form_param(
             action_host = urlparse(action_url).hostname or ''
             if base_host and action_host and base_host != action_host:
                 continue
-        return name, urljoin(base_url, action_url) if action_url else base_url
+        method = (form.get('method') or 'GET').strip().upper()
+        return (
+            name,
+            urljoin(base_url, action_url) if action_url else base_url,
+            method,
+        )
 
-    return None, None
+    return None, None, 'GET'
 
 
 def build_probe_url(
@@ -698,14 +718,31 @@ class SearchUrlProber:
         self,
         param_chain: tuple[str, ...] = _DEFAULT_PARAM_CHAIN,
         fetch: Any = None,
+        post: Any = None,
+        looks_like_search_results: Callable[[str], bool] | None = None,
         logger_: logging.Logger | None = None,
     ):
-        self._param_chain = param_chain
+        # ``bind_probe_fetch`` (runner/probing.py) зовёт конструктор с
+        # ``param_chain=None`` (свой параметр по умолчанию), когда вызывающая
+        # сторона явно не подставляет цепочку — явный ``None`` иначе
+        # перекрыл бы дефолт ``_DEFAULT_PARAM_CHAIN`` из сигнатуры.
+        self._param_chain = param_chain or _DEFAULT_PARAM_CHAIN
         self._logger = logger_ or logging.getLogger(__name__)
         # ``fetch`` — async-колбэк ``async def fetch(url) -> str | None``
         # (оборачивает стратегии оркестратора). Если не передан — используем
         # ``orchestrator.fetch_with_degradation``.
         self._fetch = fetch
+        # ``post`` — async-колбэк ``async def post(url, params) -> str |
+        # None`` для отправки найденной поисковой формы с
+        # ``method="post"``. Если не передан, form-этап с POST-методом
+        # честно помечается пропущенным (``no_post_transport``), а не
+        # имитируется GET-запросом.
+        self._post = post
+        # Инжектируемая проверка «похоже ли на выдачу» — по умолчанию
+        # модульная ``looks_like_search_results``.
+        self._looks_like = (
+            looks_like_search_results or _default_looks_like_search_results
+        )
 
     async def probe(
         self,
@@ -762,7 +799,7 @@ class SearchUrlProber:
             if not html:
                 plan.add('param', p, url=url, ok=False, detail='fetch_failed')
                 continue
-            looks_ok = looks_like_search_results(html)
+            looks_ok = self._looks_like(html)
             target_found = False
             target_score = 0
             matched_variant = None
@@ -799,21 +836,44 @@ class SearchUrlProber:
         # Если ни один словарный параметр не дал выдачи, пробуем распознать
         # поисковую форму прямо в HTML (``<form><input name=...>``) — сайт
         # может использовать нестандартное имя параметра, которого нет
-        # в ``_DEFAULT_PARAM_CHAIN``.
-        form_param, _form_action = extract_form_param(html, base_url)
+        # в ``_DEFAULT_PARAM_CHAIN``. Если форма отправляется методом POST,
+        # шлём её реальным POST-запросом через ``self._post`` — GET по тому
+        # же адресу не даёт того же результата, что и submit формы.
+        form_param, form_action, form_method = extract_form_param(
+            html, base_url
+        )
         if form_param and form_param not in params:
-            url = build_probe_url(base_url, form_param, search_query)
-            form_html = await fetch(url)
-            if not form_html:
-                plan.add(
-                    'form',
-                    form_param,
-                    url=url,
-                    ok=False,
-                    detail='fetch_failed',
-                )
+            form_html: str | None
+            if form_method == 'POST':
+                form_url = form_action or base_url
+                if self._post is None:
+                    plan.add(
+                        'form',
+                        form_param,
+                        url=form_url,
+                        ok=False,
+                        detail='no_post_transport',
+                        method='POST',
+                    )
+                    form_html = None
+                else:
+                    form_html = await self._post(
+                        form_url, {form_param: search_query}
+                    )
             else:
-                form_ok = looks_like_search_results(form_html)
+                form_url = build_probe_url(base_url, form_param, search_query)
+                form_html = await fetch(form_url)
+                if not form_html:
+                    plan.add(
+                        'form',
+                        form_param,
+                        url=form_url,
+                        ok=False,
+                        detail='fetch_failed',
+                    )
+
+            if form_html:
+                form_ok = self._looks_like(form_html)
                 form_target_found = False
                 form_target_score = 0
                 form_matched_variant = None
@@ -833,18 +893,20 @@ class SearchUrlProber:
                 plan.add(
                     'form',
                     form_param,
-                    url=url,
+                    url=form_url,
                     ok=form_ok,
                     detail='content_ok' if form_ok else 'empty_results',
                     target_found=form_target_found,
                     target_score=form_target_score,
                     matched_variant=form_matched_variant,
+                    method=form_method,
                 )
                 if form_ok:
                     self._logger.info(
-                        'Параметр %s из формы дал результаты (%s)',
+                        'Параметр %s из формы дал результаты (%s, method=%s)',
                         form_param,
                         base_url,
+                        form_method,
                     )
                     return plan
 
@@ -862,7 +924,7 @@ class SearchUrlProber:
                     'query', variant, url=url, ok=False, detail='fetch_failed'
                 )
                 continue
-            looks_ok = looks_like_search_results(html)
+            looks_ok = self._looks_like(html)
             target_found = False
             target_score = 0
             matched_variant = None
@@ -907,6 +969,40 @@ class SearchUrlProber:
                 detail='all_attempts_failed',
             )
         return plan
+
+    async def probe_async(
+        self,
+        base_url: str,
+        search_query: str,
+        *,
+        prefer_param: str | None = None,
+        target_name: str = '',
+        target_inn: str = '',
+        source_type: SourceType | None = None,
+    ) -> ProbedUrl | None:
+        """Тонкая обёртка над ``probe()``: отдаёт только победителя.
+
+        Нужна вызывающим сторонам (``SourceRegistrationService.
+        probe_search_endpoint``, ``AdaptiveRunner._get_or_probe_url``),
+        которым нужен готовый ``ProbedUrl`` для кэширования, а не весь
+        план перебора с деталями каждой попытки.
+        """
+        plan = await self.probe(
+            base_url,
+            search_query,
+            prefer_param=prefer_param,
+            target_name=target_name,
+            target_inn=target_inn,
+            source_type=source_type,
+        )
+        if plan.winner is None:
+            return None
+        return ProbedUrl(
+            source_name=target_name or search_query,
+            search_url=plan.winner.url,
+            search_method=plan.winner.method,
+            confidence=1.0 if plan.winner.target_found else 0.5,
+        )
 
     async def _default_fetch(self, url: str) -> str | None:
         """Фетч по умолчанию: стратегии оркестратора."""

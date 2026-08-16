@@ -238,18 +238,35 @@ _FORM_HTML = (
 
 
 def test_extract_form_param_returns_name_and_abs_action():
-    param, action = extract_form_param(_FORM_HTML, 'https://example.com')
+    param, action, method = extract_form_param(
+        _FORM_HTML, 'https://example.com'
+    )
     assert param == 'searchString'
     assert action == 'https://example.com/find'
+    assert method == 'GET'
+
+
+def test_extract_form_param_detects_post_method():
+    html = (
+        '<html><body>'
+        '<form action="/find" method="post">'
+        '<input name="q" type="text">'
+        '</form>'
+        '</body></html>'
+    )
+    param, action, method = extract_form_param(html, 'https://example.com')
+    assert param == 'q'
+    assert action == 'https://example.com/find'
+    assert method == 'POST'
 
 
 def test_extract_form_param_no_form():
     html = '<html><body>без формы</body></html>'
-    assert extract_form_param(html, SEARCH_BASE) == (None, None)
+    assert extract_form_param(html, SEARCH_BASE) == (None, None, 'GET')
 
 
 def test_extract_form_param_empty_html():
-    assert extract_form_param('', SEARCH_BASE) == (None, None)
+    assert extract_form_param('', SEARCH_BASE) == (None, None, 'GET')
 
 
 def test_extract_form_param_skips_named_input():
@@ -259,7 +276,7 @@ def test_extract_form_param_skips_named_input():
         '<input type="hidden" name="csrf">'
         '</form></body></html>'
     )
-    assert extract_form_param(html, SEARCH_BASE) == (None, None)
+    assert extract_form_param(html, SEARCH_BASE) == (None, None, 'GET')
 
 
 def test_extract_form_param_skips_cross_domain_action():
@@ -268,7 +285,7 @@ def test_extract_form_param_skips_cross_domain_action():
         '<input name="email" type="text">'
         '</form></body></html>'
     )
-    assert extract_form_param(html, SEARCH_BASE) == (None, None)
+    assert extract_form_param(html, SEARCH_BASE) == (None, None, 'GET')
 
 
 # ============================================================================
@@ -402,6 +419,59 @@ async def test_probe_handles_fetch_failures():
 
     assert plan.success is False
     assert all(a.ok is False for a in plan.attempts)
+
+
+# ---------------------------------------------------------------------------
+# POST-форма (form с method="post")
+# ---------------------------------------------------------------------------
+# ``myquery`` — намеренно не входит в ``_DEFAULT_PARAM_CHAIN``, иначе форма
+# считалась бы уже перебранным параметром и до form-этапа не доходило бы.
+_FORM_POST_HTML = (
+    '<html><body><form action="/find" method="post">'
+    '<input name="myquery" type="text"></form></body></html>'
+)
+
+
+@pytest.mark.asyncio
+async def test_probe_form_post_success():
+    """Форма с method="post" отправляется реальным POST, а не GET-ом."""
+
+    async def fetch(url: str) -> str:
+        # Ни один словарный GET-параметр не даёт выдачи — короткий HTML
+        # с формой не проходит длину looks_like_search_results.
+        return _FORM_POST_HTML
+
+    posted: list[tuple[str, dict]] = []
+
+    async def post(url: str, params: dict) -> str:
+        posted.append((url, params))
+        return RESULTS_HTML
+
+    prober = SearchUrlProber(fetch=fetch, post=post)
+    plan = await prober.probe(SEARCH_BASE, COMPETITOR)
+
+    assert plan.success is True
+    assert plan.winner is not None
+    assert plan.winner.kind == 'form'
+    assert plan.winner.method == 'POST'
+    assert posted == [('https://example.com/find', {'myquery': COMPETITOR})]
+
+
+@pytest.mark.asyncio
+async def test_probe_form_post_skipped_without_transport():
+    """Без ``post=`` POST-форма помечается пропущенной, а не GET-ится."""
+
+    async def fetch(url: str) -> str:
+        return _FORM_POST_HTML
+
+    prober = SearchUrlProber(fetch=fetch)  # post не передан
+    plan = await prober.probe(SEARCH_BASE, COMPETITOR)
+
+    assert plan.success is False
+    form_attempts = [a for a in plan.attempts if a.kind == 'form']
+    assert len(form_attempts) == 1
+    assert form_attempts[0].detail == 'no_post_transport'
+    assert form_attempts[0].method == 'POST'
 
 
 # ============================================================================

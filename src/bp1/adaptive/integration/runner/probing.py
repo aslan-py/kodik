@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from urllib.parse import quote_plus, urlencode
 
@@ -70,29 +71,35 @@ class _ProbingMixin:
                 return resp.read().decode('utf-8', errors='replace')
 
     @staticmethod
-    def _default_probe_fetch(url: str) -> str:
+    async def _default_probe_fetch(url: str) -> str:
         """Реальный GET-загрузчик для пробинга.
 
         Используется по умолчанию, чтобы пробинг не падал на заглушке
         ``NotImplementedError`` (как было раньше, когда fetch подставлялся
-        только через ``bind_probe_fetch``). При недоступности / ошибке сети
-        поднимает исключение, которое ``SearchUrlProber._safe_fetch``
-        превращает в ``None`` (вариант помечается ``fetch_error``).
+        только через ``bind_probe_fetch``). Блокирующий ``urllib``-запрос
+        выполняется в отдельном потоке (``asyncio.to_thread``) — ``probe()``
+        в ``SearchUrlProber`` асинхронный и делает ``await fetch(url)``
+        напрямую, без собственной обёртки в поток. При недоступности /
+        ошибке сети поднимает исключение — оно улетает наружу, к
+        вызывающей стороне (`probe()` не перехватывает ошибки fetch сам).
         """
-        return _ProbingMixin._probe_request(url)
+        return await asyncio.to_thread(_ProbingMixin._probe_request, url)
 
     @staticmethod
-    def _default_probe_post(url: str, params: dict[str, str]) -> str:
+    async def _default_probe_post(url: str, params: dict[str, str]) -> str:
         """Реальный POST-загрузчик формы поиска (Шаг 18 плана рефакторинга).
 
         Раньше этап формы в ``SearchUrlProber`` был заглушкой: он выполнял
         обычный GET, но результат помечался как ``search_method='POST'``.
         Теперь параметры уходят телом запроса
         (``application/x-www-form-urlencoded``) — так ищут сайты, где поиск
-        реализован формой, а не query-строкой.
+        реализован формой, а не query-строкой. Как и у GET-варианта,
+        блокирующий вызов уходит в отдельный поток.
         """
-        return _ProbingMixin._probe_request(
-            url, data=urlencode(params).encode('utf-8')
+        return await asyncio.to_thread(
+            _ProbingMixin._probe_request,
+            url,
+            urlencode(params).encode('utf-8'),
         )
 
     @staticmethod

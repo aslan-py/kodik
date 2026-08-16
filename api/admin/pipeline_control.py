@@ -143,6 +143,7 @@ class PipelineControlAdmin(ReadOnlyModelAdmin):
     verbose_name_plural = 'Пайплайн'
 
     widget_actions = (
+        'show_technical_logs',
         'show_schedule',
         'save_schedule',
         'reset_schedule',
@@ -155,6 +156,23 @@ class PipelineControlAdmin(ReadOnlyModelAdmin):
         'stage_7',
         'run_all_stages',
     )
+
+    @widget_action(
+        tab=MENU_PIPELINE_CONTROL,
+        title='Технические логи (Grafana)',
+        widget_action_type=WidgetActionType.Action,
+    )
+    async def show_technical_logs(
+        self, payload: WidgetActionInputSchema
+    ) -> WidgetActionResponseSchema:
+        return WidgetActionResponseSchema(
+            data=[
+                {
+                    'url': settings.grafana_url,
+                    'hint': 'Откройте Grafana и найдите run_id из  запуска.',
+                }
+            ]
+        )
 
     @widget_action(
         tab=MENU_PIPELINE_CONTROL,

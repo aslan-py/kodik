@@ -52,6 +52,15 @@ async def test_run_all_widget_calls_existing_all_stages_handler(monkeypatch):
     assert response.data[0]['status'] == 'queued'
 
 
+async def test_technical_logs_widget_returns_configured_grafana_url():
+    response = await _pipeline_admin().show_technical_logs(
+        WidgetActionInputSchema(query=[])
+    )
+
+    assert response.data[0]['url'].startswith('http')
+    assert 'run_id' in response.data[0]['hint']
+
+
 async def test_schedule_widget_saves_and_resets_override(session):
     schedule = await session.get(PipelineSchedule, 1)
     assert schedule is not None

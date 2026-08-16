@@ -1,5 +1,6 @@
 """Transactional creation of durable pipeline runs."""
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -13,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.enums import PipelineRunKind, PipelineRunSource, PipelineRunStatus
 from core.pipeline.models import PipelineRun, PipelineStageRun
 from core.pipeline.registry import STAGES
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineRunConflict(RuntimeError):
@@ -119,6 +122,13 @@ class PipelineRunService:
             scheduled_for=scheduled_for,
         )
         await self.session.commit()
+        logger.info(
+            'pipeline_event=run_created run_id=%s kind=%s source=%s stage=%s',
+            created.run_id,
+            kind.value,
+            source.value,
+            stage,
+        )
         try:
             canvas = self._build_canvas(created.run_id, kind, stage)
             async_result = canvas.apply_async()
@@ -132,6 +142,11 @@ class PipelineRunService:
         if run is not None:
             run.root_task_id = async_result.id
             await self.session.commit()
+        logger.info(
+            'pipeline_event=run_published run_id=%s celery_task_id=%s',
+            created.run_id,
+            async_result.id,
+        )
         return created
 
     @staticmethod

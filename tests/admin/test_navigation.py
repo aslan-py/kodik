@@ -93,6 +93,7 @@ def test_pipeline_marker_stays_registered_with_all_widget_actions():
     )
     assert isinstance(marker_admin, PipelineControlAdmin)
     assert marker_admin.widget_actions == (
+        'show_technical_logs',
         'show_schedule',
         'save_schedule',
         'reset_schedule',

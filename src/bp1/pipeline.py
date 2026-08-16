@@ -15,7 +15,7 @@
      извлечь события, провалидировать качество — src/bp1/adaptive/
   4. сохранить результат в RawItem с дедупликацией по хэшу содержимого
      (Redis) — RawDataService.persist (src/bp1/storage.py)
-  5. свернуть результаты по задачам в сводку прогона — _summarize
+  5. свернуть результаты по задачам в сводку прогона — summarize_results
 
 Оркестратор run_bp1 открывает сессию и Redis-клиент один раз на весь
 прогон, коммитит сессию и закрывает Redis в finally — по образцу
@@ -42,6 +42,7 @@ from src.bp1.adaptive.integration.runner import (
     AdaptiveRunner,
     check_strategy_chain,
 )
+from src.bp1.search_task_coverage import sync_search_task_coverage
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ _STATUS_UNCHANGED = 'unchanged'
 _STATUS_ERROR = 'error'
 
 
-def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Свернуть результаты по задачам сбора в сводку прогона.
 
     saved — создан новый снимок; unchanged — источник не изменился с
@@ -168,13 +169,15 @@ async def run_bp1() -> dict[str, Any]:
     finally:
         await redis_client_instance.close()
 
-    summary = _summarize(results)
+    summary = summarize_results(results)
+    summary['search_tasks_created'] = search_tasks_created
     logger.info(
         'BP-1 прогон завершён: задач=%s, успех=%.1f%%, стратегии=%s, '
-        'low_quality=%s',
+        'low_quality=%s, новых_задач=%s',
         summary['tasks'],
         summary['success_rate'] * 100,
         summary['by_strategy'],
         len(summary['low_quality_sources']),
+        search_tasks_created,
     )
     return summary

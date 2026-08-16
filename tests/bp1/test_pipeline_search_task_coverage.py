@@ -45,9 +45,22 @@ async def test_run_bp1_syncs_before_crawl_in_same_session(monkeypatch):
         events.append(('sync', session))
         return 3
 
+    class _FakeOrchestrator:
+        def __init__(self):
+            self._strategies = {'FAST': object()}
+
+    class _FakeAdaptiveParser:
+        def __init__(self):
+            self._orchestrator = _FakeOrchestrator()
+
+    class _FakeParser:
+        def __init__(self):
+            self._adaptive_parser = _FakeAdaptiveParser()
+
     class FakeRunner:
         def __init__(self, **kwargs):
             events.append(('runner_init', kwargs))
+            self._parser = _FakeParser()
 
         async def run_all(self, session, redis_client):
             events.append(('crawl', session, redis_client))
@@ -70,6 +83,10 @@ async def test_run_bp1_syncs_before_crawl_in_same_session(monkeypatch):
         'unchanged': 0,
         'error': 0,
         'skipped': 1,
+        'success_rate': 0.5,
+        'by_strategy': {},
+        'quality_levels': {},
+        'low_quality_sources': [],
         'search_tasks_created': 3,
     }
 

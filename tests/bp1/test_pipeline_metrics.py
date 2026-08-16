@@ -1,6 +1,6 @@
 """Тесты наблюдаемости прогона BP-1 (Шаг 20 плана рефакторинга, T6).
 
-Проверяют сводку ``_summarize`` и проверку целостности цепочки стратегий
+Проверяют сводку ``summarize_results`` и проверку целостности цепочки стратегий
 ``check_strategy_chain``:
 
 - доля успешных задач (``success_rate``);
@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from src.bp1.adaptive.integration.runner import check_strategy_chain
-from src.bp1.pipeline import _summarize
+from src.bp1.pipeline import summarize_results
 
 
 def _result(status: str, **extra) -> dict:
@@ -22,7 +22,7 @@ def _result(status: str, **extra) -> dict:
 
 def test_summarize_keeps_legacy_counters():
     """Прежние счётчики считаются как раньше."""
-    summary = _summarize(
+    summary = summarize_results(
         [
             _result('saved'),
             _result('saved'),
@@ -43,7 +43,7 @@ def test_summarize_keeps_legacy_counters():
 
 def test_summarize_success_rate():
     """success_rate — доля задач, давших данные (saved + unchanged)."""
-    summary = _summarize(
+    summary = summarize_results(
         [
             _result('saved'),
             _result('unchanged'),
@@ -56,12 +56,12 @@ def test_summarize_success_rate():
 
 def test_summarize_success_rate_empty_run():
     """Пустой прогон не делит на ноль."""
-    assert _summarize([])['success_rate'] == 0.0
+    assert summarize_results([])['success_rate'] == 0.0
 
 
 def test_summarize_breaks_down_by_actual_strategy():
     """Разбивка по стратегиям считает реально сработавшие."""
-    summary = _summarize(
+    summary = summarize_results(
         [
             _result('saved', strategy='FAST'),
             _result('saved', strategy='STEALTH'),
@@ -82,7 +82,7 @@ def test_summarize_quality_levels():
         'SCHEMA': {'passed': True, 'errors': 0, 'warnings': 0},
         'CONSISTENCY': {'passed': False, 'errors': 3, 'warnings': 0},
     }
-    summary = _summarize(
+    summary = summarize_results(
         [
             _result('saved', quality_levels=levels_ok),
             _result('saved', quality_levels=levels_bad),
@@ -98,7 +98,7 @@ def test_summarize_quality_levels():
 
 def test_summarize_collects_low_quality_sources():
     """Источники с проваленным Quality Gate попадают в отдельный список."""
-    summary = _summarize(
+    summary = summarize_results(
         [
             _result('saved', quality_status='ok', source='good.ru'),
             _result('saved', quality_status='low_quality', source='bad.ru'),

@@ -59,6 +59,24 @@ def test_summarize_success_rate_empty_run():
     assert summarize_results([])['success_rate'] == 0.0
 
 
+def test_summarize_distinguishes_empty_results():
+    """Пустой снимок не маскируется общим успешным сохранением."""
+    summary = summarize_results(
+        [
+            _result('saved', source_items=3),
+            _result(
+                'saved',
+                source_items=0,
+                empty_reason='no_extractable_items',
+            ),
+        ]
+    )
+
+    assert summary['source_items'] == 3
+    assert summary['empty_results'] == 1
+    assert summary['empty_by_reason'] == {'no_extractable_items': 1}
+
+
 def test_summarize_breaks_down_by_actual_strategy():
     """Разбивка по стратегиям считает реально сработавшие."""
     summary = summarize_results(

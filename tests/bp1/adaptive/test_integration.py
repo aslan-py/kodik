@@ -87,6 +87,8 @@ async def test_bridge_returns_parsed_response(monkeypatch):
         trigger=TRIGGER,
     )
     assert response.meta.source == EXAMPLE_SOURCE_NAME
+    assert response.meta.items_count == len(response.items)
+    assert response.meta.empty_reason is None
     assert response.meta.search_task_id == SEARCH_TASK_ID
     assert len(response.items) >= 1
     # Страница результатов поиска сама не событие БП-1 (её нет в контракте
@@ -121,6 +123,8 @@ async def test_bridge_meta_matches_about_contract(monkeypatch):
         'trigger',
         'source_request_url',
         'fetched_at',
+        'items_count',
+        'empty_reason',
     }
     assert response.metrics.strategy_used == StrategyType.FAST.value
     assert response.metrics.quality_status is not None
@@ -164,6 +168,8 @@ async def test_bridge_zero_results_still_routes_metrics(monkeypatch):
     # Ни одной новости не найдено -> служебная страница поиска не событие,
     # items пуст (а не 1 элемент со слипшейся диагностикой в extra).
     assert response.items == []
+    assert response.meta.items_count == 0
+    assert response.meta.empty_reason == 'no_extractable_items'
     assert response.metrics.news_total == 0
     assert response.metrics.quality_levels is not None
     assert response.meta.model_dump().keys() == {
@@ -173,6 +179,8 @@ async def test_bridge_zero_results_still_routes_metrics(monkeypatch):
         'trigger',
         'source_request_url',
         'fetched_at',
+        'items_count',
+        'empty_reason',
     }
 
 

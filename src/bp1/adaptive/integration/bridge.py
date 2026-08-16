@@ -157,6 +157,14 @@ class AdaptiveBridgeParser(BaseParser):
             )
 
         items = items + promoted
+        if not items:
+            empty_reason = (
+                'all_items_filtered'
+                if run_metrics.get('news_total', 0) > 0
+                else 'no_extractable_items'
+            )
+        else:
+            empty_reason = None
 
         meta: dict[str, Any] = {
             'search_task_id': kwargs.get('search_task_id'),
@@ -168,6 +176,8 @@ class AdaptiveBridgeParser(BaseParser):
             'source_request_url': kwargs.get('source_request_url') or url,
             # Время съёма; в хэш НЕ включается, иначе всегда 'changed'.
             'fetched_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
+            'items_count': len(items),
+            'empty_reason': empty_reason,
         }
 
         probed_url = kwargs.get('probed_url')

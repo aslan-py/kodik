@@ -45,6 +45,7 @@ class PipelineStageRunAdmin(ReadOnlyModelAdmin):
         'attempts',
         'reparse',
         'is_stub',
+        'result',
         'task_id',
         'started_at',
         'finished_at',

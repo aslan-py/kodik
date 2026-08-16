@@ -46,6 +46,15 @@ class ParsedMeta(BaseModel):
         description='Время съёма; в content-хэш не включается (иначе '
         'всегда changed)',
     )
+    items_count: int = Field(
+        0,
+        ge=0,
+        description='Число материалов, переданных в BP-2',
+    )
+    empty_reason: str | None = Field(
+        None,
+        description='Стабильный код причины пустого списка материалов',
+    )
 
     model_config = ConfigDict(extra='forbid')
 

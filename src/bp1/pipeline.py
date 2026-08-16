@@ -80,10 +80,13 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         'unchanged': 0,
         'error': 0,
         'skipped': 0,
+        'source_items': 0,
+        'empty_results': 0,
     }
     by_strategy: dict[str, int] = {}
     quality_levels: dict[str, dict[str, int]] = {}
     low_quality_sources: list[str] = []
+    empty_by_reason: dict[str, int] = {}
 
     for result in results:
         status = result.get('status')
@@ -99,6 +102,14 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         strategy = result.get('strategy')
         if strategy:
             by_strategy[strategy] = by_strategy.get(strategy, 0) + 1
+
+        summary['source_items'] += int(result.get('source_items') or 0)
+        empty_reason = result.get('empty_reason')
+        if empty_reason:
+            summary['empty_results'] += 1
+            empty_by_reason[empty_reason] = (
+                empty_by_reason.get(empty_reason, 0) + 1
+            )
 
         if result.get('quality_status') == 'low_quality':
             source = result.get('source')
@@ -121,6 +132,7 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     summary['by_strategy'] = by_strategy
     summary['quality_levels'] = quality_levels
     summary['low_quality_sources'] = low_quality_sources
+    summary['empty_by_reason'] = empty_by_reason
     return summary
 
 
@@ -137,6 +149,10 @@ async def run_bp1() -> dict[str, Any]:
     try:
         async with AsyncSessionLocal() as session:
             search_tasks_created = await sync_search_task_coverage(session)
+            # В параллельном режиме run_all открывает отдельную сессию БД
+            # для каждой задачи. Фиксируем покрытие, чтобы новые SearchTask
+            # были видны этим сессиям.
+            await session.commit()
             runner = AdaptiveRunner(
                 mode=settings.bp1_adaptive_mode,
                 headless=settings.bp1_headless,

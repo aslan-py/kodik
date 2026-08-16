@@ -1,7 +1,7 @@
 """add durable pipeline-run orchestration tables
 
 Revision ID: f1a2b3c4d5e6
-Revises: 44cc7e12d384
+Revises: e1c9e6882eb4
 Create Date: 2026-08-13 18:20:00.000000
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = 'f1a2b3c4d5e6'
-down_revision: str | Sequence[str] | None = '44cc7e12d384'
+down_revision: str | Sequence[str] | None = 'e1c9e6882eb4'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

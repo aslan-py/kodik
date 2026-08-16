@@ -23,3 +23,4 @@ class BlackDomainCreate(BaseModel):
 class BlackDomainUpdate(BaseModel):
     domain: str | None = None
     reason: str | None = None
+    is_active: bool | None = None

@@ -88,7 +88,7 @@ async def test_password_reset_confirm_changes_password(
     assert login.status_code == 200
 
 
-async def test_update_me_enforces_password_and_forbids_role_change(
+async def test_update_me_enforces_password_and_forbids_privilege_change(
     client, users_by_role, auth_headers
 ):
     user = users_by_role[UserRole.viewer]
@@ -96,6 +96,11 @@ async def test_update_me_enforces_password_and_forbids_role_change(
 
     assert (
         await client.patch('/users/me', headers=headers, json={'role': 'admin'})
+    ).status_code == 422
+    assert (
+        await client.patch(
+            '/users/me', headers=headers, json={'is_active': False}
+        )
     ).status_code == 422
     assert (
         await client.patch(
@@ -165,6 +170,45 @@ async def test_users_list_filter_and_role_update(
             '/users/999999999/role', headers=headers, json={'role': 'viewer'}
         )
     ).status_code == 404
+
+
+async def test_admin_update_changes_department_and_activity(
+    client, session, users_by_role, auth_headers
+):
+    from src.bp3.models import Department
+
+    target = users_by_role[UserRole.pending]
+    department = Department(name=f'Отдел {uuid4().hex}')
+    session.add(department)
+    await session.flush()
+    response = await client.patch(
+        f'/users/{target.id}/role',
+        headers=auth_headers(users_by_role[UserRole.admin]),
+        json={'department_id': department.id, 'is_active': False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()['department_id'] == department.id
+    assert response.json()['is_active'] is False
+    assert response.json()['role'] == UserRole.pending
+
+    missing = await client.patch(
+        f'/users/{target.id}/role',
+        headers=auth_headers(users_by_role[UserRole.admin]),
+        json={'department_id': 999_999},
+    )
+    assert missing.status_code == 404
+
+    unauthenticated = await client.patch(
+        f'/users/{target.id}/role', json={'is_active': False}
+    )
+    forbidden = await client.patch(
+        f'/users/{target.id}/role',
+        headers=auth_headers(users_by_role[UserRole.viewer]),
+        json={'is_active': False},
+    )
+    assert unauthenticated.status_code == 401
+    assert forbidden.status_code == 403
 
 
 async def test_user_by_id_requires_editor_role_and_returns_requested_user(

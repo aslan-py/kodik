@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.enums import ActionStatus
 
@@ -18,11 +18,19 @@ class ShowcaseFilterOptions(BaseModel):
     priority: list[str]
     competitor: list[str]
     department: list[str]
+    media: list[str]
+
+
+class DeadlineRange(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: date | None = Field(default=None, alias='from')
+    to: date | None = None
 
 
 class ActionItemFilterOptions(BaseModel):
     status: list[ActionStatus]
-    deadline: list[date]
+    deadline: DeadlineRange
     priority: list[str]
     assigned_user_id: list[IdLabelOption]
     department_id: list[IdLabelOption]

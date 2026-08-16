@@ -29,6 +29,7 @@ class ShowcaseService:
         region: str | None = None,
         competitor: str | None = None,
         department: str | None = None,
+        media: str | None = None,
         published_from: date | None = None,
         published_to: date | None = None,
     ) -> list[ShowcaseEventRead]:
@@ -41,6 +42,7 @@ class ShowcaseService:
             region=region,
             competitor=competitor,
             department=department,
+            media=media,
             published_from=published_from,
             published_to=published_to,
         )

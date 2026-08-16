@@ -23,3 +23,4 @@ class SearchTaskUpdate(BaseModel):
     competitor_id: int | None = None
     source_id: int | None = None
     trigger_id: int | None = None
+    is_active: bool | None = None

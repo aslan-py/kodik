@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.crud.filter_options import FilterOptionsCRUD
 from api.schemas.filter_options import (
     ActionItemFilterOptions,
+    DeadlineRange,
     FilterOptionsRead,
     IdLabelOption,
     ShowcaseFilterOptions,
@@ -32,16 +33,19 @@ class FilterOptionsService:
             department=await self.crud.showcase_values(
                 ShowcaseEvent.department
             ),
+            media=await self.crud.showcase_values(ShowcaseEvent.media),
         )
 
         if user.role == UserRole.viewer and user.department_id is None:
-            deadlines = []
+            deadline_from = deadline_to = None
             priorities = []
             users = []
             departments = []
         else:
             scope = user.department_id if user.role == UserRole.viewer else None
-            deadlines = await self.crud.action_deadlines(scope)
+            deadline_from, deadline_to = await self.crud.action_deadline_range(
+                scope
+            )
             present_priorities = set(
                 await self.crud.action_priorities(PRIORITY_OPTIONS, scope)
             )
@@ -55,7 +59,7 @@ class FilterOptionsService:
 
         action_items = ActionItemFilterOptions(
             status=list(ActionStatus),
-            deadline=list(deadlines),
+            deadline=DeadlineRange(from_=deadline_from, to=deadline_to),
             priority=priorities,
             assigned_user_id=[
                 IdLabelOption(value=value, label=label)

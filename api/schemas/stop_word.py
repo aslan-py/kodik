@@ -25,3 +25,4 @@ class StopWordUpdate(BaseModel):
     phrase: str | None = None
     type: StopType | None = None
     note: str | None = None
+    is_active: bool | None = None

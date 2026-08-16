@@ -16,7 +16,7 @@ from api.responses import (
     USER_ROLE_UPDATE_RESPONSES,
     USERS_LIST_RESPONSES,
 )
-from api.schemas.users import UserRead, UserRoleUpdate, UserUpdateMe
+from api.schemas.users import UserAdminUpdate, UserRead, UserUpdateMe
 from api.service.users import UserService
 
 router = APIRouter()
@@ -44,8 +44,9 @@ async def read_me(user: CurrentUser, session: SessionDep) -> UserRead:
     description=(
         'Доступ: любая роль, включая `pending`.\n\n'
         'Правит `email`, `password`, `full_name`, `department_id`, '
-        '`telegram_id` — все поля опциональны (partial update). `role` '
-        'через этот эндпоинт изменить нельзя (её нет в схеме, лишнее поле '
+        '`telegram_id` — все поля опциональны (partial update). `role` и '
+        '`is_active` через этот эндпоинт изменить нельзя '
+        '(их нет в схеме, лишнее поле '
         'даёт 422).\n\n'
         'Если меняется `email` или `password` — обязателен '
         '`current_password`, иначе 401 (защита от смены логина/пароля '
@@ -102,18 +103,18 @@ async def read_user(
     '/{user_id}/role',
     response_model=UserRead,
     responses=USER_ROLE_UPDATE_RESPONSES,
-    summary='Сменить роль пользователя',
+    summary='Административно править пользователя',
     description=(
         'Доступ: только `analyst` и `admin`.\n\n'
-        'Единственный способ подтвердить `pending` → `viewer`/`analyst` '
-        'или назначить `admin` — правки роли себе самому эндпоинт не '
-        'запрещает отдельно, но обычно это делает другой admin/analyst.'
+        'Позволяет частично изменить `role`, `department_id` и `is_active`. '
+        'Непереданные поля сохраняются; собственные роль и активность '
+        'через `/users/me` изменить нельзя.'
     ),
 )
-async def update_role(
+async def update_admin(
     user_id: int,
-    data: UserRoleUpdate,
+    data: UserAdminUpdate,
     session: SessionDep,
     _approver: ApproverDep,
 ) -> UserRead:
-    return await UserService(session).update_role(user_id, data)
+    return await UserService(session).update_admin(user_id, data)

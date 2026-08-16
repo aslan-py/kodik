@@ -30,18 +30,21 @@ async def _create_option_data(session, users_by_role):
     own_event.category = 'логистика'
     own_event.region = 'Москва'
     own_event.competitor = 'Ozon'
+    own_event.media = 'РБК'
     own_event.department = own_department.name
     own_event.priority = 'П2'
     duplicate_event = await make_showcase_event(session, title='Duplicate')
     duplicate_event.category = 'логистика'
     duplicate_event.region = 'Москва'
     duplicate_event.competitor = None
+    duplicate_event.media = 'РБК'
     duplicate_event.department = None
     duplicate_event.priority = 'П1'
     other_event = await make_showcase_event(session, title='Other options')
     other_event.category = 'Аналитика'
     other_event.region = 'Архангельск'
     other_event.competitor = 'Wildberries'
+    other_event.media = 'Коммерсант'
     other_event.department = other_department.name
     other_event.priority = 'П4'
 
@@ -88,6 +91,7 @@ async def test_filter_options_exact_structure_sorting_and_deduplication(
         'priority',
         'competitor',
         'department',
+        'media',
     }
     assert set(body['action_items']) == {
         'status',
@@ -100,6 +104,7 @@ async def test_filter_options_exact_structure_sorting_and_deduplication(
     assert body['showcase']['category'] == ['Аналитика', 'логистика']
     assert body['showcase']['region'] == ['Архангельск', 'Москва']
     assert body['showcase']['competitor'] == ['Ozon', 'Wildberries']
+    assert body['showcase']['media'] == ['Коммерсант', 'РБК']
     assert None not in body['showcase']['department']
     assert body['showcase']['department'] == sorted(
         [own_department.name, other_department.name], key=str.casefold
@@ -107,7 +112,10 @@ async def test_filter_options_exact_structure_sorting_and_deduplication(
     assert body['action_items']['status'] == [
         item.value for item in ActionStatus
     ]
-    assert body['action_items']['deadline'] == ['2026-08-14', '2026-08-15']
+    assert body['action_items']['deadline'] == {
+        'from': '2026-08-14',
+        'to': '2026-08-15',
+    }
     assert body['action_items']['priority'] == ['П2', 'П4']
     assert [
         item['label'] for item in body['action_items']['assigned_user_id']
@@ -131,10 +139,11 @@ async def test_filter_options_empty_data_keeps_static_values(
             'priority': ['П1', 'П2', 'П3', 'П4'],
             'competitor': [],
             'department': [],
+            'media': [],
         },
         'action_items': {
             'status': ['open', 'in_progress', 'done'],
-            'deadline': [],
+            'deadline': {'from': None, 'to': None},
             'priority': [],
             'assigned_user_id': [],
             'department_id': [],
@@ -178,8 +187,12 @@ def test_filter_options_and_action_filters_have_exact_openapi_contract():
     }
 
     assert response_schema == {'$ref': '#/components/schemas/FilterOptionsRead'}
-    assert {'deadline', 'priority'} <= action_parameters.keys()
-    assert action_parameters['deadline']['schema']['anyOf'][0] == {
+    assert {
+        'deadline_from',
+        'deadline_to',
+        'priority',
+    } <= action_parameters.keys()
+    assert action_parameters['deadline_from']['schema']['anyOf'][0] == {
         'type': 'string',
         'format': 'date',
     }
@@ -207,7 +220,10 @@ async def test_viewer_scope_and_every_action_option_is_applicable(
         await client.get('/filter-options', headers=analyst_headers)
     ).json()['action_items']
 
-    assert viewer_options['deadline'] == ['2026-08-14']
+    assert viewer_options['deadline'] == {
+        'from': '2026-08-14',
+        'to': '2026-08-14',
+    }
     assert viewer_options['priority'] == ['П2']
     assert viewer_options['assigned_user_id'] == [
         {'value': users_by_role[UserRole.pending].id, 'label': 'Борис Соболев'}
@@ -222,7 +238,8 @@ async def test_viewer_scope_and_every_action_option_is_applicable(
 
     filter_values = {
         'status': viewer_options['status'][0],
-        'deadline': viewer_options['deadline'][0],
+        'deadline_from': viewer_options['deadline']['from'],
+        'deadline_to': viewer_options['deadline']['to'],
         'priority': viewer_options['priority'][0],
         'assigned_user_id': viewer_options['assigned_user_id'][0]['value'],
         'department_id': viewer_options['department_id'][0]['value'],
@@ -238,3 +255,28 @@ async def test_viewer_scope_and_every_action_option_is_applicable(
         '/action-items', headers=viewer_headers, params=filter_values
     )
     assert {item['id'] for item in combined.json()} == {own_item.id}
+
+
+async def test_media_option_filters_showcase_and_deadline_range_validation(
+    client, session, users_by_role, auth_headers
+):
+    await _create_option_data(session, users_by_role)
+    headers = auth_headers(users_by_role[UserRole.analyst])
+    options = (await client.get('/filter-options', headers=headers)).json()
+
+    media = options['showcase']['media'][0]
+    showcase = await client.get(
+        '/showcase', headers=headers, params={'media': media}
+    )
+    invalid_range = await client.get(
+        '/action-items',
+        headers=headers,
+        params={'deadline_from': '2026-08-16', 'deadline_to': '2026-08-14'},
+    )
+
+    assert showcase.status_code == 200
+    assert showcase.json()
+    assert all(
+        media.casefold() in item['media'].casefold() for item in showcase.json()
+    )
+    assert invalid_range.status_code == 422

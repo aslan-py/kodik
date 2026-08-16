@@ -279,12 +279,16 @@ class TestActionItemCRUD:
             )
         )
 
-        by_deadline = await crud.list_all(deadline=date(2026, 8, 13))
+        by_deadline = await crud.list_all(
+            deadline_from=date(2026, 8, 13),
+            deadline_to=date(2026, 8, 13),
+        )
         by_priority = await crud.list_all(priority='П1')
         combined = await crud.list_all(
             department_id=department.id,
             status=ActionStatus.open,
-            deadline=date(2026, 8, 13),
+            deadline_from=date(2026, 8, 13),
+            deadline_to=date(2026, 8, 13),
             priority='П1',
         )
 
@@ -340,7 +344,8 @@ class TestListItems:
             viewer,
             department_id=other_department.id,
             status_filter=ActionStatus.open,
-            deadline=date(2026, 8, 13),
+            deadline_from=date(2026, 8, 13),
+            deadline_to=date(2026, 8, 13),
             priority='П1',
         )
 

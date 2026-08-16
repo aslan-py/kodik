@@ -36,3 +36,4 @@ class RoutingRuleUpdate(BaseModel):
     user_id: int | None = None
     channel_id: int | None = None
     mode: DeliveryMode | None = None
+    is_active: bool | None = None

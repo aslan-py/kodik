@@ -10,7 +10,7 @@ status/expected_result и только в задачах своего отдел
 
 from datetime import date
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from api.dependencies import EditorDep, SessionDep, ViewerDep
 from api.responses import (
@@ -61,9 +61,11 @@ async def create_action_item(
         'игнорируется (всегда его собственный отдел) — остальные фильтры '
         'работают для всех ролей.\n\n'
         'Фильтры: `task` — подстрока без учёта регистра; '
-        '`status`/`assigned_user_id`/`showcase_event_id`/`deadline` — точное '
+        '`status`/`assigned_user_id`/`showcase_event_id` — точное '
         'совпадение (`showcase_event_id` удобен, чтобы проверить, есть '
-        'ли уже задача по конкретному событию витрины); `priority` — точное '
+        'ли уже задача по конкретному событию витрины); '
+        '`deadline_from`/`deadline_to` '
+        '— включительный диапазон срока; `priority` — точное '
         'совпадение с отображаемым приоритетом связанного события витрины '
         '(`П1`—`П4`). Все фильтры объединяются условием AND.'
     ),
@@ -76,9 +78,18 @@ async def list_action_items(
     task: str | None = None,
     assigned_user_id: int | None = None,
     showcase_event_id: int | None = None,
-    deadline: date | None = None,
+    deadline_from: date | None = None,
+    deadline_to: date | None = None,
     priority: str | None = None,
 ) -> list[ActionItemRead]:
+    if (
+        deadline_from is not None
+        and deadline_to is not None
+        and deadline_from > deadline_to
+    ):
+        raise HTTPException(
+            422, 'deadline_from не может быть позже deadline_to'
+        )
     return await ActionItemService(session).list_items(
         viewer,
         department_id,
@@ -86,7 +97,8 @@ async def list_action_items(
         task,
         assigned_user_id,
         showcase_event_id,
-        deadline,
+        deadline_from,
+        deadline_to,
         priority,
     )
 

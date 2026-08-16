@@ -72,3 +72,39 @@ async def test_search_task_duplicate_returns_conflict(
     )
 
     assert duplicate.status_code == 409
+
+
+async def test_search_task_patch_deactivates_and_reactivates(
+    client, users_by_role, auth_headers
+):
+    headers = auth_headers(users_by_role[UserRole.analyst])
+    marker = uuid4().hex
+    competitor = await client.post(
+        '/competitors',
+        headers=headers,
+        json={'name': f'HTTP competitor {marker}'},
+    )
+    source = await client.post(
+        '/sources', headers=headers, json={'name': f'HTTP source {marker}'}
+    )
+    created = await client.post(
+        '/search-tasks',
+        headers=headers,
+        json={
+            'competitor_id': competitor.json()['id'],
+            'source_id': source.json()['id'],
+        },
+    )
+    item_id = created.json()['id']
+
+    inactive = await client.patch(
+        f'/search-tasks/{item_id}', headers=headers, json={'is_active': False}
+    )
+    active = await client.patch(
+        f'/search-tasks/{item_id}', headers=headers, json={'is_active': True}
+    )
+    deleted = await client.delete(f'/search-tasks/{item_id}', headers=headers)
+
+    assert inactive.json()['is_active'] is False
+    assert active.json()['is_active'] is True
+    assert deleted.json()['is_active'] is False

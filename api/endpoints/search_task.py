@@ -106,7 +106,11 @@ async def create_search_task(
     responses=REFERENCE_WRITE_RESPONSES,
     dependencies=_editor_only,
     summary='Править: Задача сбора (search_task)',
-    description='Доступ: только `analyst` и `admin`. Partial update.',
+    description=(
+        'Доступ: только `analyst` и `admin`. Partial update: '
+        '`is_active=false` деактивирует, `is_active=true` реактивирует '
+        'задачу, а непереданные поля не меняются.'
+    ),
 )
 async def update_search_task(
     item_id: int, data: SearchTaskUpdate, session: SessionDep

@@ -134,6 +134,29 @@ async def test_reference_duplicate_returns_409(
     assert duplicate.status_code == 409
 
 
+@pytest.mark.parametrize('case', _cases(), ids=lambda case: case.path)
+async def test_reference_patch_deactivates_and_reactivates(
+    client, users_by_role, auth_headers, case
+):
+    headers = auth_headers(users_by_role[UserRole.admin])
+    created = await client.post(case.path, headers=headers, json=case.create)
+    assert created.status_code == 201, created.text
+    item_id = created.json()['id']
+    preserved = created.json()[case.changed_field]
+
+    inactive = await client.patch(
+        f'{case.path}/{item_id}', headers=headers, json={'is_active': False}
+    )
+    active = await client.patch(
+        f'{case.path}/{item_id}', headers=headers, json={'is_active': True}
+    )
+
+    assert inactive.status_code == active.status_code == 200
+    assert inactive.json()['is_active'] is False
+    assert active.json()['is_active'] is True
+    assert active.json()[case.changed_field] == preserved
+
+
 async def test_department_reads_are_public_and_region_has_no_delete(
     client, users_by_role, auth_headers
 ):

@@ -20,3 +20,4 @@ class CompetitorCreate(BaseModel):
 class CompetitorUpdate(BaseModel):
     name: str | None = None
     inn: str | None = None
+    is_active: bool | None = None

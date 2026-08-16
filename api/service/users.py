@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.crud.users import UserCRUD
-from api.schemas.users import UserRead, UserRoleUpdate, UserUpdateMe
+from api.schemas.users import UserAdminUpdate, UserRead, UserUpdateMe
 from api.security import verify_password
 from src.bp5.models import User
 
@@ -42,13 +42,22 @@ class UserService:
             )
         return UserRead.model_validate(user)
 
-    async def update_role(self, user_id: int, data: UserRoleUpdate) -> UserRead:
+    async def update_admin(
+        self, user_id: int, data: UserAdminUpdate
+    ) -> UserRead:
         user = await self.crud.get_by_id(user_id)
         if user is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, 'Пользователь не найден'
             )
-        user = await self.crud.update_role(user, data.role)
+        changes = data.model_dump(exclude_unset=True)
+        if 'department_id' in changes and changes['department_id'] is not None:
+            if not await self.crud.department_exists(changes['department_id']):
+                raise HTTPException(
+                    status.HTTP_404_NOT_FOUND,
+                    f'Отдел с id={changes["department_id"]} не найден',
+                )
+        user = await self.crud.update_admin(user, changes)
         await self.session.commit()
         return UserRead.model_validate(user)
 

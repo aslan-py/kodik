@@ -14,6 +14,7 @@ import time
 import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote_plus
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,12 +24,18 @@ from src.bp1.models import Source
 from src.bp1.storage import RawDataService
 from src.bp1.tasks import get_search_task_config
 
-from ..core.cache import UnifiedCache
+from ..core.cache import PROBED_URL_TTL_SECONDS, UnifiedCache
 from ..core.quality import DataQualityGate
-from ..schemas import PipelineReport, PipelineStage, UnifiedConfig
+from ..schemas import PipelineReport, PipelineStage, ProbedUrl, UnifiedConfig
 from ..strategies.classifier import SourceClassifier
 from .bridge import AdaptiveBridgeParser
-from .sources import SearchParamResolver, build_search_url, extract_host
+from .search_probe import SearchUrlProber
+from .sources import (
+    SearchParamResolver,
+    SearchUrlTemplateRegistry,
+    build_search_url,
+    extract_host,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,7 @@ class AdaptiveRunner:
         quality_gate_enabled: bool = True,
         cache_profiles: bool = True,
         max_concurrent: int = 5,
+        use_probing: bool = True,
     ):
         self.mode = mode
         self.headless = headless
@@ -57,6 +65,7 @@ class AdaptiveRunner:
         self.quality_gate_enabled = quality_gate_enabled
         self.cache_profiles = cache_profiles
         self.max_concurrent = max_concurrent
+        self.use_probing = use_probing
 
         # Единая конфигурация пайплайна (UnifiedConfig).
         self.config = UnifiedConfig(
@@ -74,6 +83,117 @@ class AdaptiveRunner:
         self._classifier = SourceClassifier()
         self._search_param_resolver = SearchParamResolver()
         self._logger = logging.getLogger(__name__)
+        # Пробинг поискового URL: по умолчанию включён, fetch-функция
+        # подставляется в рантайме через bind_probe_fetch (стандартный
+        # контракт SearchUrlProber — заглушка до реального рантайма).
+        self._prober = SearchUrlProber()
+
+    def bind_probe_fetch(
+        self,
+        fetch: Any,
+        looks_like: Any | None = None,
+        param_chain: tuple[str, ...] | None = None,
+    ) -> None:
+        """Подключает реальный fetch (и опционально looks_like) к проуберу.
+
+        SearchUrlProber создаётся с заглушками ``_default_fetch``/``_default_
+        looks_like``, которые поднимают NotImplementedError — реальная
+        функция загрузки HTML подставляется в рантайме (например, из
+        инфраструктурного слоя) именно этим методом.
+        """
+        self._prober = SearchUrlProber(
+            fetch=fetch,
+            looks_like_search_results=looks_like,
+            param_chain=param_chain,
+        )
+
+    def _build_fallback_url(self, source_name: str, search_param: str) -> str:
+        """Строит fallback URL поиска, если пробинг не дал результата.
+
+        Использует тот же per-source шаблон, что и базовый
+        ``build_search_url`` (``hh.ru -> /search/vacancy?text=``), чтобы
+        fallback не деградировал до универсального ``/search?q=`` для
+        источников с известным шаблоном поиска.
+        """
+        host = extract_host(source_name)
+        template = SearchUrlTemplateRegistry().resolve(source_name)
+        return f'https://{host}{template}'.replace(
+            '{q}', quote_plus(search_param)
+        )
+
+    async def _get_or_probe_url(
+        self,
+        source_name: str,
+        search_param: str,
+        target_name: str,
+        redis_client: Any,
+    ) -> tuple[str, ProbedUrl | None]:
+        """Возвращает ``(url, probed_url)``: кэш -> пробинг -> fallback.
+
+        1. Кэш: если probed URL источника уже сохранён — используем его
+           (TTL 7 дней), пробинг не выполняем.
+        2. Пробинг: иначе пробуем ``SearchUrlProber.probe_async`` по базовому
+           шаблону источника (``{q}``) с таймаутом 10 с.
+        3. Fallback: если пробинг не нашёл успешный вариант (или Redis
+           недоступен / fetch не подключён) — строим URL по шаблону
+           ``https://{host}{template}`` с percent-кодированным запросом.
+
+        Возвращает ``(url, probed)``: ``url`` — итоговый URL для парсинга,
+        ``probed`` — найденный/закэшированный ``ProbedUrl`` (или None).
+        Итоговый URL берётся из ``probed.search_url``, если он есть.
+        """
+        fallback_url = self._build_fallback_url(source_name, search_param)
+
+        try:
+            cached = await self._cache.get_probed_url(source_name)
+        except Exception as e:
+            self._logger.warning(
+                'Кэш probed URL недоступен (source=%s): %s',
+                source_name,
+                e,
+            )
+            cached = None
+        if cached is not None:
+            self._logger.info(
+                'Probed URL для %s взят из кэша: %s',
+                source_name,
+                cached.search_url,
+            )
+            return cached.search_url, cached
+
+        if not self.use_probing:
+            return fallback_url, None
+
+        base_url = SearchUrlTemplateRegistry().build_base_url(source_name)
+        try:
+            probed = await self._prober.probe_async(
+                base_url=base_url,
+                search_query=search_param,
+                target_name=target_name,
+            )
+        except Exception as e:
+            self._logger.warning('Пробинг %s не выполнен: %s', source_name, e)
+            probed = None
+
+        if probed is None:
+            self._logger.info(
+                'Пробинг %s не дал результата — fallback: %s',
+                source_name,
+                fallback_url,
+            )
+            return fallback_url, None
+
+        try:
+            await self._cache.set_probed_url(
+                source_name, probed, ttl=PROBED_URL_TTL_SECONDS
+            )
+        except Exception as e:
+            self._logger.warning(
+                'Не удалось сохранить probed URL для %s: %s',
+                source_name,
+                e,
+            )
+        return probed.search_url, probed
 
     def _bind_redis(self, redis_client: Any) -> None:
         """Привязывает Redis-клиент к кэшу для хранения классификаций."""
@@ -290,6 +410,20 @@ class AdaptiveRunner:
             'trigger': trigger,
             'source_request_url': source_request_url,
         }
+
+        # 3.2. Пробинг поискового URL: кэш → пробинг → fallback.
+        #      Итоговый ``url`` (для парсинга) и ``probed`` (для метаданных
+        #      и повторного кэширования) получаем до вызова парсера.
+        url, probed = await self._get_or_probe_url(
+            source_name=source_name,
+            search_param=search_param,
+            target_name=competitor or trigger or '',
+            redis_client=redis_client,
+        )
+        if probed is not None:
+            parse_kwargs['probed_url'] = probed
+        # В meta сохраняется исходный (не пробованный) URL задачи, чтобы
+        # source_request_url не менялся от того, что кэш нагрелся.
 
         # 4. Выполняем парсинг.
         #    Для источников с готовым RPA-адаптером (fedresurs.ru и др.)

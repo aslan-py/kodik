@@ -5,7 +5,12 @@ import pytest
 from core.config import settings
 from src.bp1.adaptive.core.cache import UnifiedCache
 from src.bp1.adaptive.integration.bridge import AdaptiveBridgeParser
-from src.bp1.adaptive.schemas import AdapterState, StrategyResult, StrategyType
+from src.bp1.adaptive.schemas import (
+    AdapterState,
+    ProbedUrl,
+    StrategyResult,
+    StrategyType,
+)
 from src.bp1.adaptive.strategies.hitl import HITLManager
 
 from .constants import (
@@ -194,6 +199,29 @@ async def test_circuit_breaker_block_and_unblock(tmp_path):
     assert await cache.get_fail_count(EXAMPLE_SOURCE_NAME) == 2
     await cache.reset_fail_count(EXAMPLE_SOURCE_NAME)
     assert await cache.get_fail_count(EXAMPLE_SOURCE_NAME) == 0
+
+
+@pytest.mark.asyncio
+async def test_probed_url_cache_roundtrip(tmp_path):
+    """Кэш probed URL сохраняет и возвращает результат пробинга."""
+    cache = UnifiedCache(redis_client=_FakeRedis(), cache_dir=str(tmp_path))
+    probed = ProbedUrl(
+        source_name=EXAMPLE_SOURCE_NAME,
+        search_url='https://example.com/search?text=qqq',
+        search_method='GET',
+        search_params={'text': 'qqq'},
+        confidence=1.0,
+    )
+    await cache.set_probed_url(EXAMPLE_SOURCE_NAME, probed)
+    loaded = await cache.get_probed_url(EXAMPLE_SOURCE_NAME)
+    assert loaded is not None
+    assert loaded.search_url == probed.search_url
+    assert loaded.search_method == 'GET'
+    assert loaded.search_params == {'text': 'qqq'}
+    assert loaded.confidence == 1.0
+
+    await cache.clear_probed_url(EXAMPLE_SOURCE_NAME)
+    assert await cache.get_probed_url(EXAMPLE_SOURCE_NAME) is None
 
 
 @pytest.mark.asyncio

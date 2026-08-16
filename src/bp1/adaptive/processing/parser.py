@@ -810,7 +810,7 @@ def _page_items(
             ):
                 continue
             pairs.append((title, url_rel))
-            if len(pairs) == DEFAULT_MAX_NEWS:
+            if len(pairs) >= DEFAULT_MAX_NEWS:
                 break
     else:
         collector = _LinkCollector()
@@ -819,7 +819,7 @@ def _page_items(
             if _is_noise_url(href) or _reject_non_http_scheme(href):
                 continue
             pairs.append((title, href))
-            if len(pairs) == DEFAULT_MAX_NEWS:
+            if len(pairs) >= DEFAULT_MAX_NEWS:
                 break
 
     return [
@@ -913,7 +913,7 @@ def _parse_items(
     selectors = selectors or {}
 
     if selectors.get('container'):
-        items = []
+        items: list[dict[str, Any]] = []
         for raw in _extract_by_selectors(html, selectors):
             if _is_noise_url(raw.get('url')) or _reject_non_http_scheme(
                 raw.get('url')
@@ -933,7 +933,7 @@ def _parse_items(
                     base_url=base_url,
                 )
             )
-            if len(items) == DEFAULT_MAX_NEWS:
+            if len(items) >= DEFAULT_MAX_NEWS:
                 break
         return items
 
@@ -954,6 +954,6 @@ def _parse_items(
                 base_url=base_url,
             )
         )
-        if len(items) == DEFAULT_MAX_NEWS:
+        if len(items) >= DEFAULT_MAX_NEWS:
             break
     return items

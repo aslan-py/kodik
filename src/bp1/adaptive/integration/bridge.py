@@ -129,6 +129,12 @@ class AdaptiveBridgeParser(BaseParser):
             'trigger': trigger or None,
             # Ссылка на НАШ поисковый запрос (одна на всю выгрузку).
             'source_request_url': kwargs.get('source_request_url') or url,
+            # Информация о пробинге (URL после поиска; если None — fallback).
+            'probed_url': (
+                kwargs.get('probed_url').search_url
+                if kwargs.get('probed_url') is not None
+                else None
+            ),
             # Время съёма; в хэш НЕ включается, иначе всегда 'changed'.
             'fetched_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
         }

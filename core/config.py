@@ -223,6 +223,7 @@ class Settings(BaseSettings):
     bp1_adapter_ttl_seconds: int = 86400 * 7
     bp1_classification_ttl_seconds: int = 86400 * 7
     bp1_article_text_ttl_seconds: int = 86400 * 7
+    bp1_probed_url_ttl_seconds: int = 86400 * 7
 
     # ===== BP-1 Adaptive (режим прогона AdaptiveRunner) =====
     bp1_adaptive_mode: str = 'adaptive'

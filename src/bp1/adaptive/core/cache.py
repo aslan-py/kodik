@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from core.config import settings
 
-from ..schemas import AdapterState, SourceClassification
+from ..schemas import AdapterState, ProbedUrl, SourceClassification
 
 # TTL адаптера по умолчанию — 7 дней (в секундах).
 ADAPTER_TTL_SECONDS = settings.bp1_adapter_ttl_seconds
@@ -27,6 +27,9 @@ CLASSIFICATION_TTL_SECONDS = settings.bp1_classification_ttl_seconds
 
 # TTL кэша полного текста статьи по умолчанию — 7 дней (в секундах).
 ARTICLE_TEXT_TTL_SECONDS = settings.bp1_article_text_ttl_seconds
+
+# TTL кэша пробинга поискового URL по умолчанию — 7 дней (в секундах).
+PROBED_URL_TTL_SECONDS = settings.bp1_probed_url_ttl_seconds
 
 
 def _canonical_source_name(source_name: str) -> str:
@@ -164,6 +167,49 @@ class UnifiedCache:
         if self.redis is None:
             return
         await self.redis.delete(self._classification_key(source_name))
+
+    # ========================================================================
+    # Пробинг поискового URL (Redis)
+    # ========================================================================
+
+    def _probed_url_key(self, source_name: str) -> str:
+        return f'bp1:probed_url:{_canonical_source_name(source_name)}'
+
+    async def get_probed_url(self, source_name: str) -> ProbedUrl | None:
+        """Получить закэшированный probed URL источника из Redis.
+
+        Возвращает ``None``, если ключа нет или значение повреждено.
+        """
+        if self.redis is None:
+            return None
+        raw = await self.redis.get(self._probed_url_key(source_name))
+        if not raw:
+            return None
+        try:
+            return ProbedUrl.model_validate_json(raw)
+        except Exception:
+            return None
+
+    async def set_probed_url(
+        self,
+        source_name: str,
+        probed: ProbedUrl,
+        ttl: int = PROBED_URL_TTL_SECONDS,
+    ) -> None:
+        """Сохранить probed URL источника в Redis (TTL 7 дней)."""
+        if self.redis is None:
+            return
+        await self.redis.set(
+            self._probed_url_key(source_name),
+            probed.model_dump_json(),
+            ex=ttl,
+        )
+
+    async def clear_probed_url(self, source_name: str) -> None:
+        """Удалить probed URL источника из Redis."""
+        if self.redis is None:
+            return
+        await self.redis.delete(self._probed_url_key(source_name))
 
     # ========================================================================
     # Профили браузеров (диск)

@@ -20,3 +20,4 @@ class EventTypeCreate(BaseModel):
 class EventTypeUpdate(BaseModel):
     name: str | None = None
     keywords: list[str] | None = None
+    is_active: bool | None = None

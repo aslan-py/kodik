@@ -1,7 +1,6 @@
 """SQL-запросы доступных значений фильтров."""
 
 from collections.abc import Sequence
-from datetime import date
 from typing import Any
 
 from sqlalchemy import Select, func, select
@@ -33,17 +32,15 @@ class FilterOptionsCRUD:
             return stmt.where(ActionItem.department_id == department_id)
         return stmt
 
-    async def action_deadlines(
+    async def action_deadline_range(
         self, department_id: int | None = None
-    ) -> Sequence[date]:
-        stmt = (
-            select(ActionItem.deadline)
-            .distinct()
-            .where(ActionItem.deadline.is_not(None))
-        )
-        stmt = self._scope(stmt, department_id).order_by(ActionItem.deadline)
+    ) -> tuple[object, object]:
+        stmt = select(
+            func.min(ActionItem.deadline), func.max(ActionItem.deadline)
+        ).where(ActionItem.deadline.is_not(None))
+        stmt = self._scope(stmt, department_id)
         result = await self.session.execute(stmt)
-        return result.scalars().all()
+        return result.one()
 
     async def action_priorities(
         self,

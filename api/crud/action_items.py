@@ -35,7 +35,8 @@ class ActionItemCRUD:
         task: str | None = None,
         assigned_user_id: int | None = None,
         showcase_event_id: int | None = None,
-        deadline: date | None = None,
+        deadline_from: date | None = None,
+        deadline_to: date | None = None,
         priority: str | None = None,
     ) -> Sequence[ActionItem]:
         """Список задач с опциональными фильтрами (все — AND).
@@ -55,8 +56,10 @@ class ActionItemCRUD:
             stmt = stmt.where(ActionItem.assigned_user_id == assigned_user_id)
         if showcase_event_id is not None:
             stmt = stmt.where(ActionItem.showcase_event_id == showcase_event_id)
-        if deadline is not None:
-            stmt = stmt.where(ActionItem.deadline == deadline)
+        if deadline_from is not None:
+            stmt = stmt.where(ActionItem.deadline >= deadline_from)
+        if deadline_to is not None:
+            stmt = stmt.where(ActionItem.deadline <= deadline_to)
         if priority is not None:
             stmt = stmt.join(
                 ShowcaseEvent,

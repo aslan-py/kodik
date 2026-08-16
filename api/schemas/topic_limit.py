@@ -28,3 +28,4 @@ class TopicLimitUpdate(BaseModel):
     max_count: int | None = None
     window: LimitWindow | None = None
     note: str | None = None
+    is_active: bool | None = None

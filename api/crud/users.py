@@ -80,8 +80,9 @@ class UserCRUD:
         await self.session.flush()
         return user
 
-    async def update_role(self, user: User, role: UserRole) -> User:
-        user.role = role
+    async def update_admin(self, user: User, changes: dict) -> User:
+        for field, value in changes.items():
+            setattr(user, field, value)
         await self.session.flush()
         return user
 

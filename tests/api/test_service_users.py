@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from api.crud.users import UserCRUD
-from api.schemas.users import UserRegister, UserRoleUpdate, UserUpdateMe
+from api.schemas.users import UserAdminUpdate, UserRegister, UserUpdateMe
 from api.service.users import UserService
 from core.enums import UserRole
 from src.bp3.models import Department
@@ -120,20 +120,20 @@ class TestUpdateMe:
         assert updated.department_id == department.id
 
 
-class TestUpdateRole:
+class TestUpdateAdmin:
     async def test_updates_role(self, session):
         user = await _make_user(session)
 
-        updated = await UserService(session).update_role(
-            user.id, UserRoleUpdate(role=UserRole.viewer)
+        updated = await UserService(session).update_admin(
+            user.id, UserAdminUpdate(role=UserRole.viewer)
         )
 
         assert updated.role == UserRole.viewer
 
     async def test_unknown_user_not_found(self, session):
         with pytest.raises(HTTPException) as exc:
-            await UserService(session).update_role(
-                999_999, UserRoleUpdate(role=UserRole.viewer)
+            await UserService(session).update_admin(
+                999_999, UserAdminUpdate(role=UserRole.viewer)
             )
 
         assert exc.value.status_code == 404

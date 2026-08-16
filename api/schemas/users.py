@@ -41,10 +41,12 @@ class UserRead(BaseModel):
     is_active: bool
 
 
-class UserRoleUpdate(BaseModel):
-    """Тело PATCH /users/{id}/role — только admin/analyst подтверждают роль."""
+class UserAdminUpdate(BaseModel):
+    """Частичная административная правка пользователя."""
 
-    role: UserRole
+    role: UserRole | None = None
+    department_id: int | None = None
+    is_active: bool | None = None
 
 
 class Token(BaseModel):

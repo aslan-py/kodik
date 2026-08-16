@@ -27,7 +27,8 @@ router = APIRouter()
         'Доступ: `viewer`, `analyst`, `admin` (не `pending`).\n\n'
         'Пагинация — `limit`/`offset`, сортировка по `published_at` '
         '(новые сверху).\n\n'
-        'Фильтры (можно комбинировать): `title`/`region`/`competitor` — '
+        'Фильтры (можно комбинировать): '
+        '`title`/`region`/`competitor`/`media` — '
         'подстрока без учёта регистра; `category`/`priority`/`department` '
         '— точное совпадение с готовой подписью витрины (например, '
         '`priority=П1`); `published_from`/`published_to` — диапазон дат '
@@ -46,6 +47,7 @@ async def list_showcase(
     region: str | None = None,
     competitor: str | None = None,
     department: str | None = None,
+    media: str | None = None,
     published_from: date | None = None,
     published_to: date | None = None,
 ) -> list[ShowcaseEventRead]:
@@ -58,6 +60,7 @@ async def list_showcase(
         region=region,
         competitor=competitor,
         department=department,
+        media=media,
         published_from=published_from,
         published_to=published_to,
     )

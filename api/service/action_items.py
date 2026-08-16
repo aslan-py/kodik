@@ -37,7 +37,8 @@ class ActionItemService:
         task: str | None = None,
         assigned_user_id: int | None = None,
         showcase_event_id: int | None = None,
-        deadline: date | None = None,
+        deadline_from: date | None = None,
+        deadline_to: date | None = None,
         priority: str | None = None,
     ) -> list[ActionItemRead]:
         """viewer видит только задачи своего отдела (весь отдел, не
@@ -55,7 +56,8 @@ class ActionItemService:
             task,
             assigned_user_id,
             showcase_event_id,
-            deadline,
+            deadline_from,
+            deadline_to,
             priority,
         )
         return [ActionItemRead.model_validate(i) for i in items]

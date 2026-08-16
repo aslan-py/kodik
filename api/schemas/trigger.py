@@ -17,3 +17,4 @@ class TriggerCreate(BaseModel):
 
 class TriggerUpdate(BaseModel):
     keyword: str | None = None
+    is_active: bool | None = None

@@ -49,6 +49,7 @@ class ShowcaseCRUD:
         region: str | None = None,
         competitor: str | None = None,
         department: str | None = None,
+        media: str | None = None,
         published_from: date | None = None,
         published_to: date | None = None,
     ) -> Sequence[ShowcaseEvent]:
@@ -73,6 +74,8 @@ class ShowcaseCRUD:
             stmt = stmt.where(ShowcaseEvent.competitor.ilike(f'%{competitor}%'))
         if department is not None:
             stmt = stmt.where(ShowcaseEvent.department == department)
+        if media is not None:
+            stmt = stmt.where(ShowcaseEvent.media.ilike(f'%{media}%'))
         if published_from is not None:
             stmt = stmt.where(ShowcaseEvent.published_at >= published_from)
         if published_to is not None:

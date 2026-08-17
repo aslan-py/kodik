@@ -33,13 +33,6 @@ MAX_CONCURRENT_FETCHES = settings.bp1_max_concurrent_fetches
 # в сниппет-фолбэк).
 ARTICLE_FETCH_TIMEOUT_SECONDS = settings.bp1_article_fetch_timeout_seconds
 
-# Режим фильтрации релевантности (off/filter/rank) и порог по умолчанию.
-RELEVANCE_MODE = getattr(settings, 'bp1_relevance_mode', 'off')
-RELEVANCE_THRESHOLD = float(getattr(settings, 'bp1_relevance_threshold', 0.6))
-
-# Включает LLM-обогащение событий структурированными полями.
-ENRICHMENT_ENABLED = bool(getattr(settings, 'bp1_enrichment_enabled', False))
-
 # Минимальное количество символов, при котором извлечённый LLM/CSS текст
 # считается полным. Если текст короче — вероятна обрезка, и нужна докачка
 # хвоста.

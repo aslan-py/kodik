@@ -193,7 +193,9 @@ REGION_2 = 'СПб'
 # test_quality
 # ---------------------------------------------------------------------------
 QUALITY_EXPECTED_COUNT = 2
-QUALITY_REPORTS_COUNT = 5
+# SCHEMA/TYPES/BUSINESS/VOLUME/CONSISTENCY/RELEVANCE (change
+# verify-search-probe-relevance добавила RELEVANCE как 6-й уровень).
+QUALITY_REPORTS_COUNT = 6
 QUALITY_VOLUME_CURRENT_LOW = 5
 QUALITY_VOLUME_CURRENT_OK = 9
 QUALITY_VOLUME_EXPECTED = 10

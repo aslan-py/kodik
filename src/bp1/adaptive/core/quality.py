@@ -289,6 +289,94 @@ class DataQualityGate:
         )
 
     # ========================================================================
+    # Уровень 6: RELEVANCE
+    # ========================================================================
+
+    def validate_relevance(
+        self,
+        items: list[dict[str, Any]],
+        competitor: str = '',
+        trigger: str = '',
+    ) -> QualityGateReport:
+        """Уровень 6: собранные материалы действительно относятся к
+
+        конкуренту/триггеру задачи (change verify-search-probe-relevance).
+
+        В отличие от остальных уровней — не структурная проверка, а
+        смысловая: ловит случай, когда поисковый URL перестал
+        фильтровать выдачу уже ПОСЛЕ успешной регистрации источника
+        (пробинг был пройден честно, но сайт со временем сломал поиск —
+        см. инцидент rbc.ru в proposal.md этого изменения). Переиспользует
+        ту же проверку присутствия имени/ИНН, что и ``SearchUrlProber``
+        при пробинге — не дублирует логику совпадения.
+
+        Порог провала — консервативный: НИ ОДИН материал не упоминает
+        конкурента/триггер (0 из N), а не «доля ниже X%» — конкурент
+        может быть упомянут не в каждой новости, это нормально.
+
+        Элементы адаптивного сбора несут реальные материалы не в себе, а
+        во вложенном ``extra.news[]`` (страница поиска — служебный
+        элемент-обёртка, см. ``processing/parser/pagination.py``) —
+        проверяются оба уровня: собственные title/text элемента и
+        ex_title/ex_text вложенных записей.
+        """
+        if not competitor and not trigger:
+            # Нечего проверять — задача без цели (например, health-check
+            # регистрации источника, где нет ни конкурента, ни триггера).
+            return QualityGateReport(
+                level=QualityGateLevel.RELEVANCE,
+                passed=True,
+                item_count=len(items),
+                passed_count=len(items),
+            )
+
+        from ..integration.search_probe import find_matched_target_variant
+
+        def _mentions(text: str) -> bool:
+            if competitor and find_matched_target_variant(
+                text, target_name=competitor
+            ):
+                return True
+            return bool(trigger) and trigger.lower() in text.lower()
+
+        found = False
+        for item in items:
+            title_text = f'{item.get("title") or ""} {item.get("text") or ""}'
+            if _mentions(title_text):
+                found = True
+                break
+            for entry in (item.get('extra') or {}).get('news') or []:
+                if not isinstance(entry, dict):
+                    continue
+                ex_text = (
+                    f'{entry.get("ex_title") or ""} '
+                    f'{entry.get("ex_text") or ""}'
+                )
+                if _mentions(ex_text):
+                    found = True
+                    break
+            if found:
+                break
+
+        if found:
+            return QualityGateReport(
+                level=QualityGateLevel.RELEVANCE,
+                passed=True,
+                item_count=len(items),
+                passed_count=len(items),
+            )
+        return QualityGateReport(
+            level=QualityGateLevel.RELEVANCE,
+            passed=False,
+            errors=[
+                f'ни один материал не упоминает конкурента/триггер '
+                f'({competitor!r}/{trigger!r})'
+            ],
+            item_count=len(items),
+            passed_count=0,
+        )
+
+    # ========================================================================
     # Агрегация
     # ========================================================================
 
@@ -301,8 +389,10 @@ class DataQualityGate:
         expected_count: int | None = None,
         volume_threshold: float = 0.8,
         key_field: str = 'url',
+        competitor: str = '',
+        trigger: str = '',
     ) -> list[QualityGateReport]:
-        """Выполняет все 5 уровней валидации."""
+        """Выполняет все уровни валидации (структурные + RELEVANCE)."""
         reports = [
             self.validate_schema(
                 {'items': items}, expected_schema=expected_schema
@@ -319,6 +409,11 @@ class DataQualityGate:
             )
 
         reports.append(self.validate_consistency(items, key_field=key_field))
+        reports.append(
+            self.validate_relevance(
+                items, competitor=competitor, trigger=trigger
+            )
+        )
 
         # Помещаем проблемные записи в карантин.
         for report in reports:

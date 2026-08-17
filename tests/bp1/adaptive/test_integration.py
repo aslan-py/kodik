@@ -194,6 +194,10 @@ async def test_bridge_promotes_news(monkeypatch):
     test_bridge_returns_parsed_response) — раскладывается целиком.
     extra намеренно пуст (по запросу) — вся диагностика извлечения
     (ex_method/relevance/enrichment/...) больше не сериализуется.
+    В этом тесте адаптер работает эвристически (без селекторов полей),
+    поэтому published_at/region/media_name селекторами не извлекаются и
+    остаются null — media_name НЕ подменяется URL/именем источника (см.
+    test_bridge_promotes_news_uses_listing_fields на позитивный путь).
     """
     monkeypatch.setattr(settings, 'llm_api_key', None)
     parser = AdaptiveBridgeParser(source_name=EXAMPLE_SOURCE_NAME)
@@ -209,7 +213,71 @@ async def test_bridge_promotes_news(monkeypatch):
     assert response.items, 'новости должны быть продвинуты в ParsedItem'
     promoted = response.items[0]
     assert promoted.url == NEWS_LINK
-    assert promoted.media_name == EXAMPLE_SOURCE_NAME
+    assert promoted.published_at is None
+    assert promoted.region is None
+    assert promoted.media_name is None
+    assert promoted.extra == {}
+
+
+@pytest.mark.asyncio
+async def test_bridge_promotes_news_uses_listing_fields(monkeypatch):
+    """published_at/region/media_name, извлечённые селекторами листинга,
+
+    доходят до промотированного ParsedItem — не LLM-обогащением (его
+    больше нет) и не URL-заглушкой источника.
+    """
+    monkeypatch.setattr(settings, 'llm_api_key', None)
+    parser = AdaptiveBridgeParser(source_name=EXAMPLE_SOURCE_NAME)
+
+    from src.bp1.adaptive.schemas import AdaptiveParseResult
+
+    async def _fake_parse(*args, **kwargs):
+        return AdaptiveParseResult(
+            status='ok',
+            source_name=EXAMPLE_SOURCE_NAME,
+            url=EXAMPLE_URL,
+            strategy_used=StrategyType.FAST,
+            items=[
+                {
+                    'url': EXAMPLE_URL,
+                    'title': 'Страница поиска',
+                    'text': None,
+                    'published_at': None,
+                    'region': None,
+                    'media_name': EXAMPLE_SOURCE_NAME,
+                    'extra': {
+                        'news': [
+                            {
+                                'ex_title': 'Новость про ИИ',
+                                'ex_url': NEWS_LINK,
+                                'ex_text': 'Текст новости',
+                                'ex_method': 'css',
+                                'ex_published_at': '18.07.2026',
+                                'ex_region': 'г. Москва',
+                                'ex_media_name': 'РБК',
+                            }
+                        ],
+                    },
+                }
+            ],
+            elapsed_ms=1,
+        )
+
+    parser._adaptive_parser.parse = _fake_parse
+
+    response = await parser.parse(
+        EXAMPLE_URL,
+        search_task_id=SEARCH_TASK_ID,
+        competitor=COMPETITOR,
+        trigger=TRIGGER,
+    )
+
+    assert len(response.items) == 1
+    promoted = response.items[0]
+    assert promoted.url == NEWS_LINK
+    assert promoted.published_at == '18.07.2026'
+    assert promoted.region == 'г. Москва'
+    assert promoted.media_name == 'РБК'
     assert promoted.extra == {}
 
 

@@ -168,6 +168,74 @@ class TestConsistencyGate:
         assert report.errors == []
 
 
+class TestRelevanceGate:
+    """Уровень 6: RELEVANCE (change verify-search-probe-relevance)."""
+
+    def test_no_target_passes(self):
+        """Без competitor/trigger — нечего проверять, проходит всегда."""
+        gate = DataQualityGate()
+        report = gate.validate_relevance(_valid_items())
+        assert report.passed is True
+        assert report.level == QualityGateLevel.RELEVANCE
+
+    def test_competitor_mentioned_in_item_passes(self):
+        gate = DataQualityGate()
+        items = [{'url': NEWS_LINK, 'title': 'Сбербанк открыл филиал'}]
+        report = gate.validate_relevance(items, competitor='Сбербанк')
+        assert report.passed is True
+
+    def test_competitor_mentioned_in_nested_news_passes(self):
+        """Адаптивный сбор несёт реальные материалы в extra.news[] —
+
+        проверяется и там, не только в title/text элемента-обёртки.
+        """
+        gate = DataQualityGate()
+        items = [
+            {
+                'url': NEWS_LINK,
+                'title': 'Страница результатов поиска',
+                'extra': {
+                    'news': [
+                        {
+                            'ex_title': 'Сбербанк запустил новый продукт',
+                            'ex_url': NEWS_LINK_2,
+                        }
+                    ]
+                },
+            }
+        ]
+        report = gate.validate_relevance(items, competitor='Сбербанк')
+        assert report.passed is True
+
+    def test_no_mention_anywhere_fails(self):
+        """Регресс-тест на инцидент rbc.ru: ни один материал не упоминает
+
+        конкурента — RELEVANCE проваливается.
+        """
+        gate = DataQualityGate()
+        items = [
+            {
+                'url': NEWS_LINK,
+                'title': 'Страница результатов поиска',
+                'extra': {
+                    'news': [
+                        {'ex_title': 'Совсем другая новость про Яблоко'},
+                    ]
+                },
+            }
+        ]
+        report = gate.validate_relevance(items, competitor='Сбербанк')
+        assert report.passed is False
+        assert report.errors
+
+    def test_trigger_mention_is_enough(self):
+        """Триггер (тема поиска) тоже засчитывается, не только конкурент."""
+        gate = DataQualityGate()
+        items = [{'url': NEWS_LINK, 'title': 'Новости про ИИ в банках'}]
+        report = gate.validate_relevance(items, trigger='ИИ')
+        assert report.passed is True
+
+
 class TestValidateAll:
     """Агрегация всех уровней."""
 

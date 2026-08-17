@@ -80,14 +80,19 @@ def _page_items(
     trigger: str,
     selectors: dict[str, str],
     base_url: str,
-) -> list[tuple[str, str, str]]:
-    """Извлекает пары ``(title, url_abs, url_rel)`` из страницы результатов.
+) -> list[tuple[str, str, str, str | None, str | None, str | None]]:
+    """Извлекает карточки ``(title, url_abs, url_rel, published_at, region,
+    media_name)`` из страницы результатов.
 
     Использует селектор ``container``/``url``/``title`` адаптера, если задан,
     иначе — эвристический сбор ссылок. ``url_abs`` — полный абсолютный URL.
+    ``published_at``/``region``/``media_name`` — то, что для той же карточки
+    уже извлёк ``_extract_by_selectors`` по соответствующим селекторам
+    адаптера; ``None``, если селектора нет, он не сработал, либо карточка
+    собрана эвристически (без селекторов извлекать эти поля неоткуда).
     """
     selectors = selectors or {}
-    pairs: list[tuple[str, str]] = []
+    pairs: list[tuple[str, str, str | None, str | None, str | None]] = []
 
     # Если задан контейнер, извлекаем элементы по селекторам полей адаптера.
     # Если контейнер есть, но у него нет рабочих селекторов ``url``/``title``
@@ -109,7 +114,15 @@ def _page_items(
                 or not title
             ):
                 continue
-            pairs.append((title, url_rel))
+            pairs.append(
+                (
+                    title,
+                    url_rel,
+                    raw.get('published_at') or None,
+                    raw.get('region') or None,
+                    raw.get('media_name') or None,
+                )
+            )
             if len(pairs) >= constants.DEFAULT_MAX_NEWS:
                 break
     else:
@@ -136,13 +149,23 @@ def _page_items(
                 or _reject_non_http_scheme(href)
             ):
                 continue
-            pairs.append((title, href))
+            # Эвристический сбор не различает поля карточки — только
+            # заголовок и ссылка, поэтому published_at/region/media_name
+            # неизвестны.
+            pairs.append((title, href, None, None, None))
             if len(pairs) >= constants.DEFAULT_MAX_NEWS:
                 break
 
     return [
-        (title, _to_absolute(url_rel, base_url), url_rel)
-        for title, url_rel in pairs
+        (
+            title,
+            _to_absolute(url_rel, base_url),
+            url_rel,
+            published_at,
+            region,
+            media_name,
+        )
+        for title, url_rel, published_at, region, media_name in pairs
     ]
 
 

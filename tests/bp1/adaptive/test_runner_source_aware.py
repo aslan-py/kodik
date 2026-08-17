@@ -402,3 +402,99 @@ async def test_run_task_fallback_is_cached_by_query(monkeypatch):
     # Для конкурента B пробинг был выполнен заново (свой ключ в кэше),
     # потому что у A и B разные search_param и, как следствие, разные ключи.
     assert called.get('n', 0) >= 1
+
+
+# ---------------------------------------------------------------------------
+# _get_or_probe_url: снимок карточек для сравнения между конкурентами
+# ---------------------------------------------------------------------------
+
+
+class _FakeProber:
+    """Фейковый SearchUrlProber.probe_async: фиксирует kwargs, отдаёт canned."""
+
+    def __init__(self, result: ProbedUrl):
+        self._result = result
+        self.calls: list[dict] = []
+
+    async def probe_async(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._result
+
+
+@pytest.mark.asyncio
+async def test_get_or_probe_url_passes_known_other_urls_from_sample_cache():
+    """Снимок карточек предыдущего конкурента на источнике передаётся
+
+    в SearchUrlProber.probe_async как known_other_result_urls.
+    """
+    runner = AdaptiveRunner(use_probing=True)
+    redis = _FakeRedis()
+    runner._bind_redis(redis)
+    await runner._cache.set_probed_sample_urls(
+        'lenta.ru',
+        ['https://lenta.ru/news/1', 'https://lenta.ru/news/2'],
+    )
+
+    prober = _FakeProber(
+        ProbedUrl(
+            source_name='lenta.ru',
+            search_url='https://lenta.ru/search?text=NewCo',
+        )
+    )
+    runner._prober = prober
+
+    url, _ = await runner._get_or_probe_url('lenta.ru', 'NewCo', 'NewCo', redis)
+
+    assert url == 'https://lenta.ru/search?text=NewCo'
+    assert prober.calls[0]['known_other_result_urls'] == {
+        'https://lenta.ru/news/1',
+        'https://lenta.ru/news/2',
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_or_probe_url_no_known_other_urls_on_cold_start():
+    """Без сохранённого снимка (первый конкурент на источнике) —
+
+    known_other_result_urls не передаётся, пробинг не падает.
+    """
+    runner = AdaptiveRunner(use_probing=True)
+    redis = _FakeRedis()
+    runner._bind_redis(redis)
+
+    prober = _FakeProber(
+        ProbedUrl(
+            source_name='rbc.ru', search_url='https://rbc.ru/search?query=X'
+        )
+    )
+    runner._prober = prober
+
+    url, _ = await runner._get_or_probe_url('rbc.ru', 'X', 'X', redis)
+
+    assert url == 'https://rbc.ru/search?query=X'
+    assert prober.calls[0]['known_other_result_urls'] is None
+
+
+@pytest.mark.asyncio
+async def test_get_or_probe_url_saves_sample_urls_after_success():
+    """Успешный пробинг сохраняет снимок карточек для будущих конкурентов
+
+    на том же источнике.
+    """
+    runner = AdaptiveRunner(use_probing=True)
+    redis = _FakeRedis()
+    runner._bind_redis(redis)
+
+    prober = _FakeProber(
+        ProbedUrl(
+            source_name='lenta.ru',
+            search_url='https://lenta.ru/search?text=Comp',
+            sample_item_urls=['https://lenta.ru/a', 'https://lenta.ru/b'],
+        )
+    )
+    runner._prober = prober
+
+    await runner._get_or_probe_url('lenta.ru', 'Comp', 'Comp', redis)
+
+    saved = await runner._cache.get_probed_sample_urls('lenta.ru')
+    assert set(saved) == {'https://lenta.ru/a', 'https://lenta.ru/b'}

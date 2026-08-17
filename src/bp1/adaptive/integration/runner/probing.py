@@ -220,12 +220,29 @@ class _ProbingMixin:
         prefer_param = await self._preferred_param_from_registration(
             source_name
         )
+        # Снимок карточек последнего успешного пробинга ЛЮБОГО конкурента
+        # на этом источнике — дополнительный эталон для проверки
+        # причинности (см. SearchUrlProber.probe): совпадение с ним, как и
+        # с базовой лентой, отклоняет кандидата, который на самом деле не
+        # фильтрует выдачу.
+        try:
+            known_other_urls = await self._cache.get_probed_sample_urls(
+                source_name
+            )
+        except Exception as e:
+            self._logger.warning(
+                'Не удалось прочитать снимок пробинга %s: %s', source_name, e
+            )
+            known_other_urls = []
         try:
             probed = await self._prober.probe_async(
                 base_url=base_url,
                 search_query=search_param,
                 target_name=target_name,
                 prefer_param=prefer_param,
+                known_other_result_urls=(
+                    set(known_other_urls) if known_other_urls else None
+                ),
             )
         except Exception as e:
             self._logger.warning('Пробинг %s не выполнен: %s', source_name, e)
@@ -273,6 +290,17 @@ class _ProbingMixin:
                 source_name,
                 e,
             )
+        if probed.sample_item_urls:
+            try:
+                await self._cache.set_probed_sample_urls(
+                    source_name, probed.sample_item_urls
+                )
+            except Exception as e:
+                self._logger.warning(
+                    'Не удалось сохранить снимок пробинга %s: %s',
+                    source_name,
+                    e,
+                )
         return probed.search_url, probed
 
     async def _preferred_param_from_registration(

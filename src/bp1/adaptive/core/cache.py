@@ -247,6 +247,55 @@ class UnifiedCache:
         )
         await self.redis.delete(key)
 
+    # ------------------------------------------------------------------
+    # Снимок карточек последнего успешного пробинга (для сравнения между
+    # конкурентами одного источника — SearchUrlProber.probe(
+    # known_other_result_urls=...))
+    # ------------------------------------------------------------------
+    # Отдельный ключ, а НЕ ``_probed_url_key`` (источник без search_param):
+    # тот ключ уже занят под другую запись — подсказку имени параметра из
+    # регистрации источника (``SourceRegistrationService.register``,
+    # читает ``_preferred_param_from_registration``). Запись сюда не
+    # должна её перезаписывать/терять.
+
+    def _probed_sample_key(self, source_name: str) -> str:
+        return f'bp1:probed_sample:{_canonical_source_name(source_name)}'
+
+    async def get_probed_sample_urls(self, source_name: str) -> list[str]:
+        """Снимок URL карточек последнего успешного пробинга источника
+
+        (любого конкурента) — используется как ``known_other_result_urls``
+        для нового пробинга другого конкурента на том же источнике.
+        Пустой список, если снимка ещё нет.
+        """
+        if self.redis is None:
+            return []
+        raw = await self.redis.get(self._probed_sample_key(source_name))
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    async def set_probed_sample_urls(
+        self,
+        source_name: str,
+        urls: list[str],
+        ttl: int = PROBED_URL_TTL_SECONDS,
+    ) -> None:
+        """Сохраняет снимок URL карточек успешного пробинга (см.
+
+        ``get_probed_sample_urls``). Не пишет пустой список — нечего
+        сравнивать, не стоит затирать предыдущий непустой снимок нулём.
+        """
+        if self.redis is None or not urls:
+            return
+        await self.redis.set(
+            self._probed_sample_key(source_name), json.dumps(urls), ex=ttl
+        )
+
     # ========================================================================
     # Профили браузеров (диск)
     # ========================================================================

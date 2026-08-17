@@ -225,22 +225,11 @@ class Settings(BaseSettings):
     # подходящих ссылок (Шаг 16 плана, kodik/src/bp1/REFACTORING_PLAN.md).
     bp1_max_pagination_pages: int = 10
 
-    # ===== BP-1 Adaptive (релевантность и обогащение, финальный этап) =====
-    # Режим фильтрации релевантности: 'off' | 'filter' | 'rank'.
-    # 'rank' (не 'filter') — по умолчанию: BP-1 отвечает за сырой сбор
-    # (Bronze Layer), а не за решение, что из собранного оставить —
-    # это задача этапа нормализации (BP-2, Silver Layer). 'rank' только
-    # сортирует/размечает оценку relevance в extra, ничего не отбрасывает
-    # (Шаг 15 плана рефакторинга, kodik/src/bp1/REFACTORING_PLAN.md).
-    bp1_relevance_mode: str = 'rank'
-    # Порог релевантности (0.0-1.0) для режима 'filter'.
-    bp1_relevance_threshold: float = 0.6
-    # Включает LLM-обогащение событий структурированными полями.
-    bp1_enrichment_enabled: bool = True
-    # Ограничение длины текста (символов), передаваемого в промпт
-    # обогащения (adaptive/processing/_llm/prompt_builders.py,
-    # build_enrichment_prompt). Не влияет на сам извлечённый ex_text —
-    # только на текст, по которому LLM считает summary/sentiment/keywords.
+    # ===== BP-1 Adaptive (обрезка текста для классификации сайта) =====
+    # Ограничение длины HTML (символов), передаваемого в промпт
+    # классификации сайта (adaptive/processing/_llm/prompt_builders.py,
+    # build_classification_prompt). Название сохранено ради минимальной
+    # правки (раньше делилось с ныне удалённым обогащением событий).
     bp1_enrichment_snippet_size: int = 12000
 
     # ===== BP-1 Adaptive (чанкирование длинных страниц для LLM) =====

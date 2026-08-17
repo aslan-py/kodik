@@ -477,6 +477,13 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
             'competitor': news_competitor,
             'trigger': trigger,
             'source_request_url': source_request_url,
+            # Точная строка поискового запроса (имя/ИНН — см.
+            # SearchParamResolver выше), а не всегда равная competitor.
+            # Нужна, чтобы при повторном провале RELEVANCE можно было
+            # сбросить именно тот закэшированный probed_url, который
+            # реально использовался (составной ключ кэша — источник +
+            # хэш этой строки, см. clear_probed_url).
+            'search_param': search_param,
         }
 
         # 3.2. Пробинг поискового URL: кэш → пробинг → fallback.

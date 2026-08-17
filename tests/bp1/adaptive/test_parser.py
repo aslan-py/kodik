@@ -22,6 +22,9 @@ from src.bp1.adaptive.processing.parser import constants as parser_constants
 from src.bp1.adaptive.schemas import (
     AdapterState,
     ExtendedSiteClassification,
+    ProbedUrl,
+    QualityGateLevel,
+    QualityGateReport,
     SiteType,
     SourceClassification,
     StrategyResult,
@@ -242,9 +245,14 @@ async def test_parse_detects_antibot_from_real_html_no_prior_cache(
     # example.com не входит ни в _KNOWN_SOURCES, ни в _REGISTRY_DOMAINS.
     assert await parser._cache.get_classification(EXAMPLE_SOURCE_NAME) is None
 
+    # Текст ссылки упоминает COMPETITOR, иначе уровень RELEVANCE
+    # DataQualityGate (change verify-search-probe-relevance) пометит
+    # выдачу как не относящуюся к конкуренту — тест же проверяет
+    # антибот-классификацию, а не релевантность.
     antibot_html = (
         '<html><head><meta name="cf-ray" content="abc123"></head>'
-        '<body><a href="https://example.com/1">Новость</a></body></html>'
+        f'<body><a href="https://example.com/1">{COMPETITOR} — новость'
+        '</a></body></html>'
     )
 
     class _AntibotOrchestrator:
@@ -805,6 +813,74 @@ def test_page_items_explodes_list_container_with_field_selectors():
     ]
 
 
+def test_page_items_propagates_published_at_region_media_name():
+    """_page_items прокидывает published_at/region/media_name с листинга.
+
+    Раньше эти поля извлекались _extract_by_selectors, но _page_items
+    возвращал только (title, url) — данные терялись на этой границе.
+    """
+    html = """
+    <html><body>
+      <div class="card">
+        <h3 class="title">Новость 1</h3>
+        <a class="link" href="/news/1">x</a>
+        <span class="date">18.07.2026</span>
+        <span class="region">г. Москва</span>
+        <span class="media">РБК</span>
+      </div>
+    </body></html>
+    """
+    pairs = _page_items(
+        html,
+        EXAMPLE_SOURCE_NAME,
+        COMPETITOR,
+        TRIGGER,
+        selectors={
+            'container': 'div.card',
+            'title': 'h3.title',
+            'url': 'a.link',
+            'published_at': 'span.date',
+            'region': 'span.region',
+            'media_name': 'span.media',
+        },
+        base_url='https://example.com/',
+    )
+    assert len(pairs) == 1
+    _title, _url_abs, _url_rel, published_at, region, media_name = pairs[0]
+    assert published_at == '18.07.2026'
+    assert region == 'г. Москва'
+    assert media_name == 'РБК'
+
+
+def test_page_items_missing_fields_stay_none():
+    """Без селекторов published_at/region/media_name — не выдумываем None."""
+    html = """
+    <html><body>
+      <div class="card">
+        <h3 class="title">Новость 1</h3>
+        <a class="link" href="/news/1">x</a>
+      </div>
+    </body></html>
+    """
+    pairs = _page_items(
+        html,
+        EXAMPLE_SOURCE_NAME,
+        COMPETITOR,
+        TRIGGER,
+        selectors={
+            'container': 'div.card',
+            'title': 'h3.title',
+            'url': 'a.link',
+        },
+        base_url='https://example.com/',
+    )
+    assert len(pairs) == 1
+    _title, _url_abs, _url_rel, published_at, region, media_name = pairs[0]
+    assert published_at is None
+    assert region is None
+    assert media_name is None
+
+
 def test_page_items_single_item_container_unaffected():
     """Обычный случай (контейнер = одна карточка) не ломается доработкой.
 
@@ -912,7 +988,14 @@ def test_page_items_finds_card_link_outside_title_scope():
     )
 
     assert pairs == [
-        ('News 1', 'https://example.com/about/news/one', '/about/news/one')
+        (
+            'News 1',
+            'https://example.com/about/news/one',
+            '/about/news/one',
+            None,
+            None,
+            None,
+        )
     ]
 
 
@@ -1151,7 +1234,16 @@ async def test_deep_fetch_propagates_start_with_and_classification():
         has_antibot=False,
     )
     await parser._deep_fetch(
-        [('Новость', 'https://example.com/news/1', '/news/1')],
+        [
+            (
+                'Новость',
+                'https://example.com/news/1',
+                '/news/1',
+                None,
+                None,
+                None,
+            )
+        ],
         EXAMPLE_SOURCE_NAME,
         selectors={},
         start_with=StrategyType.CRAWL4AI,
@@ -1198,8 +1290,22 @@ async def test_deep_fetch_uses_cache_and_method(monkeypatch):
     parser._cache = _FakeCache()  # type: ignore
 
     candidates = [
-        ('Новость 1', 'https://example.com/news/1', '/news/1'),
-        ('Новость 2', 'https://example.com/news/2', '/news/2'),
+        (
+            'Новость 1',
+            'https://example.com/news/1',
+            '/news/1',
+            None,
+            None,
+            None,
+        ),
+        (
+            'Новость 2',
+            'https://example.com/news/2',
+            '/news/2',
+            None,
+            None,
+            None,
+        ),
     ]
     result = await parser._deep_fetch(
         candidates, EXAMPLE_SOURCE_NAME, selectors={}
@@ -1230,6 +1336,54 @@ async def test_deep_fetch_uses_cache_and_method(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deep_fetch_adds_listing_fields_when_present():
+    """_deep_fetch добавляет ex_published_at/ex_region/ex_media_name,
+
+    когда они пришли с листинга (_page_items), и не добавляет ключи, если
+    значения нет — без LLM-обогащения.
+    """
+    parser = AdaptiveParser()
+
+    async def _fake_extract(url, source_name, selectors, **kwargs):
+        return 'текст', 'css', {'complete': True, 'chunks_dropped': 0}
+
+    parser._extract_article_text = _fake_extract  # type: ignore
+
+    class _FakeCache:
+        async def get_article_text(self, url):
+            return None
+
+        async def set_article_text(
+            self, url, text, method, possibly_incomplete=False, ttl=None
+        ):
+            pass
+
+    parser._cache = _FakeCache()  # type: ignore
+
+    candidates = [
+        (
+            'С полями',
+            'https://example.com/a',
+            '/a',
+            '18.07.2026',
+            'г. Москва',
+            'РБК',
+        ),
+        ('Без полей', 'https://example.com/b', '/b', None, None, None),
+    ]
+    result = await parser._deep_fetch(
+        candidates, EXAMPLE_SOURCE_NAME, selectors={}
+    )
+    assert len(result) == 2
+    assert result[0]['ex_published_at'] == '18.07.2026'
+    assert result[0]['ex_region'] == 'г. Москва'
+    assert result[0]['ex_media_name'] == 'РБК'
+    assert 'ex_published_at' not in result[1]
+    assert 'ex_region' not in result[1]
+    assert 'ex_media_name' not in result[1]
+
+
+@pytest.mark.asyncio
 async def test_deep_fetch_css_first_ordering():
     """_deep_fetch отдаёт приоритет статьям с CSS-селектором text."""
     from src.bp1.adaptive.processing.parser import (
@@ -1256,8 +1410,8 @@ async def test_deep_fetch_css_first_ordering():
     parser._cache = _FakeCache()  # type: ignore
 
     candidates = [
-        ('Без CSS', 'https://example.com/a', '/a'),
-        ('С CSS', 'https://example.com/b', '/b'),
+        ('Без CSS', 'https://example.com/a', '/a', None, None, None),
+        ('С CSS', 'https://example.com/b', '/b', None, None, None),
     ]
     # Оба кандидата обрабатываются и получают полный текст.
     result = await parser._deep_fetch(
@@ -1406,3 +1560,136 @@ async def test_adapter_reset_survives_llm_failure():
 
     assert review is None
     assert await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME) is None
+
+
+# ============================================================================
+# verify-search-probe-relevance: сброс probed_url при повторном провале
+# именно уровня RELEVANCE
+# ============================================================================
+
+
+def _reports(*, relevance_passed: bool) -> list[QualityGateReport]:
+    """Набор отчётов Quality Gate с заданным исходом уровня RELEVANCE."""
+    return [
+        QualityGateReport(level=QualityGateLevel.SCHEMA, passed=True),
+        QualityGateReport(
+            level=QualityGateLevel.RELEVANCE,
+            passed=relevance_passed,
+            errors=[] if relevance_passed else ['не найдено упоминаний'],
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_relevance_failure_at_threshold_also_clears_probed_url():
+    """Повторный провал именно RELEVANCE сбрасывает и адаптер, и
+
+    закэшированный поисковый URL для этой пары (источник+search_param) —
+    регресс-тест на инцидент rbc.ru (найденный поисковый URL перестал
+    относиться к конкуренту, но переживал сброс одних селекторов).
+    """
+    parser = AdaptiveParser(redis_client=_FakeRedis())
+    adapter = _cached_adapter(fail_count=ADAPTER_FAIL_THRESHOLD - 1)
+    await parser._cache.set_adapter(EXAMPLE_SOURCE_NAME, adapter)
+    await parser._cache.set_probed_url(
+        EXAMPLE_SOURCE_NAME,
+        ProbedUrl(
+            source_name=EXAMPLE_SOURCE_NAME,
+            search_url='https://example.com/search?q=stale',
+        ),
+        search_param=COMPETITOR,
+    )
+
+    await parser._handle_quality_outcome(
+        source_name=EXAMPLE_SOURCE_NAME,
+        adapter=adapter,
+        adapter_from_cache=True,
+        quality_ok=False,
+        items=[],
+        html='<html></html>',
+        reports=_reports(relevance_passed=False),
+        search_param=COMPETITOR,
+    )
+
+    assert await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME) is None
+    assert (
+        await parser._cache.get_probed_url(
+            EXAMPLE_SOURCE_NAME, search_param=COMPETITOR
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_other_level_failure_does_not_clear_probed_url():
+    """Повторный провал уровня, ОТЛИЧНОГО от RELEVANCE (например, SCHEMA),
+
+    сбрасывает только адаптер — найденный поисковый URL остаётся, как и
+    раньше (Шаг 21 прежнего рефакторинга).
+    """
+    parser = AdaptiveParser(redis_client=_FakeRedis())
+    adapter = _cached_adapter(fail_count=ADAPTER_FAIL_THRESHOLD - 1)
+    await parser._cache.set_adapter(EXAMPLE_SOURCE_NAME, adapter)
+    probed = ProbedUrl(
+        source_name=EXAMPLE_SOURCE_NAME,
+        search_url='https://example.com/search?q=ok',
+    )
+    await parser._cache.set_probed_url(
+        EXAMPLE_SOURCE_NAME, probed, search_param=COMPETITOR
+    )
+
+    await parser._handle_quality_outcome(
+        source_name=EXAMPLE_SOURCE_NAME,
+        adapter=adapter,
+        adapter_from_cache=True,
+        quality_ok=False,
+        items=[],
+        html='<html></html>',
+        reports=_reports(relevance_passed=True),
+        search_param=COMPETITOR,
+    )
+
+    assert await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME) is None
+    still_cached = await parser._cache.get_probed_url(
+        EXAMPLE_SOURCE_NAME, search_param=COMPETITOR
+    )
+    assert still_cached is not None
+    assert still_cached.search_url == 'https://example.com/search?q=ok'
+
+
+@pytest.mark.asyncio
+async def test_relevance_failure_below_threshold_clears_nothing():
+    """Единичный провал RELEVANCE (не достигший порога) — ничего не
+
+    сбрасывается, только инкремент fail_count (как для остальных
+    уровней).
+    """
+    parser = AdaptiveParser(redis_client=_FakeRedis())
+    adapter = _cached_adapter()  # fail_count=0
+    await parser._cache.set_adapter(EXAMPLE_SOURCE_NAME, adapter)
+    probed = ProbedUrl(
+        source_name=EXAMPLE_SOURCE_NAME,
+        search_url='https://example.com/search?q=ok',
+    )
+    await parser._cache.set_probed_url(
+        EXAMPLE_SOURCE_NAME, probed, search_param=COMPETITOR
+    )
+
+    review = await parser._handle_quality_outcome(
+        source_name=EXAMPLE_SOURCE_NAME,
+        adapter=adapter,
+        adapter_from_cache=True,
+        quality_ok=False,
+        items=[],
+        html='<html></html>',
+        reports=_reports(relevance_passed=False),
+        search_param=COMPETITOR,
+    )
+
+    assert review is None
+    stored = await parser._cache.get_adapter(EXAMPLE_SOURCE_NAME)
+    assert stored is not None and stored.fail_count == 1
+    still_cached = await parser._cache.get_probed_url(
+        EXAMPLE_SOURCE_NAME, search_param=COMPETITOR
+    )
+    assert still_cached is not None

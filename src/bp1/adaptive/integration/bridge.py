@@ -60,6 +60,11 @@ class AdaptiveBridgeParser(BaseParser):
             competitor=competitor,
             trigger=trigger,
             expected_schema=kwargs.get('expected_schema'),
+            # Точная строка поискового запроса (см. runner/core.py) — нужна
+            # для сброса именно закэшированного под неё probed_url при
+            # повторном провале RELEVANCE (change
+            # verify-search-probe-relevance).
+            search_param=kwargs.get('search_param', ''),
         )
 
         if result.status == 'error':
@@ -110,7 +115,6 @@ class AdaptiveBridgeParser(BaseParser):
                 if 'file_path' in extra:
                     html_file_path = extra.pop('file_path')
 
-                base_media_name = raw_item.get('media_name')
                 for entry in news:
                     if not isinstance(entry, dict):
                         continue
@@ -128,10 +132,15 @@ class AdaptiveBridgeParser(BaseParser):
                             url=ex_url,
                             title=ex_title,
                             text=ex_text,
-                            published_at=None,
-                            region=None,
-                            media_name=base_media_name,
-                            # Временно пусто (по запросу) — диагностика
+                            # published_at/region/media_name — уже извлечены
+                            # селекторами адаптера на уровне листинга
+                            # (_page_items -> _run_extraction_cascade), а не
+                            # LLM-обогащением и не URL источника: если
+                            # значения нет — остаётся null, а не заглушка.
+                            published_at=entry.get('ex_published_at'),
+                            region=entry.get('ex_region'),
+                            media_name=entry.get('ex_media_name'),
+                            # Пусто (по запросу) — диагностика
                             # (ex_method/relevance/enrichment/...) писалась
                             # сюда раньше, но признана неструктурированным
                             # мусором. title/text уже несут ex_title/ex_text

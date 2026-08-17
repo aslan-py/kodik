@@ -33,6 +33,8 @@ from ...logger import new_trace_id
 from ...schemas import (
     AdapterState,
     AdaptiveParseResult,
+    QualityGateLevel,
+    QualityGateReport,
     SourceClassification,
     StrategyResult,
     StrategyType,
@@ -41,7 +43,6 @@ from ...strategies.classifier import SourceClassifier
 from ...strategies.orchestrator import AgenticOrchestrator
 from ..html_cleaner import HtmlCleaner
 from ..llm import AIAgent, LLMClient
-from ..relevance import RelevanceFilter
 from . import constants
 from .content import (
     _extract_main_content,
@@ -92,14 +93,6 @@ class AdaptiveParser:
         self._classifier = SourceClassifier(logger=logger)
         self._logger = logger or logging.getLogger(__name__)
 
-        # Фильтр семантической релевантности (Фича 1) и обогащение (Фича 3).
-        self._relevance = RelevanceFilter(
-            self._agent,
-            mode=constants.RELEVANCE_MODE,
-            threshold=constants.RELEVANCE_THRESHOLD,
-        )
-        self._enrichment_enabled = constants.ENRICHMENT_ENABLED
-
     def bind_redis(self, redis_client: Any) -> None:
         """Привязывает Redis-клиент к кэшу для хранения классификаций."""
         if self._cache.redis is None:
@@ -112,6 +105,7 @@ class AdaptiveParser:
         competitor: str = '',
         trigger: str = '',
         expected_schema: dict[str, Any] | None = None,
+        search_param: str = '',
         **kwargs,
     ) -> AdaptiveParseResult:
         """
@@ -219,6 +213,9 @@ class AdaptiveParser:
             adapter=adapter,
             adapter_from_cache=adapter_from_cache,
             html=html,
+            competitor=competitor,
+            trigger=trigger,
+            search_param=search_param,
         )
 
         elapsed = int((time.monotonic() - start) * 1000)
@@ -355,9 +352,10 @@ class AdaptiveParser:
         ``extra.news[].ex_title``, это разные страницы.
 
         Глубокий фетч (пагинация + полные url) докачивает полный текст
-        статей в ``extra.news``. Затем применяется семантическая фильтрация
-        нерелевантных новостей (Фича 1) и, если включено, LLM-обогащение
-        структурированными полями (Фича 3).
+        статей в ``extra.news`` — без дополнительного LLM-скоринга
+        релевантности или обогащения: их результат уходил только в
+        ``extra``, который остаётся пустым по контракту, поэтому такие
+        LLM-вызовы были чистой тратой бюджета.
         """
         items = [
             _make_search_page_item(
@@ -384,25 +382,10 @@ class AdaptiveParser:
             classification=agent_input,
         )
 
-        original_news_count = len(news)
-        filtered_news = await self._relevance.apply(
-            news, competitor, trigger, inn=None
-        )
-        relevance_extra = RelevanceFilter.build_extra(
-            original_count=original_news_count,
-            kept_count=len(filtered_news),
-            mode=self._relevance._mode,
-        )
-
-        if self._enrichment_enabled and filtered_news:
-            filtered_news = await self._enrich_news(
-                filtered_news, competitor, trigger
-            )
-
         for item in items:
             extra = item.setdefault('extra', {})
-            extra['news'] = filtered_news
-            extra.update(relevance_extra)
+            extra['news'] = news
+            extra['news_total'] = len(news)
             if file_path:
                 extra['file_path'] = file_path
             extra['file_saved'] = file_saved
@@ -420,18 +403,23 @@ class AdaptiveParser:
         adapter: AdapterState,
         adapter_from_cache: bool,
         html: str,
+        competitor: str = '',
+        trigger: str = '',
+        search_param: str = '',
     ) -> bool:
         """Валидирует items через Quality Gates и запускает самокоррекцию.
 
         Мутирует ``items``: добавляет ``extra.quality_levels`` (Шаг 20 плана
         рефакторинга, T6 — сводка по уровням SCHEMA/TYPES/BUSINESS/VOLUME/
-        CONSISTENCY, а не только булев признак ok/low_quality) и, если
-        сработала самокоррекция адаптера, ``extra.adapter_review``.
+        CONSISTENCY/RELEVANCE, а не только булев признак ok/low_quality) и,
+        если сработала самокоррекция адаптера, ``extra.adapter_review``.
 
         Returns:
             True, если контроль качества пройден по всем уровням.
         """
-        reports = self._quality_gate.validate_all(items)
+        reports = self._quality_gate.validate_all(
+            items, competitor=competitor, trigger=trigger
+        )
         quality_ok = self._quality_gate.is_all_passed(reports)
 
         quality_levels = {
@@ -454,6 +442,8 @@ class AdaptiveParser:
             quality_ok=quality_ok,
             items=items,
             html=html,
+            reports=reports,
+            search_param=search_param,
         )
         if recommendation:
             for item in items:
@@ -473,6 +463,8 @@ class AdaptiveParser:
         quality_ok: bool,
         items: list[dict[str, Any]],
         html: str,
+        reports: list[QualityGateReport] = (),
+        search_param: str = '',
     ) -> dict[str, Any] | None:
         """Обновляет судьбу закэшированного адаптера по итогам качества.
 
@@ -491,6 +483,13 @@ class AdaptiveParser:
           следующем прогоне селекторы были выведены заново, а у LLM
           запрашивается диагностическая рекомендация (уходит в
           ``extra.adapter_review`` и в лог — как аудит причины сброса).
+          Если провалился именно уровень RELEVANCE (change
+          verify-search-probe-relevance) — дополнительно сбрасывается и
+          закэшированный поисковый URL (``clear_probed_url``): провал
+          именно этого уровня означает, что выдача перестала
+          относиться к конкуренту/триггеру — вероятная причина не в
+          устаревших селекторах, а в сломанном поисковом URL, который
+          сброс одних только селекторов не лечит.
 
         Используется поле ``AdapterState.fail_count``, которое до этого шага
         было объявлено в схеме, но нигде не читалось и не писалось.
@@ -548,6 +547,30 @@ class AdaptiveParser:
             fail_count,
             (recommendation or {}).get('recommendation', 'n/a'),
         )
+
+        relevance_failed = any(
+            report.level == QualityGateLevel.RELEVANCE and not report.passed
+            for report in reports
+        )
+        if relevance_failed:
+            # search_param — точная строка, под которой закэширован
+            # probed_url (составной ключ источник+хэш запроса, см.
+            # UnifiedCache.clear_probed_url) — без неё сброс попал бы в
+            # ДРУГУЮ запись (source-level подсказку параметра из
+            # регистрации), а не в реально проваленный URL этого
+            # конкурента/триггера.
+            await self._cache.clear_probed_url(
+                source_name, search_param=search_param or None
+            )
+            self._logger.warning(
+                'Найденный поисковый URL источника %s (запрос=%r) тоже '
+                'сброшен — повторный провал RELEVANCE означает, что выдача '
+                'перестала относиться к конкуренту/триггеру (см. change '
+                'verify-search-probe-relevance)',
+                source_name,
+                search_param,
+            )
+
         return recommendation
 
     # ------------------------------------------------------------------
@@ -789,7 +812,10 @@ class AdaptiveParser:
         Returns:
             Список словарей ``{"title", "url", "text"}``.
         """
-        candidates: list[tuple[str, str, str]] = []  # (title, url_abs, url_rel)
+        # (title, url_abs, url_rel, published_at, region, media_name)
+        candidates: list[
+            tuple[str, str, str, str | None, str | None, str | None]
+        ] = []
         seen: set[str] = set()
         page = 1
         html = initial_html
@@ -819,13 +845,22 @@ class AdaptiveParser:
                 base_url=base_url,
             )
             added = 0
-            for title, url_abs, url_rel in page_items:
+            for (
+                title,
+                url_abs,
+                url_rel,
+                published_at,
+                region,
+                media_name,
+            ) in page_items:
                 if len(candidates) >= max_news:
                     break
                 if url_abs in seen or not url_abs:
                     continue
                 seen.add(url_abs)
-                candidates.append((title, url_abs, url_rel))
+                candidates.append(
+                    (title, url_abs, url_rel, published_at, region, media_name)
+                )
                 added += 1
 
             self._logger.debug(
@@ -856,42 +891,6 @@ class AdaptiveParser:
         )
         return news
 
-    async def _enrich_news(
-        self,
-        news: list[dict[str, Any]],
-        competitor: str,
-        trigger: str,
-    ) -> list[dict[str, Any]]:
-        """Обогащает события структурированными полями через LLM (Фича 3).
-
-        Для каждого события с полным текстом (``ex_text``) вызывается
-        ``AIAgent.enrich_event``; извлечённые поля (published_at, author,
-        keywords, summary, mentioned_company/inn, sentiment) добавляются в
-        элемент. При недоступности LLM или сбое элемент остаётся без
-        обогащения (не ломаем конвейер).
-
-        Args:
-            news: Список событий ``(ex_title, ex_url, ex_text, ...)``.
-            competitor: Название конкурента.
-            trigger: Тема поиска.
-
-        Returns:
-            Список событий с добавленным словарём ``ex_enrichment`` (только
-            для тех, где извлечение удалось).
-        """
-        enriched: list[dict[str, Any]] = []
-        for entry in news:
-            text = entry.get('ex_text') or ''
-            if not text:
-                enriched.append(entry)
-                continue
-            data = await self._agent.enrich_event(text, competitor, trigger)
-            if data:
-                entry = dict(entry)
-                entry['ex_enrichment'] = data
-            enriched.append(entry)
-        return enriched
-
     def _max_pages(self, selectors: dict[str, str]) -> int:
         """Верхний предел страниц пагинации за один прогон источника.
 
@@ -921,7 +920,9 @@ class AdaptiveParser:
 
     async def _deep_fetch(
         self,
-        candidates: list[tuple[str, str, str]],
+        candidates: list[
+            tuple[str, str, str, str | None, str | None, str | None]
+        ],
         source_name: str,
         selectors: dict[str, str],
         start_with: StrategyType | None = None,
@@ -936,7 +937,10 @@ class AdaptiveParser:
         терять новость.
 
         Args:
-            candidates: Список ``(title, url_abs, url_rel)``.
+            candidates: Список ``(title, url_abs, url_rel, published_at,
+                region, media_name)`` — последние три поля уже извлечены
+                селекторами адаптера на уровне листинга (``_page_items``),
+                ``None``, если селектора нет или он не сработал.
             source_name: Имя источника.
             selectors: CSS-селекторы адаптера.
             start_with: Стратегия, уже сработавшая для страницы листинга —
@@ -946,22 +950,29 @@ class AdaptiveParser:
 
         Returns:
             Список словарей ``ex_title``/``ex_url``/``ex_text``/
-            ``ex_method``/``ex_text_length``/``ex_text_possibly_incomplete``.
+            ``ex_method``/``ex_text_length``/``ex_text_possibly_incomplete``,
+            плюс ``ex_published_at``/``ex_region``/``ex_media_name``, когда
+            соответствующее значение пришло с листинга (ключ отсутствует,
+            если значения нет).
         """
 
         # Приоритет отдаём статьям с настроенным CSS-селектором ``text``
         # (дёшево и быстро), а LLM-фолбэк оставляем для остальных. Так полный
         # текст равномерно распределяется по всем новостям, а не достаётся
         # только первым нескольким, выигравшим гонку за ресурсы.
-        def _css_first_key(cand: tuple[str, str, str]) -> tuple[int, int]:
+        def _css_first_key(
+            cand: tuple[str, str, str, str | None, str | None, str | None],
+        ) -> tuple[int, int]:
             has_css = bool((selectors or {}).get('text'))
             return (0 if has_css else 1, 0)
 
         ordered = sorted(candidates, key=_css_first_key)
         semaphore = asyncio.Semaphore(constants.MAX_CONCURRENT_FETCHES)
 
-        async def _one(cand: tuple[str, str, str]) -> dict[str, Any]:
-            title, url_abs, _url_rel = cand
+        async def _one(
+            cand: tuple[str, str, str, str | None, str | None, str | None],
+        ) -> dict[str, Any]:
+            title, url_abs, _url_rel, published_at, region, media_name = cand
             # Кэш полного текста по URL: повторно не скачиваем страницу и не
             # тратим LLM-токены, если текст уже извлекался ранее.
             cached = await self._cache.get_article_text(url_abs)
@@ -1006,7 +1017,7 @@ class AdaptiveParser:
             # method — способ получения текста: css/readability/llm/
             # snippet_page (шумный текст всей страницы)/snippet_title
             # (только заголовок, фетч не удался)/cache.
-            return {
+            result: dict[str, Any] = {
                 'ex_title': title,
                 'ex_url': url_abs,
                 'ex_text': text,
@@ -1014,6 +1025,16 @@ class AdaptiveParser:
                 'ex_text_length': len(text) if text else 0,
                 'ex_text_possibly_incomplete': possibly_incomplete,
             }
+            # published_at/region/media_name — уже извлечены селекторами
+            # адаптера на уровне листинга (_page_items); ключ добавляется,
+            # только когда значение реально есть (не выдумываем заглушку).
+            if published_at:
+                result['ex_published_at'] = published_at
+            if region:
+                result['ex_region'] = region
+            if media_name:
+                result['ex_media_name'] = media_name
+            return result
 
         return await asyncio.gather(*(_one(c) for c in ordered))
 

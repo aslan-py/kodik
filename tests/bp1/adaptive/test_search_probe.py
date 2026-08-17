@@ -660,3 +660,132 @@ async def test_probe_without_target_uses_looks_like_only():
     assert plan.success is True
     assert plan.winner is not None
     assert plan.winner.label == 'text'
+
+
+# ---------------------------------------------------------------------------
+# Проверка причинности: кандидат обязан отличаться от базовой ленты
+# (регресс-тест на инцидент rbc.ru — q= сайтом игнорировался, отдавалась
+# общая лента, где случайно встретилось имя цели)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_rejects_candidate_matching_baseline():
+    """Кандидат с тем же составом карточек, что у базовой ленты, — не
+
+    победитель, даже если цель в нём есть. Побеждает следующий кандидат
+    (`query`), реально отличающийся от базовой ленты.
+    """
+    baseline_links = ''.join(
+        f'<a href="/feed{i}">Новость {i}</a>' for i in range(10)
+    )
+    baseline_html = (
+        f'<html><body><h1>Лента</h1>{baseline_links}'
+        f'<span>{COMPETITOR}</span></body></html>'
+    )
+    filtered_html = (
+        '<html><body><h1>Результаты поиска</h1>'
+        f'<a href="/found">{COMPETITOR} — статья</a>'
+        '<p>' + 'заполнитель ' * 100 + '</p>'
+        '</body></html>'
+    )
+
+    class _UnfilteredParamFetch:
+        async def __call__(self, url: str) -> str:
+            if '?' not in url:
+                return baseline_html
+            param = url.split('?', 1)[-1].split('=', 1)[0]
+            if param == 'q':
+                # 'q' сайтом игнорируется — та же лента, что и без параметра.
+                return baseline_html
+            if param == 'query':
+                return filtered_html
+            return EMPTY_HTML
+
+    prober = SearchUrlProber(fetch=_UnfilteredParamFetch())
+    plan = await prober.probe(SEARCH_BASE, COMPETITOR, target_name=COMPETITOR)
+
+    assert plan.success is True
+    assert plan.winner is not None
+    # 'q' идёт первым в _DEFAULT_PARAM_CHAIN, но отклонён проверкой
+    # причинности — победил следующий, реально фильтрующий параметр.
+    assert plan.winner.label == 'query'
+    q_attempt = next(a for a in plan.attempts if a.label == 'q')
+    assert q_attempt.ok is False
+
+
+@pytest.mark.asyncio
+async def test_probe_baseline_unavailable_falls_back_to_old_behavior():
+    """base_url недоступен (fetch вернул None) — сравнение с базовой лентой
+
+    не блокирует победителя, поведение как до этой правки.
+    """
+
+    class _NoBaselineFetch:
+        async def __call__(self, url: str) -> str | None:
+            if '?' not in url:
+                return None
+            param = url.split('?', 1)[-1].split('=', 1)[0]
+            if param == 'text':
+                return RESULTS_HTML
+            return EMPTY_HTML
+
+    prober = SearchUrlProber(fetch=_NoBaselineFetch())
+    plan = await prober.probe(SEARCH_BASE, COMPETITOR, target_name=COMPETITOR)
+
+    assert plan.success is True
+    assert plan.winner is not None
+    assert plan.winner.label == 'text'
+
+
+@pytest.mark.asyncio
+async def test_probe_rejects_candidate_matching_known_other_competitor():
+    """known_other_result_urls отклоняет кандидата, совпадающего с уже
+
+    подтверждённой выдачей другого конкурента на этом источнике.
+    """
+    filtered_html = (
+        '<html><body><h1>Результаты поиска</h1>'
+        f'<a href="/found">{COMPETITOR} — статья</a>'
+        '<p>' + 'заполнитель ' * 100 + '</p>'
+        '</body></html>'
+    )
+
+    class _NoBaselineFetch:
+        async def __call__(self, url: str) -> str | None:
+            if '?' not in url:
+                return None
+            param = url.split('?', 1)[-1].split('=', 1)[0]
+            if param == 'q':
+                return filtered_html
+            return EMPTY_HTML
+
+    prober = SearchUrlProber(fetch=_NoBaselineFetch())
+    plan = await prober.probe(
+        SEARCH_BASE,
+        COMPETITOR,
+        target_name=COMPETITOR,
+        known_other_result_urls={'https://example.com/found'},
+    )
+
+    assert plan.success is False
+
+
+@pytest.mark.asyncio
+async def test_probe_async_populates_sample_item_urls():
+    """probe_async кладёт множество URL карточек победителя в
+
+    ProbedUrl.sample_item_urls — снимок для сравнения будущих конкурентов.
+    """
+    fetch = _FakeFetch(good_param='text')
+    prober = SearchUrlProber(fetch=fetch)
+    probed = await prober.probe_async(
+        SEARCH_BASE, COMPETITOR, target_name=COMPETITOR
+    )
+
+    assert probed is not None
+    assert probed.sample_item_urls
+    assert all(
+        url.startswith('https://example.com/')
+        for url in probed.sample_item_urls
+    )

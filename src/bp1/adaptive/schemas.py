@@ -300,6 +300,13 @@ class ProbedUrl(BaseModel):
     result_count_selector: str | None = None
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     probed_at: datetime = Field(default_factory=_utcnow)
+    # Снимок URL карточек результата победившего пробинга (эвристика,
+    # ограничено разумным числом ссылок) — используется, чтобы следующий
+    # пробинг для ДРУГОГО конкурента на этом же источнике мог сравнить
+    # состав своей выдачи с уже подтверждённой (см.
+    # SearchUrlProber.probe(known_other_result_urls=...)). Пусто у старых
+    # закэшированных записей — совместимо без миграции.
+    sample_item_urls: list[str] = Field(default_factory=list)
 
 
 # ============================================================================
@@ -315,14 +322,11 @@ class QualityGateLevel(StrEnum):
     BUSINESS = 'BUSINESS'
     VOLUME = 'VOLUME'
     CONSISTENCY = 'CONSISTENCY'
-
-
-class RelevanceMode(StrEnum):
-    """Режим фильтрации релевантности (Фича 1)."""
-
-    OFF = 'off'
-    FILTER = 'filter'
-    RANK = 'rank'
+    # Собранные материалы действительно относятся к конкуренту/триггеру
+    # задачи — не структурная проверка, а смысловая (change
+    # verify-search-probe-relevance). Ловит деградацию поискового URL уже
+    # после успешной регистрации источника.
+    RELEVANCE = 'RELEVANCE'
 
 
 class QualityGateReport(BaseModel):

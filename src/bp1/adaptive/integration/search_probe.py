@@ -34,6 +34,13 @@ from urllib.parse import quote_plus, urljoin
 
 from bs4 import BeautifulSoup
 
+from ..processing.parser.url_utils import (
+    _is_ad_redirect_url,
+    _is_noise_url,
+    _LinkCollector,
+    _reject_non_http_scheme,
+    _to_absolute,
+)
 from ..schemas import ProbedUrl, SourceType
 
 logger = logging.getLogger(__name__)
@@ -164,6 +171,10 @@ class ProbeAttempt:
     # Реально использованный HTTP-метод ('GET' | 'POST') — для form-попыток,
     # отправленных через найденную POST-форму (см. ``probe_async``).
     method: str = 'GET'
+    # Множество URL карточек результата (эвристика, см. extract_result_urls)
+    # — снимок для сравнения с будущими прогонами других конкурентов на том
+    # же источнике (см. ``known_other_result_urls`` в ``probe()``).
+    result_urls: tuple[str, ...] = ()
 
 
 @dataclass
@@ -188,6 +199,7 @@ class ProbePlan:
         target_score: int = 0,
         matched_variant: str | None = None,
         method: str = 'GET',
+        result_urls: tuple[str, ...] = (),
     ) -> ProbeAttempt:
         attempt = ProbeAttempt(
             kind=kind,
@@ -199,6 +211,7 @@ class ProbePlan:
             target_score=target_score,
             matched_variant=matched_variant,
             method=method,
+            result_urls=result_urls,
         )
         self.attempts.append(attempt)
         if ok and self.winner is None:
@@ -284,6 +297,78 @@ def looks_like_search_results(html: str) -> bool:
 # ``looks_like_search_results``, который иначе затенял бы модульную функцию
 # внутри ``__init__`` и ломал бы фолбэк на неё.
 _default_looks_like_search_results = looks_like_search_results
+
+
+# ---------------------------------------------------------------------------
+# Проверка причинности: реально ли выдача зависит от значения запроса
+# ---------------------------------------------------------------------------
+# ``looks_like_search_results``/``score_target_presence`` проверяют только
+# текст ответа — оба проходят и на странице, которая честно фильтрует
+# выдачу, и на общей ленте источника, где имя цели встретилось случайно
+# (см. инцидент rbc.ru: параметр ``q=`` сайтом игнорируется, отдаётся
+# домашняя лента, и на ней один раз оказалось слово «Сбербанк» —
+# оба текстовых сигнала прошли, хотя фильтрации не было). Эта проверка
+# сравнивает МНОЖЕСТВО карточек кандидата с базовой (нефильтрованной)
+# лентой источника — реальная фильтрация всегда меняет состав.
+
+# Доля совпадения ссылок, при которой кандидат считается «той же лентой,
+# что и без фильтра» — не прошёл проверку причинности.
+SEARCH_PROBE_OVERLAP_THRESHOLD = 0.7
+
+# Максимум ссылок, сохраняемых в ProbedUrl.sample_item_urls — снимок для
+# сравнения, не полная выдача, раздувать кэш незачем.
+_SAMPLE_ITEM_URLS_LIMIT = 30
+
+
+def extract_result_urls(html: str, base_url: str) -> set[str]:
+    """Извлекает множество абсолютных URL карточек со страницы (эвристикой).
+
+    Использует тот же сборщик ссылок и ту же фильтрацию служебных/
+    рекламных URL, что и адаптивный парсер (``processing/parser/
+    url_utils.py``) — на момент пробинга структурированных селекторов
+    адаптера ещё не существует (пробинг предшествует ``analyze_structure``),
+    поэтому состав карточек можно оценить только эвристически.
+    """
+    if not html:
+        return set()
+    collector = _LinkCollector()
+    collector.feed(html)
+    urls: set[str] = set()
+    for _title, href in collector.links:
+        if (
+            _is_noise_url(href)
+            or _is_ad_redirect_url(href)
+            or _reject_non_http_scheme(href)
+        ):
+            continue
+        urls.add(_to_absolute(href, base_url))
+    return urls
+
+
+def _overlap_ratio(a: set[str], b: set[str]) -> float:
+    """Коэффициент Жаккара двух множеств URL (0.0 — не пересекаются)."""
+    if not a or not b:
+        return 0.0
+    union = a | b
+    if not union:
+        return 0.0
+    return len(a & b) / len(union)
+
+
+def _looks_unfiltered(
+    candidate_urls: set[str], reference_urls: set[str]
+) -> bool:
+    """True, если состав кандидата практически совпадает с эталонным —
+
+    значит, запрос его не отфильтровал (та же лента, что и без параметра
+    поиска/для другого запроса). Пустые множества ни о чём не говорят —
+    сравнение пропускается (не может ни подтвердить, ни опровергнуть).
+    """
+    if not candidate_urls or not reference_urls:
+        return False
+    return _overlap_ratio(candidate_urls, reference_urls) >= (
+        SEARCH_PROBE_OVERLAP_THRESHOLD
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -755,6 +840,7 @@ class SearchUrlProber:
         source_type: SourceType | None = None,
         target_name: str = '',
         target_inn: str = '',
+        known_other_result_urls: set[str] | None = None,
     ) -> ProbePlan:
         """Перебирает варианты поиска и возвращает ``ProbePlan``.
 
@@ -768,6 +854,12 @@ class SearchUrlProber:
             source_type: Тип источника (для гос. эвристики).
             target_name: Название цели (конкурента) для проверки наличия.
             target_inn: ИНН цели (конкурента) для проверки наличия.
+            known_other_result_urls: Множество URL карточек, ранее
+                подтверждённых для ДРУГОГО конкурента на этом же источнике
+                (см. ``ProbedUrl.sample_item_urls``). Если передано —
+                используется как дополнительный эталон при проверке
+                причинности наравне с базовой лентой источника: совпадение
+                с ним тоже отклоняет кандидата.
 
         Returns:
             ``ProbePlan`` с успешной попыткой (``winner``) и списком всех
@@ -775,6 +867,54 @@ class SearchUrlProber:
         """
         plan = ProbePlan()
         fetch = self._fetch or self._default_fetch
+        baseline_urls: set[str] | None = None
+
+        async def _evaluate(
+            html: str,
+        ) -> tuple[bool, bool, int, str | None, tuple[str, ...]]:
+            """Оценивает один ответ на «похоже на выдачу» + «есть цель» +
+
+            «выдача причинно зависит от запроса» (не совпадает с базовой
+            лентой источника/выдачей другого конкурента). Ленивый fetch
+            базовой ленты — один раз на весь ``probe()``, не на кандидата.
+            """
+            nonlocal baseline_urls
+            looks_ok = self._looks_like(html)
+            target_found = False
+            target_score = 0
+            matched_variant = None
+            result_urls: tuple[str, ...] = ()
+            if looks_ok and (target_name or target_inn):
+                target_score = score_target_presence(
+                    html, target_name=target_name, target_inn=target_inn
+                )
+                target_found = target_score >= _TARGET_CONFIDENT
+                if not target_found:
+                    looks_ok = False
+                else:
+                    matched_variant = find_matched_target_variant(
+                        html, target_name=target_name
+                    )
+                    candidate_urls = extract_result_urls(html, base_url)
+                    result_urls = tuple(candidate_urls)
+                    if baseline_urls is None:
+                        baseline_html = await fetch(base_url)
+                        baseline_urls = extract_result_urls(
+                            baseline_html or '', base_url
+                        )
+                    if _looks_unfiltered(candidate_urls, baseline_urls):
+                        looks_ok = False
+                    elif known_other_result_urls and _looks_unfiltered(
+                        candidate_urls, known_other_result_urls
+                    ):
+                        looks_ok = False
+            return (
+                looks_ok,
+                target_found,
+                target_score,
+                matched_variant,
+                result_urls,
+            )
 
         # Идея: гос. сайты (реестры) обычно ищут по ИНН, но параметр может
         # быть не ``q``. Пробуем параметры из цепочки, но для реестров
@@ -799,21 +939,13 @@ class SearchUrlProber:
             if not html:
                 plan.add('param', p, url=url, ok=False, detail='fetch_failed')
                 continue
-            looks_ok = self._looks_like(html)
-            target_found = False
-            target_score = 0
-            matched_variant = None
-            if looks_ok and (target_name or target_inn):
-                target_score = score_target_presence(
-                    html, target_name=target_name, target_inn=target_inn
-                )
-                target_found = target_score >= _TARGET_CONFIDENT
-                if not target_found:
-                    looks_ok = False
-                else:
-                    matched_variant = find_matched_target_variant(
-                        html, target_name=target_name
-                    )
+            (
+                looks_ok,
+                target_found,
+                target_score,
+                matched_variant,
+                result_urls,
+            ) = await _evaluate(html)
             plan.add(
                 'param',
                 p,
@@ -823,6 +955,7 @@ class SearchUrlProber:
                 target_found=target_found,
                 target_score=target_score,
                 matched_variant=matched_variant,
+                result_urls=result_urls,
             )
             if looks_ok:
                 self._logger.info(
@@ -873,23 +1006,13 @@ class SearchUrlProber:
                     )
 
             if form_html:
-                form_ok = self._looks_like(form_html)
-                form_target_found = False
-                form_target_score = 0
-                form_matched_variant = None
-                if form_ok and (target_name or target_inn):
-                    form_target_score = score_target_presence(
-                        form_html,
-                        target_name=target_name,
-                        target_inn=target_inn,
-                    )
-                    form_target_found = form_target_score >= _TARGET_CONFIDENT
-                    if not form_target_found:
-                        form_ok = False
-                    else:
-                        form_matched_variant = find_matched_target_variant(
-                            form_html, target_name=target_name
-                        )
+                (
+                    form_ok,
+                    form_target_found,
+                    form_target_score,
+                    form_matched_variant,
+                    form_result_urls,
+                ) = await _evaluate(form_html)
                 plan.add(
                     'form',
                     form_param,
@@ -900,6 +1023,7 @@ class SearchUrlProber:
                     target_score=form_target_score,
                     matched_variant=form_matched_variant,
                     method=form_method,
+                    result_urls=form_result_urls,
                 )
                 if form_ok:
                     self._logger.info(
@@ -924,21 +1048,13 @@ class SearchUrlProber:
                     'query', variant, url=url, ok=False, detail='fetch_failed'
                 )
                 continue
-            looks_ok = self._looks_like(html)
-            target_found = False
-            target_score = 0
-            matched_variant = None
-            if looks_ok and (target_name or target_inn):
-                target_score = score_target_presence(
-                    html, target_name=target_name, target_inn=target_inn
-                )
-                target_found = target_score >= _TARGET_CONFIDENT
-                if not target_found:
-                    looks_ok = False
-                else:
-                    matched_variant = find_matched_target_variant(
-                        html, target_name=target_name
-                    )
+            (
+                looks_ok,
+                target_found,
+                target_score,
+                matched_variant,
+                result_urls,
+            ) = await _evaluate(html)
             plan.add(
                 'query',
                 variant,
@@ -948,6 +1064,7 @@ class SearchUrlProber:
                 target_found=target_found,
                 target_score=target_score,
                 matched_variant=matched_variant,
+                result_urls=result_urls,
             )
             if looks_ok:
                 self._logger.info(
@@ -979,6 +1096,7 @@ class SearchUrlProber:
         target_name: str = '',
         target_inn: str = '',
         source_type: SourceType | None = None,
+        known_other_result_urls: set[str] | None = None,
     ) -> ProbedUrl | None:
         """Тонкая обёртка над ``probe()``: отдаёт только победителя.
 
@@ -994,6 +1112,7 @@ class SearchUrlProber:
             target_name=target_name,
             target_inn=target_inn,
             source_type=source_type,
+            known_other_result_urls=known_other_result_urls,
         )
         if plan.winner is None:
             return None
@@ -1002,6 +1121,9 @@ class SearchUrlProber:
             search_url=plan.winner.url,
             search_method=plan.winner.method,
             confidence=1.0 if plan.winner.target_found else 0.5,
+            sample_item_urls=list(
+                plan.winner.result_urls[:_SAMPLE_ITEM_URLS_LIMIT]
+            ),
         )
 
     async def _default_fetch(self, url: str) -> str | None:

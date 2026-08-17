@@ -7,12 +7,12 @@ from typing import Any
 from urllib.parse import quote_plus, urlencode
 
 from ...core.cache import PROBED_URL_TTL_SECONDS
-from ...schemas import ProbedUrl
+from ...schemas import ProbedUrl, SourceClassification
 from ...strategies.orchestrator import (
     _is_trusted_self_signed_domain,
     _ssl_unverified_context,
 )
-from ..search_probe import SearchUrlProber
+from ..search_probe import _SAMPLE_ITEM_URLS_LIMIT, SearchUrlProber
 from ..sources import SearchUrlTemplateRegistry, extract_host
 
 
@@ -161,24 +161,42 @@ class _ProbingMixin:
         search_param: str,
         target_name: str,
         redis_client: Any,
-    ) -> tuple[str, ProbedUrl | None]:
-        """Возвращает ``(url, probed_url)``: кэш -> пробинг -> fallback.
+        classification: SourceClassification | None = None,
+    ) -> tuple[str, ProbedUrl | None, dict[str, Any] | None]:
+        """Возвращает ``(url, probed_url, probe_report)``: кэш -> пробинг ->
+        fallback.
 
         1. Кэш: если probed URL для пары ``(источник, поисковый запрос)``
-           уже сохранён — используем его (TTL 7 дней), пробинг не выполняем.
-           Составной ключ (источник + хэш запроса) гарантирует, что у разных
-           конкурентов на одном источнике будут независимые записи.
-        2. Пробинг: иначе пробуем ``SearchUrlProber.probe_async`` по базовому
-           шаблону источника (``{q}``) с таймаутом 10 с.
+           уже сохранён И реально подтверждён (``confidence > 0``) —
+           используем его (TTL 7 дней), пробинг не выполняем. Запись с
+           ``confidence == 0.0`` — это fallback, зафиксированный, когда
+           перебор не нашёл ни одного варианта (например, лёгкий fetch не
+           справился с антиботом до починки транспорта, см. design.md
+           эскалации) — она НЕ считается подтверждённым результатом и не
+           блокирует повторную попытку. Составной ключ (источник + хэш
+           запроса) гарантирует, что у разных конкурентов на одном
+           источнике будут независимые записи.
+        2. Пробинг: иначе пробуем ``SearchUrlProber.probe`` по базовому
+           шаблону источника (``{q}``) с таймаутом 10 с. Это ЕДИНСТВЕННЫЙ
+           прогон перебора на задачу (раньше `_execute_parsing_task` ещё
+           отдельно звал ``probe()`` только ради ``matched_variant`` — два
+           независимых прогона могли разойтись во мнениях о рабочем
+           параметре; теперь ``matched_variant`` берётся из этого же
+           прогона через ``ProbedUrl.matched_variant``).
         3. Fallback: если пробинг не нашёл успешный вариант (или Redis
            недоступен / fetch не подключён) — строим URL по шаблону
            ``https://{host}{template}`` с percent-кодированным запросом.
-           Fallback также пишется в кэш (как ``ProbedUrl``), чтобы повторные
-           запуски той же пары не делали бесполезный пробинг заново.
+           Fallback также пишется в кэш (как ``ProbedUrl`` с
+           ``confidence=0.0``), чтобы повторные запуски той же пары не
+           делали бесполезный пробинг заново — но и не считался
+           подтверждённым результатом навсегда (см. п.1).
 
-        Возвращает ``(url, probed)``: ``url`` — итоговый URL для парсинга,
-        ``probed`` — найденный/закэшированный ``ProbedUrl`` (или None).
-        Итоговый URL берётся из ``probed.search_url``, если он есть.
+        Возвращает ``(url, probed, probe_report)``: ``url`` — итоговый URL
+        для парсинга, ``probed`` — найденный/закэшированный ``ProbedUrl``
+        (или None), ``probe_report`` — полный отчёт перебора
+        (``ProbePlan.to_extra()``) для диагностики, или ``None``, если
+        перебор не выполнялся (кэш-хит/пробинг выключен). Итоговый URL
+        берётся из ``probed.search_url``, если он есть.
         """
         fallback_url = self._build_fallback_url(source_name, search_param)
 
@@ -193,14 +211,21 @@ class _ProbingMixin:
                 e,
             )
             cached = None
-        if cached is not None:
+        if cached is not None and cached.confidence > 0.0:
             self._logger.info(
                 'Probed URL для %s (query=%r) взят из кэша: %s',
                 source_name,
                 search_param,
                 cached.search_url,
             )
-            return cached.search_url, cached
+            return cached.search_url, cached, None
+        if cached is not None:
+            self._logger.info(
+                'Закэширован неподтверждённый fallback для %s (query=%r) — '
+                'пробуем перебор заново',
+                source_name,
+                search_param,
+            )
 
         if not self.use_probing:
             self._logger.info(
@@ -208,7 +233,7 @@ class _ProbingMixin:
                 source_name,
                 fallback_url,
             )
-            return fallback_url, None
+            return fallback_url, None, None
 
         base_url = SearchUrlTemplateRegistry().build_base_url(source_name)
         # Подсказка от регистрации источника (Шаг 19 плана рефакторинга):
@@ -235,18 +260,35 @@ class _ProbingMixin:
             )
             known_other_urls = []
         try:
-            probed = await self._prober.probe_async(
-                base_url=base_url,
-                search_query=search_param,
+            plan = await self._prober.probe(
+                base_url,
+                search_param,
                 target_name=target_name,
                 prefer_param=prefer_param,
                 known_other_result_urls=(
                     set(known_other_urls) if known_other_urls else None
                 ),
+                classification=classification,
             )
         except Exception as e:
             self._logger.warning('Пробинг %s не выполнен: %s', source_name, e)
-            probed = None
+            plan = None
+
+        probe_report = plan.to_extra() if plan is not None else None
+        probed = (
+            ProbedUrl(
+                source_name=target_name or search_param,
+                search_url=plan.winner.url,
+                search_method=plan.winner.method,
+                confidence=1.0 if plan.winner.target_found else 0.5,
+                sample_item_urls=list(
+                    plan.winner.result_urls[:_SAMPLE_ITEM_URLS_LIMIT]
+                ),
+                matched_variant=plan.winner.matched_variant,
+            )
+            if plan is not None and plan.winner is not None
+            else None
+        )
 
         if probed is None:
             self._logger.info(
@@ -275,7 +317,7 @@ class _ProbingMixin:
                     source_name,
                     e,
                 )
-            return fallback_url, None
+            return fallback_url, None, probe_report
 
         try:
             await self._cache.set_probed_url(
@@ -301,7 +343,7 @@ class _ProbingMixin:
                     source_name,
                     e,
                 )
-        return probed.search_url, probed
+        return probed.search_url, probed, probe_report
 
     async def _preferred_param_from_registration(
         self, source_name: str

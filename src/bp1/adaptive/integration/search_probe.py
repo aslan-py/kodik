@@ -41,7 +41,7 @@ from ..processing.parser.url_utils import (
     _reject_non_http_scheme,
     _to_absolute,
 )
-from ..schemas import ProbedUrl, SourceType
+from ..schemas import ProbedUrl, SourceClassification, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +314,37 @@ _default_looks_like_search_results = looks_like_search_results
 # Доля совпадения ссылок, при которой кандидат считается «той же лентой,
 # что и без фильтра» — не прошёл проверку причинности.
 SEARCH_PROBE_OVERLAP_THRESHOLD = 0.7
+
+# ---------------------------------------------------------------------------
+# Эскалация fetch-транспорта по классификации источника
+# ---------------------------------------------------------------------------
+# Лёгкий fetch (обычно голый HTTP-запрос) не получает содержательный ответ
+# от источников с антибот-защитой/SPA — они отдают пустой/заглушечный HTML
+# независимо от значения query-параметра, поэтому причинная проверка не
+# может отличить рабочий параметр от нерабочего: сравнивать нечего. Для
+# таких источников перебор переходит на fetch через лестницу деградации
+# оркестратора (см. ``_escalated_fetch``), который умеет пройти защиту.
+
+# Стратегии, при которых лёгкий fetch заведомо не подходит.
+_STRATEGIES_REQUIRING_ESCALATION = frozenset({'BROWSER', 'STEALTH', 'HITL'})
+
+# Максимум словарных параметров, перебираемых через эскалированный fetch
+# (без учёта ``prefer_param``) — дорогой fetch не гоняется по всей цепочке
+# из ``_DEFAULT_PARAM_CHAIN``, только по самым частым.
+_ESCALATED_PARAM_LIMIT = 2
+
+
+def _needs_escalation(classification: SourceClassification | None) -> bool:
+    """True, если лёгкий fetch заведомо не подходит для источника."""
+    if classification is None:
+        return False
+    return (
+        classification.has_antibot
+        or classification.is_spa
+        or classification.recommended_strategy
+        in _STRATEGIES_REQUIRING_ESCALATION
+    )
+
 
 # Максимум ссылок, сохраняемых в ProbedUrl.sample_item_urls — снимок для
 # сравнения, не полная выдача, раздувать кэш незачем.
@@ -841,6 +872,7 @@ class SearchUrlProber:
         target_name: str = '',
         target_inn: str = '',
         known_other_result_urls: set[str] | None = None,
+        classification: SourceClassification | None = None,
     ) -> ProbePlan:
         """Перебирает варианты поиска и возвращает ``ProbePlan``.
 
@@ -860,13 +892,35 @@ class SearchUrlProber:
                 используется как дополнительный эталон при проверке
                 причинности наравне с базовой лентой источника: совпадение
                 с ним тоже отклоняет кандидата.
+            classification: Резолвленная классификация источника. Если
+                указывает на антибот/SPA/стратегию строже FAST — лёгкий
+                fetch (``self._fetch``) заведомо не получит содержательный
+                ответ, и перебор эскалирует транспорт до
+                ``AgenticOrchestrator.fetch_with_degradation`` (см.
+                ``_escalated_fetch``), одновременно сужая число
+                перебираемых кандидатов — дорогой fetch не гоняется по
+                всей цепочке параметров/форме/реформулировкам.
 
         Returns:
             ``ProbePlan`` с успешной попыткой (``winner``) и списком всех
             перебранных вариантов (``attempts``).
         """
         plan = ProbePlan()
-        fetch = self._fetch or self._default_fetch
+        needs_escalation = _needs_escalation(classification)
+        if needs_escalation:
+
+            async def _escalated(url: str) -> str | None:
+                return await self._escalated_fetch(url, classification)
+
+            fetch = _escalated
+            self._logger.info(
+                'Пробинг %s эскалирован до fetch_with_degradation '
+                '(антибот/SPA/стратегия=%s)',
+                base_url,
+                classification.recommended_strategy if classification else None,
+            )
+        else:
+            fetch = self._fetch or self._default_fetch
         baseline_urls: set[str] | None = None
 
         async def _evaluate(
@@ -931,7 +985,14 @@ class SearchUrlProber:
             if p in _FILTER_PARAMS:
                 continue
             params.append(p)
-        params = params[:max_params]
+        effective_max_params = max_params
+        if needs_escalation:
+            # Дорогой fetch — не гоняем всю цепочку, только prefer_param +
+            # самые частые словарные параметры (см. design.md эскалации).
+            effective_max_params = (
+                1 if prefer_param else 0
+            ) + _ESCALATED_PARAM_LIMIT
+        params = params[:effective_max_params]
 
         for p in params:
             url = build_probe_url(base_url, p, search_query)
@@ -964,6 +1025,21 @@ class SearchUrlProber:
                     base_url,
                 )
                 return plan
+
+        if needs_escalation:
+            # Дорогой fetch уже потрачен на приоритетные кандидаты (цикл
+            # 1) — форму и реформулировки (циклы 1.5/2) не пробуем, чтобы
+            # не умножать число fetch_with_degradation на одну задачу.
+            if plan.attempts:
+                last = plan.attempts[-1]
+                plan.add(
+                    'query',
+                    'none',
+                    url=last.url,
+                    ok=False,
+                    detail='all_attempts_failed',
+                )
+            return plan
 
         # --- Цикл 1.5: параметр из HTML-формы поиска. ---
         # Если ни один словарный параметр не дал выдачи, пробуем распознать
@@ -1097,6 +1173,7 @@ class SearchUrlProber:
         target_inn: str = '',
         source_type: SourceType | None = None,
         known_other_result_urls: set[str] | None = None,
+        classification: SourceClassification | None = None,
     ) -> ProbedUrl | None:
         """Тонкая обёртка над ``probe()``: отдаёт только победителя.
 
@@ -1113,6 +1190,7 @@ class SearchUrlProber:
             target_inn=target_inn,
             source_type=source_type,
             known_other_result_urls=known_other_result_urls,
+            classification=classification,
         )
         if plan.winner is None:
             return None
@@ -1124,14 +1202,43 @@ class SearchUrlProber:
             sample_item_urls=list(
                 plan.winner.result_urls[:_SAMPLE_ITEM_URLS_LIMIT]
             ),
+            matched_variant=plan.winner.matched_variant,
         )
 
     async def _default_fetch(self, url: str) -> str | None:
-        """Фетч по умолчанию: стратегии оркестратора."""
+        """Фетч по умолчанию: стратегии оркестратора (без классификации).
+
+        Используется, только когда вызывающая сторона не подставила
+        никакой fetch вовсе (``self._fetch is None``) — полная лестница
+        деградации без сужения по классификации. Не путать с
+        ``_escalated_fetch``: тот вызывается вместо ЯВНО подставленного
+        лёгкого fetch, когда классификация говорит, что он не справится.
+        """
         from ..strategies.orchestrator import AgenticOrchestrator
 
         orchestrator = AgenticOrchestrator()
         result = await orchestrator.fetch_with_degradation(url)
+        if result.success and result.data:
+            return result.data
+        return None
+
+    async def _escalated_fetch(
+        self, url: str, classification: SourceClassification | None
+    ) -> str | None:
+        """Fetch через лестницу деградации оркестратора с классификацией.
+
+        Классификация сужает лестницу до релевантных стратегий (не
+        пробует FAST/CRAWL4AI при уже подтверждённом антиботе) — см.
+        ``AgenticOrchestrator.fetch_with_degradation``. Используется
+        вместо лёгкого ``self._fetch``, когда ``_needs_escalation``
+        решил, что он заведомо не получит содержательный ответ.
+        """
+        from ..strategies.orchestrator import AgenticOrchestrator
+
+        orchestrator = AgenticOrchestrator()
+        result = await orchestrator.fetch_with_degradation(
+            url, classification=classification
+        )
         if result.success and result.data:
             return result.data
         return None

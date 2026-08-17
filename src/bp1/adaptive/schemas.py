@@ -204,6 +204,11 @@ class StrategyType(StrEnum):
     BROWSER = 'BROWSER'
     WAYBACK = 'WAYBACK'
     STEALTH = 'STEALTH'
+    # Копия STEALTH с ожиданием networkidle перед чтением содержимого —
+    # для антибот+SPA источников, где результаты подгружаются JS-запросом
+    # уже после события load (см. change wait-for-spa-render-before-capture).
+    # STEALTH намеренно не изменяется (используется для fedresurs.ru).
+    STEALTH_SPA = 'STEALTH_SPA'
     HITL = 'HITL'
 
 
@@ -307,6 +312,13 @@ class ProbedUrl(BaseModel):
     # SearchUrlProber.probe(known_other_result_urls=...)). Пусто у старых
     # закэшированных записей — совместимо без миграции.
     sample_item_urls: list[str] = Field(default_factory=list)
+    # Найденный на странице результатов вариант названия конкурента:
+    # 'full' (с ОПФ) | 'stripped' (без ОПФ/кавычек) | None. Переносит
+    # результат ProbeAttempt.matched_variant через кэш, чтобы вызывающая
+    # сторона не держала отдельный, независимый прогон перебора только
+    # ради этого значения. None у старых закэшированных записей —
+    # совместимо без миграции.
+    matched_variant: str | None = None
 
 
 # ============================================================================

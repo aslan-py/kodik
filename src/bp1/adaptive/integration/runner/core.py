@@ -409,61 +409,29 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
                 'reason': 'circuit_open',
             }
 
-        # 3.2. Адаптивный перебор параметров/форм/реформулировок.
-        #      Сначала пробуем параметр, распознанный из HTML-формы поиска
-        #      (если найден), затем типовые q/query/text/..., затем
-        #      реформулировки запроса. Успешный URL передаётся дальше
-        #      в парсер как фактический адрес страницы результатов.
-        probe_report: dict[str, Any] | None = None
-        # Найденный на странице результатов вариант названия конкурента:
-        # 'full' (с ОПФ) | 'stripped' (без ОПФ/кавычек) | None. Используется
-        # далее как имя конкурента при сборе новостей, чтобы перебирать
-        # новости именно того варианта, который реально есть на странице.
-        matched_variant: str | None = None
-        if self._prober is not None:
-            try:
-                plan = await self._prober.probe(
-                    url,
-                    search_param,
-                    source_type=classification.source_type,
-                    target_name=competitor,
-                    target_inn=competitor_inn,
-                )
-                probe_report = plan.to_extra()
-                # Проверяем, что у нас есть данные о переборе.
-                if probe_report is not None:
-                    wins = [a for a in plan.attempts if a.ok]
-                    if wins:
-                        url = wins[0].url
-                        source_request_url = url
-                        matched_variant = wins[0].matched_variant
-                        self._logger.info(
-                            'Адаптивный перебор: успех (kind=%s, label=%s) '
-                            'для %s',
-                            wins[0].kind,
-                            wins[0].label,
-                            source_name,
-                        )
-                    else:
-                        self._logger.info(
-                            'Адаптивный перебор не дал результатов для %s '
-                            '(перебрано %d вариантов)',
-                            source_name,
-                            len(plan.attempts),
-                        )
-            except Exception as e:
-                self._logger.warning(
-                    'Ошибка адаптивного перебора параметров (%s): %s',
-                    source_name,
-                    e,
-                )
-                probe_report = None
+        # 3.2. Пробинг поискового URL: кэш → пробинг → fallback. Единый
+        #      прогон перебора на задачу (параметры/форма/реформулировки,
+        #      с эскалацией fetch-транспорта по классификации для
+        #      антибот/SPA-источников) — его победитель одновременно даёт
+        #      и итоговый ``url`` для парсинга, и вариант имени конкурента
+        #      (``matched_variant``), без отдельного, независимого прогона.
+        url, probed, probe_report = await self._get_or_probe_url(
+            source_name=source_name,
+            search_param=search_param,
+            target_name=competitor or trigger or '',
+            redis_client=redis_client,
+            classification=classification,
+        )
+        source_request_url = url
+        # В meta сохраняется исходный (не пробованный) URL задачи, чтобы
+        # source_request_url не менялся от того, что кэш нагрелся.
 
         # Имя конкурента, по которому собираем новости: берём тот вариант
         # названия, который реально присутствует на странице результатов
         # (полное с ОПФ или без ОПФ/кавычек). Это ключевое исправление
         # «каши»: раньше новости перебирались по полному названию даже там,
         # где страница содержала конкурента без ОПФ (или наоборот).
+        matched_variant = probed.matched_variant if probed is not None else None
         news_competitor = competitor
         if matched_variant:
             if matched_variant == 'stripped':
@@ -485,20 +453,8 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
             # хэш этой строки, см. clear_probed_url).
             'search_param': search_param,
         }
-
-        # 3.2. Пробинг поискового URL: кэш → пробинг → fallback.
-        #      Итоговый ``url`` (для парсинга) и ``probed`` (для метаданных
-        #      и повторного кэширования) получаем до вызова парсера.
-        url, probed = await self._get_or_probe_url(
-            source_name=source_name,
-            search_param=search_param,
-            target_name=competitor or trigger or '',
-            redis_client=redis_client,
-        )
         if probed is not None:
             parse_kwargs['probed_url'] = probed
-        # В meta сохраняется исходный (не пробованный) URL задачи, чтобы
-        # source_request_url не менялся от того, что кэш нагрелся.
 
         # 4. Выполняем парсинг.
         #    Для источников с готовым RPA-адаптером (fedresurs.ru и др.)

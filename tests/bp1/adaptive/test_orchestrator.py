@@ -80,7 +80,7 @@ async def test_all_fail_returns_hitl():
         StrategyType.CRAWL4AI,
         StrategyType.BROWSER,
         StrategyType.WAYBACK,
-        StrategyType.STEALTH,
+        StrategyType.STEALTH_SPA,
         StrategyType.HITL,
     ):
         orch.register_strategy(strategy_type, _FailingStrategy())
@@ -109,11 +109,59 @@ class _TrackingStrategy(BaseStrategy):
 async def test_degradation_start_with_continues_full_chain():
     """При start_with перебор продолжается по всей иерархии.
 
-    Раньше при start_with=STEALTH перебирались только STEALTH → HITL,
-    из-за чего BROWSER/WAYBACK/FAST/CRAWL4AI пропускались. После правки
-    start_with задаёт лишь начало, а при провале перебор проходит по
-    полной цепочке (включая догонку стратегий из начала).
+    Раньше при start_with=STEALTH_SPA перебирались только STEALTH_SPA →
+    HITL, из-за чего BROWSER/WAYBACK/FAST/CRAWL4AI пропускались. После
+    правки start_with задаёт лишь начало, а при провале перебор проходит
+    по полной цепочке (включая догонку стратегий из начала).
+
+    ``STEALTH_SPA``, не ``STEALTH``: ``_DEGRADATION_ORDER`` использует
+    ``STEALTH_SPA`` (см. change wait-for-spa-render-before-capture) —
+    ``STEALTH`` зарезервирована для fedresurs.ru и в общую лестницу
+    деградации не входит, но остаётся доступной явно.
     """
+    orch = AgenticOrchestrator()
+    order: list = []
+    for strategy_type in (
+        StrategyType.FAST,
+        StrategyType.CRAWL4AI,
+        StrategyType.BROWSER,
+        StrategyType.WAYBACK,
+        StrategyType.STEALTH_SPA,
+        StrategyType.HITL,
+    ):
+        orch.register_strategy(
+            strategy_type, _TrackingStrategy(strategy_type, order)
+        )
+
+    result = await orch.fetch_with_degradation(
+        EXAMPLE_URL, start_with=StrategyType.STEALTH_SPA
+    )
+    assert result.success is False
+    # STEALTH_SPA первый (start_with), затем HITL, затем догонка начала:
+    # FAST, CRAWL4AI, BROWSER, WAYBACK.
+    assert order == [
+        StrategyType.STEALTH_SPA,
+        StrategyType.HITL,
+        StrategyType.FAST,
+        StrategyType.CRAWL4AI,
+        StrategyType.BROWSER,
+        StrategyType.WAYBACK,
+    ]
+    # HITL не дублируется в догонке.
+    assert order.count(StrategyType.HITL) == 1
+
+
+@pytest.mark.asyncio
+async def test_stealth_kept_registered_but_not_in_degradation_order():
+    """STEALTH не входит в общую лестницу деградации по умолчанию — она
+
+    зарезервирована для fedresurs.ru (свой отдельный контур). Но остаётся
+    зарегистрированной и пробуется, если классификация её явно допускает
+    (правило «антибот без SPA» её не трогало) — не удалена из системы,
+    просто перестала быть тем, на что маршрутизирует CAPTCHA-правило.
+    """
+    assert StrategyType.STEALTH not in _DEGRADATION_ORDER
+
     orch = AgenticOrchestrator()
     order: list = []
     for strategy_type in (
@@ -129,21 +177,12 @@ async def test_degradation_start_with_continues_full_chain():
         )
 
     result = await orch.fetch_with_degradation(
-        EXAMPLE_URL, start_with=StrategyType.STEALTH
+        EXAMPLE_URL,
+        start_with=StrategyType.STEALTH,
+        classification=_classification(has_antibot=True, is_spa=False),
     )
     assert result.success is False
-    # STEALTH первый (start_with), затем HITL, затем догонка начала:
-    # FAST, CRAWL4AI, BROWSER, WAYBACK.
-    assert order == [
-        StrategyType.STEALTH,
-        StrategyType.HITL,
-        StrategyType.FAST,
-        StrategyType.CRAWL4AI,
-        StrategyType.BROWSER,
-        StrategyType.WAYBACK,
-    ]
-    # HITL не дублируется в догонке.
-    assert order.count(StrategyType.HITL) == 1
+    assert StrategyType.STEALTH in order
 
 
 def test_extract_snapshot_url():
@@ -180,12 +219,16 @@ def test_allowed_strategies_no_matching_rule_returns_full_order():
 
 def test_allowed_strategies_captcha_skips_light_strategies():
     """CAPTCHA: FAST/CRAWL4AI/BROWSER исключены — заведомо не решают
-    челлендж."""
+
+    челлендж. STEALTH_SPA, не STEALTH: STEALTH зарезервирована для
+    fedresurs.ru (см. change wait-for-spa-render-before-capture).
+    """
     allowed = _allowed_strategies(_classification(has_captcha=True))
     assert StrategyType.FAST not in allowed
     assert StrategyType.CRAWL4AI not in allowed
     assert StrategyType.BROWSER not in allowed
-    assert StrategyType.STEALTH in allowed
+    assert StrategyType.STEALTH_SPA in allowed
+    assert StrategyType.STEALTH not in allowed
     assert StrategyType.WAYBACK in allowed
     assert StrategyType.HITL in allowed
 
@@ -250,7 +293,10 @@ async def test_fetch_with_degradation_antibot_skips_crawl4ai_in_practice():
 @pytest.mark.asyncio
 async def test_fetch_with_degradation_captcha_skips_light_strategies():
     """Интеграционно: CAPTCHA — сразу тяжёлые стратегии, лёгкие не
-    пробуются вовсе."""
+
+    пробуются вовсе. STEALTH_SPA, не STEALTH: STEALTH зарезервирована для
+    fedresurs.ru (см. change wait-for-spa-render-before-capture).
+    """
     orch = AgenticOrchestrator()
     order: list = []
     for strategy_type in (
@@ -258,7 +304,7 @@ async def test_fetch_with_degradation_captcha_skips_light_strategies():
         StrategyType.CRAWL4AI,
         StrategyType.BROWSER,
         StrategyType.WAYBACK,
-        StrategyType.STEALTH,
+        StrategyType.STEALTH_SPA,
         StrategyType.HITL,
     ):
         orch.register_strategy(
@@ -270,7 +316,7 @@ async def test_fetch_with_degradation_captcha_skips_light_strategies():
     )
     assert result.success is False
     assert order == [
-        StrategyType.STEALTH,
+        StrategyType.STEALTH_SPA,
         StrategyType.WAYBACK,
         StrategyType.HITL,
     ]

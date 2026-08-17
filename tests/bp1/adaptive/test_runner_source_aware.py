@@ -410,15 +410,38 @@ async def test_run_task_fallback_is_cached_by_query(monkeypatch):
 
 
 class _FakeProber:
-    """Фейковый SearchUrlProber.probe_async: фиксирует kwargs, отдаёт canned."""
+    """Фейковый SearchUrlProber.probe: фиксирует kwargs, отдаёт canned план.
 
-    def __init__(self, result: ProbedUrl):
+    ``_get_or_probe_url`` зовёт ``probe()`` (не ``probe_async()``), чтобы
+    заодно получить полный отчёт перебора (``probe_report``) — см.
+    change fix-search-probe-antibot-fetch. Дублёр строит однопопытковый
+    ``ProbePlan`` с победителем из заданного ``ProbedUrl``, чтобы
+    вызывающая сторона реконструировала эквивалентный ``ProbedUrl``.
+    """
+
+    def __init__(self, result: ProbedUrl | None):
         self._result = result
         self.calls: list[dict] = []
 
-    async def probe_async(self, **kwargs):
-        self.calls.append(kwargs)
-        return self._result
+    async def probe(self, base_url, search_query, **kwargs):
+        self.calls.append(
+            {'base_url': base_url, 'search_query': search_query, **kwargs}
+        )
+        from src.bp1.adaptive.integration.search_probe import ProbePlan
+
+        plan = ProbePlan()
+        if self._result is not None:
+            plan.add(
+                'param',
+                'fake',
+                url=self._result.search_url,
+                ok=True,
+                target_found=self._result.confidence >= 1.0,
+                matched_variant=self._result.matched_variant,
+                method=self._result.search_method,
+                result_urls=tuple(self._result.sample_item_urls),
+            )
+        return plan
 
 
 @pytest.mark.asyncio
@@ -443,7 +466,9 @@ async def test_get_or_probe_url_passes_known_other_urls_from_sample_cache():
     )
     runner._prober = prober
 
-    url, _ = await runner._get_or_probe_url('lenta.ru', 'NewCo', 'NewCo', redis)
+    url, _, _ = await runner._get_or_probe_url(
+        'lenta.ru', 'NewCo', 'NewCo', redis
+    )
 
     assert url == 'https://lenta.ru/search?text=NewCo'
     assert prober.calls[0]['known_other_result_urls'] == {
@@ -469,10 +494,150 @@ async def test_get_or_probe_url_no_known_other_urls_on_cold_start():
     )
     runner._prober = prober
 
-    url, _ = await runner._get_or_probe_url('rbc.ru', 'X', 'X', redis)
+    url, _, _ = await runner._get_or_probe_url('rbc.ru', 'X', 'X', redis)
 
     assert url == 'https://rbc.ru/search?query=X'
     assert prober.calls[0]['known_other_result_urls'] is None
+
+
+@pytest.mark.asyncio
+async def test_run_task_uses_matched_variant_from_single_probe(monkeypatch):
+    """matched_variant, найденный единственным прогоном перебора,
+
+    используется как имя конкурента при сборе новостей — регресс на
+    устранение дублирующего вызова probe() (change
+    fix-search-probe-antibot-fetch): раньше matched_variant считался
+    отдельным, независимым прогоном, теперь берётся из того же прогона,
+    что и итоговый URL парсинга.
+    """
+    config = {
+        'is_active': True,
+        'source_is_active': True,
+        'competitor_is_active': True,
+        'source': 'https://lenta.ru/',
+        'competitor': 'ООО Кодик',
+        'competitor_inn': None,
+        'trigger': None,
+    }
+    classification = _classification(SourceType.NEWS)
+    runner, fake_session = _make_runner(monkeypatch, config, classification)
+    redis = _FakeRedis()
+
+    # Ответ на перебранный параметр содержит конкурента БЕЗ ОПФ ('Кодик',
+    # не 'ООО Кодик') -> matched_variant должен стать 'stripped'. Базовый
+    # URL (с нерастворённым '{q}') отдаёт пустую ленту, чтобы кандидат не
+    # отклонился проверкой причинности.
+    results_html = (
+        '<html><body><h1>Результаты поиска</h1>'
+        '<a href="/found">Кодик — статья</a>'
+        '<p>' + 'заполнитель ' * 100 + '</p>'
+        '</body></html>'
+    )
+    empty_html = (
+        '<html><body><h1>Ничего не найдено по вашему запросу.'
+        '</h1></body></html>'
+    )
+
+    async def fetch(url: str) -> str:
+        if '{q}' in url:
+            return empty_html
+        return results_html
+
+    runner.bind_probe_fetch(fetch)
+
+    captured: dict = {}
+
+    async def _fake_parse(url, **kwargs):
+        captured['competitor'] = kwargs.get('competitor')
+
+        class _Resp:
+            def __init__(self):
+                self.items = []
+
+            def model_dump(self):
+                return {'items': []}
+
+        return _Resp()
+
+    runner._parser.parse = _fake_parse
+
+    await runner.run_task(1, fake_session, redis)
+
+    # _normalize_target_text приводит к нижнему регистру (существующее
+    # поведение, не предмет этого change).
+    assert captured.get('competitor') == 'кодик'
+
+
+@pytest.mark.asyncio
+async def test_get_or_probe_url_reprobes_when_cached_confidence_is_zero():
+    """Закэшированный fallback (confidence=0.0) не считается подтверждённым
+
+    результатом — перебор выполняется заново, а не берётся из кэша молча.
+    Регресс на самовосстановление после починки транспорта (change
+    fix-search-probe-antibot-fetch): раньше такая запись залипала в кэше
+    на весь TTL (7 дней) и требовала ручной чистки Redis.
+    """
+    runner = AdaptiveRunner(use_probing=True)
+    redis = _FakeRedis()
+    runner._bind_redis(redis)
+
+    from src.bp1.adaptive.core.cache import UnifiedCache
+
+    cache = UnifiedCache(redis_client=redis)
+    stale_fallback = ProbedUrl(
+        source_name='rbc.ru',
+        search_url='https://rbc.ru/search?q=stale',
+        confidence=0.0,
+    )
+    await cache.set_probed_url('rbc.ru', stale_fallback, search_param='X')
+
+    prober = _FakeProber(
+        ProbedUrl(
+            source_name='rbc.ru',
+            search_url='https://rbc.ru/search?query=X',
+            confidence=1.0,
+        )
+    )
+    runner._prober = prober
+
+    url, _, _ = await runner._get_or_probe_url('rbc.ru', 'X', 'X', redis)
+
+    assert url == 'https://rbc.ru/search?query=X'
+    assert prober.calls  # перебор реально выполнился, кэш не заблокировал его
+
+
+@pytest.mark.asyncio
+async def test_get_or_probe_url_trusts_cached_confirmed_result():
+    """Закэшированная запись с confidence > 0 (реально подтверждённый
+
+    результат) продолжает использоваться из кэша, как и раньше.
+    """
+    runner = AdaptiveRunner(use_probing=True)
+    redis = _FakeRedis()
+    runner._bind_redis(redis)
+
+    from src.bp1.adaptive.core.cache import UnifiedCache
+
+    cache = UnifiedCache(redis_client=redis)
+    confirmed = ProbedUrl(
+        source_name='rbc.ru',
+        search_url='https://rbc.ru/search?query=X',
+        confidence=1.0,
+    )
+    await cache.set_probed_url('rbc.ru', confirmed, search_param='X')
+
+    prober = _FakeProber(
+        ProbedUrl(
+            source_name='rbc.ru',
+            search_url='https://rbc.ru/search?q=should_not_be_used',
+        )
+    )
+    runner._prober = prober
+
+    url, _, _ = await runner._get_or_probe_url('rbc.ru', 'X', 'X', redis)
+
+    assert url == 'https://rbc.ru/search?query=X'
+    assert prober.calls == []  # кэш использован, пробинг не выполнялся
 
 
 @pytest.mark.asyncio

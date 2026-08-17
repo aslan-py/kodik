@@ -66,13 +66,19 @@ def _is_informative_html(html: str) -> bool:
     return link_count >= MIN_LINK_COUNT_FOR_CONTENT
 
 
-# Порядок стратегий при деградации.
+# Порядок стратегий при деградации. STEALTH_SPA (не STEALTH) — STEALTH
+# зарезервирована для fedresurs.ru (свой отдельный контур, через эту
+# лестницу не проходит) и намеренно не изменяется; STEALTH_SPA — её копия
+# с ожиданием JS-отрисованного контента (см. change
+# wait-for-spa-render-before-capture). STEALTH остаётся зарегистрированной
+# и доступна явно (``start_with=StrategyType.STEALTH``), просто не
+# участвует в автоматической деградации.
 _DEGRADATION_ORDER = (
     StrategyType.FAST,
     StrategyType.CRAWL4AI,
     StrategyType.BROWSER,
     StrategyType.WAYBACK,
-    StrategyType.STEALTH,
+    StrategyType.STEALTH_SPA,
     StrategyType.HITL,
 )
 
@@ -90,9 +96,11 @@ _ALLOWED_STRATEGIES_TABLE: tuple[
     ...,
 ] = (
     # CAPTCHA: FAST/CRAWL4AI/BROWSER не решают челлендж — сразу тяжёлые.
+    # STEALTH_SPA, не STEALTH: STEALTH зарезервирована для fedresurs.ru
+    # (не изменяется, см. wait-for-spa-render-before-capture).
     (
         lambda c: c.has_captcha,
-        (StrategyType.STEALTH, StrategyType.WAYBACK, StrategyType.HITL),
+        (StrategyType.STEALTH_SPA, StrategyType.WAYBACK, StrategyType.HITL),
     ),
     # Антибот без SPA: CRAWL4AI не создан для обхода антибот-защиты (нет
     # собственного stealth-слоя) — пропускаем его, остальное пробуем.

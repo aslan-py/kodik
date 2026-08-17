@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
 
 from ..schemas import StrategyResult, StrategyType
@@ -157,6 +159,147 @@ class StealthStrategy(BaseStrategy):
             )
 
 
+class StealthSpaStrategy(BaseStrategy):
+    """
+    Копия ``StealthStrategy``, дожидающаяся JS-отрисованного контента.
+
+    ``StealthStrategy`` используется для fedresurs.ru и намеренно не
+    изменяется (см. change ``wait-for-spa-render-before-capture`` — код
+    ниже дублирует её тело, а не переиспользует, именно поэтому). Эта
+    стратегия — независимая копия для остальных антибот+SPA источников:
+    между ``page.goto()`` и ``page.content()`` добавлено ожидание
+    ``networkidle`` — многие сайты (в т.ч. rbc.ru) подгружают результаты
+    поиска отдельным JS-запросом уже ПОСЛЕ события ``load``, и
+    ``page.content()`` сразу после ``goto()`` отдаёт навигационную
+    оболочку страницы, а не искомые данные.
+    """
+
+    strategy_type = StrategyType.STEALTH_SPA
+
+    # Бюджет ожидания networkidle — отдельный от общего timeout_ms
+    # стратегии, чтобы не блокировать весь fetch, если networkidle не
+    # наступает (сайты с постоянными фоновыми соединениями — аналитика,
+    # вебсокеты — могут никогда не давать networkidle).
+    _NETWORKIDLE_TIMEOUT_MS = 8000
+
+    # Подстраховка после networkidle: санити-чек «получили хоть что-то
+    # содержательное», а не проверка «это точно нужный контент, а не
+    # шаблонная оболочка» — оболочка контентных сайтов сама может
+    # содержать сотни ссылок (нав/футер), поэтому порог низкий,
+    # рассчитан на явно пустые/сломанные страницы, а не на отличение
+    # оболочки от выдачи. Порог ЛОКАЛЬНЫЙ для этой стратегии — не общий
+    # ``MIN_LINK_COUNT_FOR_CONTENT`` (используется шире, для решений о
+    # деградации FAST/CRAWL4AI).
+    _MIN_LINKS_SANITY_CHECK = 10
+    _CONTENT_POLL_ATTEMPTS = 5
+    _CONTENT_POLL_INTERVAL_S = 0.8
+
+    def __init__(
+        self,
+        headless: bool = True,
+        timeout_ms: int = 60000,
+        logger: logging.Logger | None = None,
+    ):
+        self._headless = headless
+        self._timeout_ms = timeout_ms
+        self._logger = logger or logging.getLogger(__name__)
+
+    async def fetch(self, url: str, **kwargs) -> StrategyResult:
+        start = time.monotonic()
+        try:
+            from playwright.async_api import async_playwright
+
+            from src.bp1.collectors.stealth import (
+                apply_stealth,
+                bypass_qrator,
+                get_context_config,
+                get_launch_args,
+            )
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=self._headless,
+                    args=get_launch_args(headless=self._headless),
+                )
+                context_config = get_context_config()
+                # Игнорируем невалидные/самоподписанные TLS-сертификаты
+                # (zakupki.gov.ru и др. гос. порталы отдают
+                # ERR_CERT_AUTHORITY_INVALID).
+                context_config.setdefault('ignore_https_errors', True)
+                context = await browser.new_context(**context_config)
+                await apply_stealth(context)
+                page = await context.new_page()
+                response = await page.goto(url, timeout=self._timeout_ms)
+                status = response.status if response else 0
+
+                # При 401/403 пробуем обойти QRATOR-защиту.
+                if status in (401, 403):
+                    await bypass_qrator(
+                        page, context, target_url=url, timeout=self._timeout_ms
+                    )
+
+                # Дожидаемся, пока JS доделает сетевую работу — результаты
+                # на многих источниках подгружаются отдельным запросом уже
+                # после page.goto(). Не блокируемся бесконечно: если
+                # networkidle не наступает (постоянные фоновые
+                # соединения), читаем то, что успело отрисоваться.
+                try:
+                    await page.wait_for_load_state(
+                        'networkidle', timeout=self._NETWORKIDLE_TIMEOUT_MS
+                    )
+                except Exception:
+                    pass
+
+                html = await page.content()
+                if not self._passes_sanity_check(html):
+                    html = await self._poll_for_content(page, html)
+
+                await context.close()
+                await browser.close()
+
+            elapsed = int((time.monotonic() - start) * 1000)
+            return StrategyResult(
+                strategy=self.strategy_type,
+                success=len(html) >= MIN_CONTENT_LENGTH,
+                data=html,
+                content_length=len(html),
+                elapsed_ms=elapsed,
+            )
+        except Exception as e:
+            elapsed = int((time.monotonic() - start) * 1000)
+            self._logger.warning('StealthSpa не сработал для %s: %s', url, e)
+            return StrategyResult(
+                strategy=self.strategy_type,
+                success=False,
+                error=str(e),
+                elapsed_ms=elapsed,
+            )
+
+    def _passes_sanity_check(self, html: str) -> bool:
+        """Грубая, быстрая оценка «страница не пустая/не сломана»."""
+        if not html:
+            return False
+        link_count = len(re.findall(r'<a[\s>]', html, flags=re.IGNORECASE))
+        return link_count >= self._MIN_LINKS_SANITY_CHECK
+
+    async def _poll_for_content(self, page, current_html: str) -> str:
+        """Короткий опрос страницы после networkidle, пока не пройдёт
+
+        санити-чек либо не истощится бюджет попыток. Возвращает последний
+        прочитанный HTML (даже если проверка так и не прошла).
+        """
+        html = current_html
+        for _ in range(self._CONTENT_POLL_ATTEMPTS):
+            if self._passes_sanity_check(html):
+                return html
+            await asyncio.sleep(self._CONTENT_POLL_INTERVAL_S)
+            try:
+                html = await page.content()
+            except Exception:
+                pass
+        return html
+
+
 class HITLStrategy(BaseStrategy):
     """
     Human-in-the-Loop стратегия.
@@ -241,7 +384,8 @@ def build_default_strategies(
     Собрать словарь реальных стратегий по умолчанию.
 
     Возвращает все стратегии иерархии деградации с реальными реализациями
-    (без заглушек): FAST, CRAWL4AI, BROWSER, WAYBACK, STEALTH, HITL.
+    (без заглушек): FAST, CRAWL4AI, BROWSER, WAYBACK, STEALTH,
+    STEALTH_SPA, HITL.
     """
     from .orchestrator import (
         BrowserStrategy,
@@ -260,6 +404,9 @@ def build_default_strategies(
         ),
         StrategyType.WAYBACK: WaybackStrategy(timeout_ms=timeout_ms),
         StrategyType.STEALTH: StealthStrategy(
+            headless=headless, timeout_ms=timeout_ms, logger=logger
+        ),
+        StrategyType.STEALTH_SPA: StealthSpaStrategy(
             headless=headless, timeout_ms=timeout_ms, logger=logger
         ),
         StrategyType.HITL: HITLStrategy(

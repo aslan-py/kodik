@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from src.bp1.adaptive.integration.search_probe import (
@@ -20,6 +22,12 @@ from src.bp1.adaptive.integration.search_probe import (
     looks_like_search_results,
     score_target_presence,
 )
+from src.bp1.adaptive.schemas import (
+    SourceClassification,
+    StrategyResult,
+    StrategyType,
+)
+from src.bp1.adaptive.strategies import orchestrator as orchestrator_module
 
 from .constants import (
     COMPETITOR,
@@ -789,3 +797,159 @@ async def test_probe_async_populates_sample_item_urls():
         url.startswith('https://example.com/')
         for url in probed.sample_item_urls
     )
+
+
+# ============================================================================
+# Эскалация fetch-транспорта по классификации источника (антибот/SPA)
+# ============================================================================
+# Регресс-тест на инцидент rbc.ru: лёгкий fetch (голый HTTP) блокируется
+# QRATOR независимо от query-параметра, поэтому перебор никогда не находит
+# рабочий вариант и падает в наивный fallback ?q=. Классификация уже знает
+# про антибот — перебор должен эскалировать transport, а не игнорировать
+# это знание (см. design.md change fix-search-probe-antibot-fetch).
+
+_ANTIBOT_CLASSIFICATION = SourceClassification(
+    source_name='rbc.ru',
+    has_antibot=True,
+    recommended_strategy='STEALTH',
+)
+
+
+class _FakeDegradationOrchestrator:
+    """Подменяет AgenticOrchestrator: 'q' игнорируется (как у rbc.ru),
+
+    'query' реально фильтрует выдачу.
+    """
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def fetch_with_degradation(self, url, classification=None, **kwargs):
+        _FakeDegradationOrchestrator.calls.append((url, classification))
+        if '?' not in url:
+            html = _ANTIBOT_BASELINE_HTML
+        else:
+            param = url.split('?', 1)[-1].split('=', 1)[0]
+            if param == 'query':
+                html = _ANTIBOT_FILTERED_HTML
+            else:
+                html = _ANTIBOT_BASELINE_HTML  # 'q' игнорируется сайтом
+        return StrategyResult(
+            strategy=StrategyType.STEALTH, success=True, data=html
+        )
+
+    calls: ClassVar[list] = []
+
+
+_ANTIBOT_BASELINE_HTML = (
+    '<html><body><h1>Лента</h1>'
+    + ''.join(f'<a href="/feed{i}">Новость {i}</a>' for i in range(10))
+    + f'<span>{COMPETITOR}</span></body></html>'
+)
+_ANTIBOT_FILTERED_HTML = (
+    '<html><body><h1>Результаты поиска</h1>'
+    f'<a href="/found">{COMPETITOR} — статья</a>'
+    '<p>' + 'заполнитель ' * 100 + '</p>'
+    '</body></html>'
+)
+
+
+async def _light_fetch_must_not_be_called(url: str) -> str:
+    raise AssertionError(
+        'лёгкий fetch не должен вызываться при эскалации по классификации'
+    )
+
+
+@pytest.mark.asyncio
+async def test_probe_escalates_fetch_for_antibot_classification(monkeypatch):
+    """has_antibot=True переключает fetch на fetch_with_degradation вместо
+
+    лёгкого self._fetch — и находит 'query', а не залипает на 'q'.
+    """
+    _FakeDegradationOrchestrator.calls = []
+    monkeypatch.setattr(
+        orchestrator_module, 'AgenticOrchestrator', _FakeDegradationOrchestrator
+    )
+
+    prober = SearchUrlProber(fetch=_light_fetch_must_not_be_called)
+    plan = await prober.probe(
+        SEARCH_BASE,
+        COMPETITOR,
+        target_name=COMPETITOR,
+        classification=_ANTIBOT_CLASSIFICATION,
+    )
+
+    assert plan.success is True
+    assert plan.winner is not None
+    assert plan.winner.label == 'query'
+    assert _FakeDegradationOrchestrator.calls  # эскалированный fetch вызывался
+    # Классификация действительно передана в fetch_with_degradation.
+    assert _FakeDegradationOrchestrator.calls[0][1] is _ANTIBOT_CLASSIFICATION
+
+
+@pytest.mark.asyncio
+async def test_probe_without_antibot_classification_uses_light_fetch():
+    """Без антибота/SPA (или без classification вовсе) поведение и
+
+    транспорт не меняются — используется лёгкий fetch.
+    """
+    fetch = _FakeFetch(good_param='text')
+    calm_classification = SourceClassification(
+        source_name='lenta.ru',
+        has_antibot=False,
+        is_spa=False,
+        recommended_strategy='FAST',
+    )
+    prober = SearchUrlProber(fetch=fetch)
+
+    plan_no_classification = await prober.probe(SEARCH_BASE, COMPETITOR)
+    assert plan_no_classification.success is True
+    assert plan_no_classification.winner.label == 'text'
+
+    plan_with_calm_classification = await prober.probe(
+        SEARCH_BASE, COMPETITOR, classification=calm_classification
+    )
+    assert plan_with_calm_classification.success is True
+    assert plan_with_calm_classification.winner.label == 'text'
+
+
+@pytest.mark.asyncio
+async def test_probe_escalation_skips_form_and_reformulations(monkeypatch):
+    """Эскалированный перебор не гоняет форму/реформулировки — только
+
+    узкий список приоритетных словарных параметров (не более 2 без
+    prefer_param), дорогой fetch не тратится на весь набор кандидатов.
+    """
+
+    class _AlwaysShortOrchestrator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch_with_degradation(self, url, classification=None, **kw):
+            _AlwaysShortOrchestrator.calls.append(url)
+            # HTML с формой — если бы перебор дошёл до цикла 1.5, он бы
+            # её нашёл; но эскалация должна вернуться раньше.
+            return StrategyResult(
+                strategy=StrategyType.STEALTH,
+                success=True,
+                data=_FORM_POST_HTML,
+            )
+
+        calls: ClassVar[list] = []
+
+    monkeypatch.setattr(
+        orchestrator_module, 'AgenticOrchestrator', _AlwaysShortOrchestrator
+    )
+
+    prober = SearchUrlProber(fetch=_light_fetch_must_not_be_called)
+    plan = await prober.probe(
+        SEARCH_BASE,
+        COMPETITOR,
+        classification=_ANTIBOT_CLASSIFICATION,
+    )
+
+    assert plan.success is False
+    # Ровно 2 словарных параметра (без prefer_param), форма не пробуется.
+    assert len(_AlwaysShortOrchestrator.calls) == 2
+    assert all(a.kind != 'form' for a in plan.attempts)
+    assert all(a.kind != 'query' or a.label == 'none' for a in plan.attempts)

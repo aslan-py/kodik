@@ -378,6 +378,47 @@ async def test_register_with_probe_caches_source_level_url():
 
 
 @pytest.mark.asyncio
+async def test_probe_search_endpoint_forwards_classification():
+    """classification прокидывается в prober.probe_async — нужно, чтобы
+
+    health-check при регистрации тоже мог эскалировать fetch-транспорт для
+    антибот-защищённых источников (change fix-search-probe-antibot-fetch),
+    а не всегда бить голым HTTP-запросом в стену QRATOR.
+    """
+    prober = _FakeProber(probed=_probed())
+    service = SourceRegistrationService(
+        _FakeSession(), redis_client=_FakeRedis(), prober=prober
+    )
+    classification = SourceClassification(
+        source_name='rbc.ru', has_antibot=True, recommended_strategy='STEALTH'
+    )
+
+    await service.probe_search_endpoint(
+        'https://rbc.ru/', classification=classification
+    )
+
+    assert prober.calls[0]['classification'] is classification
+
+
+@pytest.mark.asyncio
+async def test_register_with_probe_forwards_computed_classification():
+    """register(probe_search=True) прокидывает свою же вычисленную
+
+    классификацию (шаг ``classify()``) в проверку поискового эндпоинта, а
+    не оставляет её неизвестной для health-check.
+    """
+    fake_redis = _FakeRedis()
+    prober = _FakeProber(probed=_probed('text'))
+    service = SourceRegistrationService(
+        _FakeSession(), redis_client=fake_redis, prober=prober
+    )
+
+    result = await service.register(SRC_LENTA_NEWS, probe_search=True)
+
+    assert prober.calls[0]['classification'] == result.classification
+
+
+@pytest.mark.asyncio
 async def test_register_probe_failure_does_not_break_registration():
     """Сбой проверки эндпоинта не срывает регистрацию источника."""
     prober = _FakeProber(error=RuntimeError('network down'))

@@ -82,6 +82,9 @@ _SEARCH_URL_TEMPLATES: dict[str, str] = {
     'nalog.ru': '/search?q={q}',
     'egrul.nalog.ru': '/search?q={q}',
     'fips.ru': '/search?q={q}',
+    # rbc.ru использует query=, не q= (проверено вручную в браузере —
+    # реальная форма поиска ведёт на /search?query=...).
+    'rbc.ru': '/search?query={q}',
 }
 
 
@@ -326,7 +329,11 @@ class SourceRegistrationService:
             post=AdaptiveRunner._default_probe_post,
         )
 
-    async def probe_search_endpoint(self, source_name: str):
+    async def probe_search_endpoint(
+        self,
+        source_name: str,
+        classification: SourceClassification | None = None,
+    ):
         """Проверяет, отвечает ли поисковый эндпоинт источника.
 
         Шаг 19 плана рефакторинга: раньше пробинг выполнялся только в
@@ -339,6 +346,11 @@ class SourceRegistrationService:
         ``target_name``. Это подтверждает, что эндпоинт отвечает
         осмысленным HTML, но не доказывает, что выбранный query-параметр
         действительно понимается сайтом.
+
+        ``classification`` (если передана — см. ``register()``) позволяет
+        эскалировать fetch-транспорт до лестницы деградации оркестратора
+        для источников с антибот/SPA-защитой — без неё голый HTTP-запрос
+        получит пустой ответ, и health-check ничего не проверит.
 
         Returns:
             ``ProbedUrl`` найденного варианта или ``None``.
@@ -353,6 +365,7 @@ class SourceRegistrationService:
                 base_url=base_url,
                 search_query=neutral_query,
                 target_name='',
+                classification=classification,
             )
         except Exception as e:
             logger.warning(
@@ -409,7 +422,9 @@ class SourceRegistrationService:
 
         search_probe = None
         if probe_search:
-            search_probe = await self.probe_search_endpoint(source_name)
+            search_probe = await self.probe_search_endpoint(
+                source_name, classification=classification
+            )
             if search_probe is not None:
                 # Кэшируем на уровне ИСТОЧНИКА (ключ без поискового
                 # запроса). Пер-конкурентный ключ здесь заполнить нельзя:

@@ -224,3 +224,4 @@ run_test.py
 **/bp1/BP1_PACKAGE_ANALYSIS.md
 TIMING.md
 .agents
+.cursor/

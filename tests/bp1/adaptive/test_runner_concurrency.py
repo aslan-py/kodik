@@ -75,6 +75,10 @@ class _FakeTask:
         self.competitor = _FakeFlag(competitor_active)
 
 
+async def _noop_check_health() -> bool:
+    return True
+
+
 def _make_runner(max_concurrent: int, tasks: list) -> AdaptiveRunner:
     """Runner с подменённой фабрикой сессий (живая БД не нужна)."""
     runner = AdaptiveRunner(max_concurrent=max_concurrent)
@@ -87,6 +91,10 @@ def _make_runner(max_concurrent: int, tasks: list) -> AdaptiveRunner:
 
     runner._session_factory = _factory
     runner.created_sessions = created_sessions  # для проверок в тестах
+    # run_all теперь дёргает check_health() в начале прогона — без мока
+    # это реальный сетевой вызов к провайдеру прокси (settings.sx_org_
+    # api_key может быть задан в .env), не нужный этим тестам конкурентности.
+    runner._proxy_pool.check_health = _noop_check_health
     return runner
 
 
@@ -215,6 +223,53 @@ async def test_run_all_skips_inactive_without_running():
     assert results[2]['status'] == 'skipped'
     assert results[2]['reason'] == 'competitor_inactive'
     assert sorted(ran) == [1, 4]
+
+
+@pytest.mark.asyncio
+async def test_run_all_checks_proxy_health_once_before_dispatch():
+    """check_health() вызывается ровно один раз за run_all, до запуска
+    задач (не на каждую задачу)."""
+    tasks = [_FakeTask(i) for i in range(1, 4)]
+    runner = _make_runner(max_concurrent=3, tasks=tasks)
+
+    call_order: list[str] = []
+
+    async def _tracked_check_health() -> bool:
+        call_order.append('check_health')
+        return True
+
+    async def _fake_run_task(task_id, session, redis_client, **kwargs):
+        call_order.append(f'task:{task_id}')
+        return {'status': 'ok', 'search_task_id': task_id}
+
+    runner._proxy_pool.check_health = _tracked_check_health
+    runner.run_task = _fake_run_task
+
+    await runner.run_all(_FakeSession(tasks), redis_client=None)
+
+    assert call_order[0] == 'check_health'
+    assert call_order.count('check_health') == 1
+
+
+@pytest.mark.asyncio
+async def test_run_all_continues_when_proxy_unavailable():
+    """check_health(), сигнализирующий о недоступности прокси (False), не
+    прерывает прогон — задачи всё равно выполняются."""
+    tasks = [_FakeTask(i) for i in range(1, 4)]
+    runner = _make_runner(max_concurrent=3, tasks=tasks)
+
+    async def _unhealthy() -> bool:
+        return False
+
+    async def _fake_run_task(task_id, session, redis_client, **kwargs):
+        return {'status': 'ok', 'search_task_id': task_id}
+
+    runner._proxy_pool.check_health = _unhealthy
+    runner.run_task = _fake_run_task
+
+    results = await runner.run_all(_FakeSession(tasks), redis_client=None)
+
+    assert [r['search_task_id'] for r in results] == [1, 2, 3]
 
 
 @pytest.mark.asyncio

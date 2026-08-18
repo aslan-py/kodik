@@ -13,8 +13,12 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import Any
 
 from core.config import settings
+from src.bp1.network.pool import ProxyPool
+from src.bp1.network.throttle import default_throttle
+from src.bp1.network.ua_rotation import get_random_user_agent
 
 from ..hostname import KNOWN_REGISTRY_DOMAINS, try_extract_host
 from ..schemas import SourceClassification, StrategyResult, StrategyType
@@ -35,6 +39,25 @@ MIN_LINK_COUNT_FOR_CONTENT = 3
 # Стратегии, которые выполняют JavaScript (браузерные). Для них проверка
 # «информативности» по ссылкам не применяется — только по длине контента.
 _JS_RENDERING_STRATEGIES = (StrategyType.BROWSER, StrategyType.STEALTH)
+
+# Стратегии, эмулирующие браузер против целевого источника (RPA-доступ,
+# ТЗ BP-1) — для них применяются прокси, ротация User-Agent и задержка
+# между запросами к одному хосту (design.md изменения
+# add-rpa-collection-proxying, решение D4). Отдельный список от
+# _JS_RENDERING_STRATEGIES: та служит другой цели (проверка
+# информативности контента) и не включает CRAWL4AI. FAST и WAYBACK — не
+# RPA-доступ (прямой HTTP и запрос к archive.org, а не к целевому
+# источнику) и в этот список не входят.
+_RPA_STRATEGIES = (
+    StrategyType.CRAWL4AI,
+    StrategyType.BROWSER,
+    StrategyType.STEALTH,
+)
+
+# HTTP-статусы, характерные для блокировки по IP (см. Requirement «Прокси,
+# заблокированный источником, не переиспользуется сразу»,
+# specs/bp1/rpa-network-controls/spec.md).
+_BLOCKING_HTTP_STATUSES = (401, 403, 429)
 
 
 def _is_informative_html(html: str) -> bool:
@@ -342,17 +365,27 @@ class BrowserStrategy(BaseStrategy):
         start = time.monotonic()
         p = None
         browser = None
+        status: int | None = None
         try:
             from playwright.async_api import async_playwright
 
             p = await async_playwright().start()
-            browser = await p.chromium.launch(headless=self._headless)
+            launch_kwargs: dict[str, Any] = {'headless': self._headless}
+            proxy = kwargs.get('proxy')
+            if proxy:
+                launch_kwargs['proxy'] = {'server': proxy}
+            browser = await p.chromium.launch(**launch_kwargs)
             # Игнорируем невалидные TLS-сертификаты (гос. порталы и др.
             # с самоподписанными/недоверенными сертификатами).
-            context = await browser.new_context(ignore_https_errors=True)
+            context_kwargs: dict[str, Any] = {'ignore_https_errors': True}
+            user_agent = kwargs.get('user_agent')
+            if user_agent:
+                context_kwargs['user_agent'] = user_agent
+            context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
             try:
-                await page.goto(url, timeout=self._timeout_ms)
+                response = await page.goto(url, timeout=self._timeout_ms)
+                status = response.status if response else None
             except Exception:
                 # Если goto бросил исключение (таймаут/навигация), пробуем
                 # всё равно прочитать текущий контент страницы ниже.
@@ -390,6 +423,7 @@ class BrowserStrategy(BaseStrategy):
                 data=html,
                 content_length=len(html),
                 elapsed_ms=elapsed,
+                http_status=status,
             )
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
@@ -398,6 +432,7 @@ class BrowserStrategy(BaseStrategy):
                 success=False,
                 error=str(e),
                 elapsed_ms=elapsed,
+                http_status=status,
             )
         finally:
             await self._cleanup(p, browser)
@@ -478,6 +513,14 @@ class AgenticOrchestrator:
         self._logger = logger or logging.getLogger(__name__)
         self._strategies: dict[StrategyType, BaseStrategy] = {}
         self._register_strategies(profiles_dir=profiles_dir)
+        # Прокси для RPA-стратегий (ТЗ BP-1) — без привязанного Redis
+        # работает без кэша пула/cooldown, но не падает (bind_redis()).
+        self._proxy_pool = ProxyPool()
+
+    def bind_redis(self, redis_client: Any) -> None:
+        """Привязывает Redis-клиент к пулу прокси (кэш пула, cooldown)."""
+        if self._proxy_pool.redis is None:
+            self._proxy_pool.redis = redis_client
 
     def _register_strategies(self, profiles_dir: str) -> None:
         """Регистрирует реальные стратегии обхода."""
@@ -548,12 +591,38 @@ class AgenticOrchestrator:
             if strategy is None:
                 continue
 
+            # kwargs для КОНКРЕТНОЙ попытки — не переиспользуется между
+            # итерациями, чтобы прокси/UA, подобранные для RPA-стратегии,
+            # не «утекали» в следующую (не-RPA) попытку в той же цепочке.
+            call_kwargs = dict(kwargs)
+            proxy_used: str | None = None
+            if strategy_type in _RPA_STRATEGIES:
+                proxy_used = await self._proxy_pool.acquire(url)
+                if proxy_used is not None:
+                    call_kwargs['proxy'] = proxy_used
+                call_kwargs.setdefault('user_agent', get_random_user_agent())
+                host = try_extract_host(url) or url
+                await default_throttle.wait(host)
+
             self._logger.info(
-                'Попытка стратегии %s для %s',
+                'Попытка стратегии %s для %s (прокси=%s)',
                 strategy_type.value,
                 url,
+                proxy_used or 'нет',
             )
-            result = await strategy.fetch(url, **kwargs)
+            result = await strategy.fetch(url, **call_kwargs)
+
+            if (
+                proxy_used is not None
+                and result.http_status in _BLOCKING_HTTP_STATUSES
+            ):
+                self._logger.warning(
+                    'Прокси %s заблокирован источником %s (HTTP %s) — cooldown',
+                    proxy_used,
+                    url,
+                    result.http_status,
+                )
+                await self._proxy_pool.mark_blocked(url, proxy_used)
 
             # Проверка «информативности» контента: страница должна быть не
             # только достаточно длинной, но и содержать реальные элементы

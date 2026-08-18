@@ -117,8 +117,11 @@ def _make_runner(monkeypatch, config, classification):
 
     # Для тестов всегда используем универсальный адаптивный парсер (None),
     # чтобы не тянуть специализированные RPA-парсеры (fedresurs и др.).
+    async def _fake_get_parser_for_source(source_name):
+        return None
+
     monkeypatch.setattr(
-        runner, '_get_parser_for_source', lambda source_name: None
+        runner, '_get_parser_for_source', _fake_get_parser_for_source
     )
     monkeypatch.setattr(
         'src.bp1.adaptive.integration.runner.core.get_search_task_config',

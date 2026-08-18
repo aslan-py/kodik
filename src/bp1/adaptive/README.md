@@ -239,6 +239,51 @@ orch = AgenticOrchestrator()
 orch.register_strategy(MyStrategy.strategy_type, MyStrategy())
 ```
 
+### Прокси, ротация User-Agent и задержки (RPA-доступ)
+
+ТЗ (`ABOUT_PROJECT/TZ.md`, BP-1) требует для источников с RPA-доступом
+прокси не с корпоративных IP, ротацию User-Agent и задержки между
+запросами. В адаптивном контуре это применяется только к стратегиям,
+эмулирующим браузер против целевого источника — `CRAWL4AI`, `BROWSER`,
+`STEALTH` (`_RPA_STRATEGIES` в [`orchestrator.py`](strategies/orchestrator.py)).
+`FAST` и `WAYBACK` не затронуты: это не RPA-доступ (прямой HTTP и
+обращение к archive.org, а не к целевому сайту).
+
+Реализация — общий пакет [`src/bp1/network/`](../network/), переиспользуемый
+и классическим RPA-контуром (`collectors/fedresurs_rpa/`):
+
+- `network/provider.py` — асинхронный клиент провайдера прокси SX.org
+  (`httpx.AsyncClient`): баланс, собственные порты, свободные прокси.
+- `network/pool.py` — `ProxyPool`: автовыбор (баланс достаточен →
+  собственные порты, создать при нехватке; иначе → свободные прокси),
+  кэш пула в Redis (`bind_redis()`), cooldown адреса, заблокированного
+  конкретным источником (HTTP 401/403/429 через прокси).
+- `network/ua_rotation.py`, `network/delay.py` — общий пул User-Agent и
+  функции случайной задержки (перенесены из
+  `fedresurs_rpa/constants.py`, которая теперь их реэкспортирует).
+- `network/throttle.py` — `HostThrottle`: минимальная пауза между
+  последовательными запросами к одному хосту (внутрипроцессная, не
+  распределённая — см. `BP1_RPA_REQUEST_DELAY_SECONDS`).
+
+Без ключа провайдера (`SX_ORG_API_KEY` не задан) RPA-стратегии работают
+как раньше — без прокси, ошибка провайдера никогда не прерывает сбор.
+Настройки — блок `--- BP-1 ---` в `.env.example`
+(`SX_ORG_API_KEY`, `BP1_PROXY_*`, `BP1_RPA_REQUEST_DELAY_SECONDS`).
+
+**Проверка провайдера в начале прогона.** `AdaptiveRunner.run_all` перед
+диспетчеризацией задач один раз вызывает `ProxyPool.check_health()` —
+дешёвый авторизованный запрос к провайдеру. Если ключ невалиден/отозван
+или баланс исчерпан, в лог пишется ровно одно сообщение на весь прогон
+(«Прокси не работает: ... необходимо пополнить баланс сервиса»), и
+в Redis выставляется маркер `bp1:proxy:provider_down` — пока он жив,
+`acquire()` не делает повторных обращений к уже известному
+неработоспособным провайдеру. Реальная отправка уведомления
+(email/telegram) **не реализована** — только лог-заглушка;
+получатель для будущей интеграции уже определён (`settings.test_email`/
+`settings.test_tg`, те же настройки, что использует песочница алертов
+BP-5), подключение — `core.mail.send_email`/`core.telegram.send_telegram`
+(см. `openspec/changes/archive/.../add-proxy-provider-health-check`).
+
 ---
 
 ## Интеллектуальный парсинг

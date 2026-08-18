@@ -1,7 +1,32 @@
-"""Все константы: URL, селекторы, таймауты, пул UA, задержки."""
+"""Все константы: URL, селекторы, таймауты, пул UA, задержки.
 
-import random
+Пул User-Agent и функции случайной задержки перенесены в
+``src.bp1.network`` (общие для обоих RPA-контуров BP-1, см.
+``openspec/changes/add-rpa-collection-proxying``) и реэкспортируются
+здесь для обратной совместимости — вызывающий код (``browser.py``,
+``parser.py``, ``config.py``) не меняется.
+"""
+
 from pathlib import Path
+
+from src.bp1.network.delay import (
+    DEFAULT_DELAY_BETWEEN_REQUESTS,
+    HUMAN_DELAY_RANGE,
+    get_human_delay,
+    get_random_delay,
+)
+from src.bp1.network.ua_rotation import USER_AGENTS, get_random_user_agent
+
+# Реэкспорт из src.bp1.network — эти имена не используются напрямую в
+# этом модуле, но остаются частью его публичного API (см. docstring).
+__all__ = [
+    'DEFAULT_DELAY_BETWEEN_REQUESTS',
+    'HUMAN_DELAY_RANGE',
+    'USER_AGENTS',
+    'get_human_delay',
+    'get_random_delay',
+    'get_random_user_agent',
+]
 
 BASE_URL = 'https://fedresurs.ru'
 
@@ -30,24 +55,11 @@ SELECTORS = {
     'director_date': '.info-item-name:has-text("Дата внесения") + .info-item-value',  # noqa: E501
 }
 
-# User-Agent Pool (Chromium-based for consistency with stealth)
-USER_AGENTS = [
-    # Реальные User-Agent строки — разбивка недопустима
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',  # noqa: E501
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',  # noqa: E501
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',  # noqa: E501
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',  # noqa: E501
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',  # noqa: E501
-]
-
 # Timeouts
 DEFAULT_TIMEOUT = 60000  # 60 seconds (QRATOR challenge needs ~25s)
 DEFAULT_ELEMENT_TIMEOUT = 10000  # 10 seconds
 DEFAULT_RETRY_COUNT = 3
 
-# Delays
-DEFAULT_DELAY_BETWEEN_REQUESTS = (1.0, 3.0)
-HUMAN_DELAY_RANGE = (0.3, 0.5)
 TYPING_DELAY_MS = 50
 
 # Viewport
@@ -67,18 +79,3 @@ INN_INDIVIDUAL_LENGTH = 12
 OUTPUT_DIR = str(
     Path(__file__).resolve().parent.parent.parent / 'data' / 'html_pages'
 )
-
-
-def get_random_user_agent() -> str:
-    """Вернуть случайный User-Agent из пула."""
-    return random.choice(USER_AGENTS)
-
-
-def get_random_delay() -> float:
-    """Вернуть случайную задержку между запросами (1-3 сек)."""
-    return random.uniform(*DEFAULT_DELAY_BETWEEN_REQUESTS)
-
-
-def get_human_delay() -> float:
-    """Вернуть случайную задержку, имитирующую поведение человека."""
-    return random.uniform(*HUMAN_DELAY_RANGE)

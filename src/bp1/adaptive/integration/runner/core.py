@@ -23,6 +23,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.bp1.network.pool import ProxyPool
 from src.bp1.storage import RawDataService
 from src.bp1.tasks import get_search_task_config
 
@@ -122,6 +123,10 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
         self._parser = AdaptiveBridgeParser(headless=headless, timeout=timeout)
         self._quality_gate = DataQualityGate()
         self._cache = UnifiedCache()
+        # Прокси для классического RPA-контура (fedresurs.ru и др.) — та
+        # же стратегия автовыбора, что и у adaptive-стратегий (см.
+        # ``strategies/orchestrator.py::AgenticOrchestrator``).
+        self._proxy_pool = ProxyPool()
         self._classifier = SourceClassifier()
         self._search_param_resolver = SearchParamResolver()
         self._logger = logging.getLogger(__name__)
@@ -145,8 +150,10 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
         """Привязывает Redis-клиент к кэшу для хранения классификаций."""
         if self._cache.redis is None:
             self._cache.redis = redis_client
+        if self._proxy_pool.redis is None:
+            self._proxy_pool.redis = redis_client
 
-    def _get_parser_for_source(self, source_name: str):
+    async def _get_parser_for_source(self, source_name: str):
         """Вернуть специализированный RPA-парсер для источника.
 
         Для источников с готовым адаптером (fedresurs.ru и др.) возвращает
@@ -156,6 +163,7 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
         AdaptiveBridgeParser.
         """
         try:
+            from src.bp1.collectors.fedresurs_rpa.schemas import ProxyConfig
             from src.bp1.parsers import ParserFactory
 
             # Парсеры зарегистрированы по URL-префиксам (например,
@@ -171,11 +179,18 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
             if key is None:
                 return None
 
+            # RPA-доступ (ТЗ BP-1) — прокси не с корпоративного IP. Ошибка
+            # провайдера/пустой пул не должны срывать сбор — acquire()
+            # деградирует до None (см. network/pool.py).
+            proxy_address = await self._proxy_pool.acquire(source_name)
+            proxy = ProxyConfig(server=proxy_address) if proxy_address else None
+
             parser = ParserFactory.get_parser(
                 key,
                 **{
                     'headless': self.headless,
                     'timeout': self.timeout,
+                    'proxy': proxy,
                 },
             )
             # Не используем универсальный адаптивный парсер как
@@ -250,7 +265,7 @@ class AdaptiveRunner(_ProbingMixin, _BatchMixin):
         """Выбирает специализированный RPA-парсер или универсальный
         адаптивный (``_get_parser_for_source``) и выполняет парсинг.
         """
-        parser = self._get_parser_for_source(source_name)
+        parser = await self._get_parser_for_source(source_name)
         if parser is not None:
             # Специализированный RPA-адаптер (fedresurs.ru и др.).
             # Такой парсер ожидает базовый URL источника, а не URL

@@ -101,9 +101,20 @@ class AdaptiveParser:
         self._enrichment_enabled = constants.ENRICHMENT_ENABLED
 
     def bind_redis(self, redis_client: Any) -> None:
-        """Привязывает Redis-клиент к кэшу для хранения классификаций."""
+        """Привязывает Redis-клиент к кэшу и к пулу прокси оркестратора.
+
+        Без этого ``AgenticOrchestrator._proxy_pool.redis`` оставался
+        ``None`` даже при реальном Redis в остальном пайплайне — кэш
+        пула, cooldown адресов и маркер «провайдер недоступен»
+        (``check_health()``) никогда не сохранялись для RPA-стратегий
+        (`BROWSER`/`STEALTH`/`CRAWL4AI`), только для классического
+        `fedresurs_rpa`-контура через ``AdaptiveRunner._bind_redis``.
+        Обнаружено на реальном прогоне: circuit breaker не подавлял
+        повторные обращения к провайдеру внутри стратегий.
+        """
         if self._cache.redis is None:
             self._cache.redis = redis_client
+        self._orchestrator.bind_redis(redis_client)
 
     async def parse(
         self,

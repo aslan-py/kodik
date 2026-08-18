@@ -52,7 +52,13 @@ class Crawl4AIStrategy(BaseStrategy):
                 CrawlerRunConfig,
             )
 
-            browser_config = BrowserConfig(headless=True)
+            browser_config_kwargs = {
+                'headless': True,
+                'proxy': kwargs.get('proxy'),
+            }
+            if kwargs.get('user_agent'):
+                browser_config_kwargs['user_agent'] = kwargs['user_agent']
+            browser_config = BrowserConfig(**browser_config_kwargs)
             run_config = CrawlerRunConfig(
                 page_timeout=self._timeout_ms,
                 wait_until='domcontentloaded',
@@ -68,6 +74,7 @@ class Crawl4AIStrategy(BaseStrategy):
                 data=html,
                 content_length=len(html),
                 elapsed_ms=elapsed,
+                http_status=getattr(result, 'status_code', None),
             )
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
@@ -113,11 +120,16 @@ class StealthStrategy(BaseStrategy):
             )
 
             async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=self._headless,
-                    args=get_launch_args(headless=self._headless),
+                launch_kwargs = {
+                    'headless': self._headless,
+                    'args': get_launch_args(headless=self._headless),
+                }
+                if kwargs.get('proxy'):
+                    launch_kwargs['proxy'] = {'server': kwargs['proxy']}
+                browser = await p.chromium.launch(**launch_kwargs)
+                context_config = get_context_config(
+                    user_agent=kwargs.get('user_agent')
                 )
-                context_config = get_context_config()
                 # Игнорируем невалидные/самоподписанные TLS-сертификаты
                 # (zakupki.gov.ru и др. гос. порталы отдают
                 # ERR_CERT_AUTHORITY_INVALID).
@@ -145,6 +157,7 @@ class StealthStrategy(BaseStrategy):
                 data=html,
                 content_length=len(html),
                 elapsed_ms=elapsed,
+                http_status=status,
             )
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)

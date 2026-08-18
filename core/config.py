@@ -299,6 +299,28 @@ class Settings(BaseSettings):
     # Число подряд идущих полных отказов (с промежутком в circuit TTL каждый),
     # после которого источник отключается в БД (is_active=False).
     source_disable_threshold: int = 3
+
+    # ===== BP-1 RPA (прокси, ротация User-Agent, задержки) =====
+    # Требование ТЗ для источников с RPA-доступом (эмуляция браузера):
+    # прокси не с корпоративных IP, ротация User-Agent, задержки между
+    # запросами. Опционально: без ключа провайдера RPA-стратегии работают
+    # без прокси (см. src/bp1/network/).
+    sx_org_api_key: str | None = None
+    sx_org_base_url: str = 'https://api.sx.org'
+    # Код страны для подбора прокси (например, 'RU'); пусто — без фильтра.
+    bp1_proxy_country: str | None = None
+    bp1_proxy_pool_size: int = 20
+    # Порог баланса провайдера: выше — создаются/используются собственные
+    # порты, ниже — только бесплатные свободные прокси (search_proxies).
+    bp1_proxy_min_balance: float = 1.0
+    bp1_proxy_pool_ttl_seconds: int = 1800
+    # TTL "остывания" адреса, заблокированного конкретным источником —
+    # адрес не выбирается повторно для этого источника до истечения TTL.
+    bp1_proxy_cooldown_seconds: int = 1800
+    # Минимальная пауза между последовательными запросами к одному хосту
+    # для RPA-стратегий (поверх лимитов параллелизма bp1_max_concurrent_*).
+    bp1_rpa_request_delay_seconds: float = 2.0
+
     # ===== BP-7 (агент расширения источников) =====
     # Порог score, выше которого source_candidate переносится в source
     # (src/bp7/pipeline.py::SourceCandidatePromoter). Настраивается через

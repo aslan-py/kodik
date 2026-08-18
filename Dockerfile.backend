@@ -1,0 +1,32 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.txt ./
+COPY certs/russian-trusted-root-ca.pem /usr/local/share/ca-certificates/russian-trusted-root-ca.crt
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    update-ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --upgrade pip && pip install -r requirements.txt && \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources && \
+    for attempt in 1 2 3; do \
+        python -m playwright install --with-deps chromium && exit 0; \
+        echo "Не удалось установить Chromium и системные зависимости (попытка ${attempt}/3); повтор через 10 секунд"; \
+        sleep 10; \
+    done; \
+    exit 1
+
+COPY alembic ./alembic
+COPY alembic.ini ./
+COPY api ./api
+COPY core ./core
+COPY src ./src
+
+EXPOSE 8000
+
+CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,102 @@
+"""Модели BP-6 (план действий).
+
+Единственная часть BP-6 с записью — таблица ActionItem. Остальное (дашборды,
+карта рынка, паспорт конкурента) — DataLens, он только читает витрину.
+
+- ActionItem: по событию П1/П2 человек заводит задачу, отдел меняет статус.
+  Поля строго из ТЗ: задача → отдел → срок → ожидаемый результат → статус.
+
+Nullability — только через аннотацию Mapped: Mapped[str] -> NOT NULL,
+Mapped[str | None] -> NULL. Явный nullable= не дублируем.
+"""
+
+from datetime import UTC, date, datetime
+
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Text,
+    func,
+    text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from core.database import Base, Mixin, StrippedString
+from core.enums import ActionStatus, action_status
+from src.bp3.models import Department
+from src.bp4.models import ShowcaseEvent
+from src.bp5.models import User
+
+
+class ActionItem(Base, Mixin):
+    """План действий BP-6: задача по событию витрины.
+
+    Заполняется человеком (аналитиком) через веб-форму/админку, не DataLens.
+    Отделы меняют только статус (open → in_progress → done). DataLens читает
+    эту таблицу для дашборда «план действий».
+    """
+
+    showcase_event_id: Mapped[int] = mapped_column(
+        ForeignKey('showcase_event.id', ondelete='RESTRICT'),
+        comment='По какому событию витрины заведена задача',
+    )
+    task: Mapped[str] = mapped_column(
+        StrippedString(512),
+        comment='Задача: что конкретно сделать (решение человека)',
+    )
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey('department.id', ondelete='RESTRICT'),
+        comment='Ответственный отдел',
+    )
+    assigned_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey('user.id', ondelete='RESTRICT'),
+        comment=(
+            'Кому конкретно назначена задача (адресат алерта BP-5, если '
+            'задачу завёл AI-ассистент). NULL — задача отдела в целом, '
+            'без привязки к конкретному человеку'
+        ),
+    )
+    deadline: Mapped[date | None] = mapped_column(
+        Date,
+        comment='Срок',
+    )
+    expected_result: Mapped[str | None] = mapped_column(
+        Text,
+        comment='Ожидаемый результат',
+    )
+    status: Mapped[ActionStatus] = mapped_column(
+        action_status,
+        default=ActionStatus.open,
+        server_default=text("'open'"),
+        comment='Статус: open → in_progress → done. Меняют отделы',
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        comment='Когда задача заведена',
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        comment='Обновляется при смене статуса',
+    )
+
+    # Связи нужны админке (FastAdmin показывает FK только через relationship).
+    # Ленивые по умолчанию: сериализация читает *_id, объект не трогает.
+    showcase_event: Mapped['ShowcaseEvent'] = relationship('ShowcaseEvent')
+    department: Mapped['Department'] = relationship('Department')
+    assigned_user: Mapped['User | None'] = relationship('User')
+
+    def __str__(self) -> str:
+        return self.task
+
+    __table_args__ = (
+        CheckConstraint(
+            'task = btrim(task)', name='ck_action_item_task_trimmed'
+        ),
+    )

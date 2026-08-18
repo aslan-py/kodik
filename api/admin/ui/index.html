@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="description" content="Административная панель Kodik" />
+    <title>Административная панель Kodik</title>
+    <script>
+      window.SERVER_DOMAIN = "";
+      window.SERVER_URL = "/{{ADMIN_PREFIX}}/api";
+      window.KODIK_ADMIN_UI = {{KODIK_ADMIN_UI}};
+    </script>
+    <script defer src="/{{ADMIN_PREFIX}}/static/index.min.js"></script>
+    <script defer src="/{{ADMIN_PREFIX}}/ui/admin.js"></script>
+    <link href="/{{ADMIN_PREFIX}}/static/index.min.css" rel="stylesheet" />
+    <link href="/{{ADMIN_PREFIX}}/ui/admin.css" rel="stylesheet" />
+  </head>
+  <body>
+    <noscript>Для работы административной панели требуется JavaScript.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

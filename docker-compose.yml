@@ -1,0 +1,241 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kodik_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: kodik_redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD}', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    image: kodik-backend:local
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: kodik-backend:local
+    pull_policy: never
+    env_file:
+      - .env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${API_PORT:-8000}:8000"
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  celery-worker:
+    image: kodik-backend:local
+    pull_policy: never
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: >
+      celery -A core.celery_app:app worker --loglevel=INFO
+      --queues=pipeline.control,pipeline.stages
+      --hostname=celery-worker@%h
+      --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A core.celery_app:app inspect ping -d celery-worker@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  celery-worker-bp1:
+    image: kodik-backend:local
+    pull_policy: never
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: >
+      celery -A core.celery_app:app worker --loglevel=INFO
+      --queues=pipeline.bp1
+      --hostname=celery-worker-bp1@%h
+      --concurrency=${CELERY_BP1_WORKER_CONCURRENCY:-1}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A core.celery_app:app inspect ping -d celery-worker-bp1@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  celery-beat:
+    image: kodik-backend:local
+    pull_policy: never
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: celery -A core.celery_app:app beat --loglevel=INFO
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "tr '\\0' ' ' < /proc/1/cmdline | grep -q 'celery.*beat'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  flower:
+    image: kodik-backend:local
+    pull_policy: never
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: >
+      sh -c 'test -n "$$FLOWER_BASIC_AUTH" || {
+      echo "FLOWER_BASIC_AUTH is required"; exit 1; };
+      celery -A core.celery_app:app flower --port=5555
+      --basic_auth="$$FLOWER_BASIC_AUTH"'
+    ports:
+      - '127.0.0.1:${FLOWER_PORT:-5555}:5555'
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import base64, os, urllib.request; request = urllib.request.Request('http://127.0.0.1:5555/'); request.add_header('Authorization', 'Basic ' + base64.b64encode(os.environ['FLOWER_BASIC_AUTH'].encode()).decode()); urllib.request.urlopen(request, timeout=3)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  frontend:
+    image: kodik-frontend:local
+    pull_policy: build
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        API_INTERNAL_URL: http://api:8000
+        NEXT_PUBLIC_API_URL: /api
+    environment:
+      NEXT_PUBLIC_API_URL: /api
+      PORT: 3000
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: kodik_redis_commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD}
+    ports:
+      - '${REDIS_COMMANDER_PORT:-8081}:8081'
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  loki:
+    image: grafana/loki:3.4.2
+    command: -config.file=/etc/loki/config.yml
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    restart: unless-stopped
+
+  grafana-alloy:
+    image: grafana/alloy:v1.7.5
+    command: run /etc/alloy/config.alloy --server.http.listen-addr=0.0.0.0:12345
+    volumes:
+      - ./observability/alloy.config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - '127.0.0.1:${GRAFANA_PORT:-3001}:3000'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  loki_data:
+  grafana_data:

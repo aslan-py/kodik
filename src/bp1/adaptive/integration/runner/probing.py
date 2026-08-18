@@ -1,0 +1,369 @@
+"""Резолвинг поискового URL для ``AdaptiveRunner``: кэш → пробинг → fallback."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+from urllib.parse import quote_plus, urlencode
+
+from ...core.cache import PROBED_URL_TTL_SECONDS
+from ...schemas import ProbedUrl, SourceClassification
+from ...strategies.orchestrator import (
+    _is_trusted_self_signed_domain,
+    _ssl_unverified_context,
+)
+from ..search_probe import _SAMPLE_ITEM_URLS_LIMIT, SearchUrlProber
+from ..sources import SearchUrlTemplateRegistry, extract_host
+
+
+class _ProbingMixin:
+    """Методы ``AdaptiveRunner``, отвечающие за резолвинг поискового URL.
+
+    Примешивается к ``AdaptiveRunner`` (см. ``core.py``) — использует его
+    атрибуты ``_prober``, ``_cache``, ``_logger``, ``use_probing``,
+    заведённые в ``AdaptiveRunner.__init__``.
+    """
+
+    @staticmethod
+    def _probe_request(url: str, data: bytes | None = None) -> str:
+        """Синхронный HTTP-запрос для пробинга (GET или POST).
+
+        Общая основа для ``_default_probe_fetch`` (GET) и
+        ``_default_probe_post`` (POST): единый User-Agent, таймаут и
+        единая политика TLS.
+
+        Фолбэк без верификации сертификата разрешён только для доменов из
+        ``KNOWN_REGISTRY_DOMAINS`` (гос.порталы с самоподписанными
+        сертификатами) — та же политика, что в
+        ``strategies/orchestrator.py`` после Шага 13 плана рефакторинга
+        (N11). Для остальных доменов TLS-ошибка остаётся ошибкой, и
+        попытка честно помечается ``fetch_error``.
+        """
+        import urllib.request
+
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0 Safari/537.36'
+                ),
+                **(
+                    {'Content-Type': 'application/x-www-form-urlencoded'}
+                    if data is not None
+                    else {}
+                ),
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.read().decode('utf-8', errors='replace')
+        except Exception:
+            if not _is_trusted_self_signed_domain(url):
+                raise
+            # Известный гос.портал с самоподписанным/недоверенным
+            # сертификатом — повторяем без верификации.
+            with urllib.request.urlopen(
+                req, timeout=10, context=_ssl_unverified_context()
+            ) as resp:
+                return resp.read().decode('utf-8', errors='replace')
+
+    @staticmethod
+    async def _default_probe_fetch(url: str) -> str:
+        """Реальный GET-загрузчик для пробинга.
+
+        Используется по умолчанию, чтобы пробинг не падал на заглушке
+        ``NotImplementedError`` (как было раньше, когда fetch подставлялся
+        только через ``bind_probe_fetch``). Блокирующий ``urllib``-запрос
+        выполняется в отдельном потоке (``asyncio.to_thread``) — ``probe()``
+        в ``SearchUrlProber`` асинхронный и делает ``await fetch(url)``
+        напрямую, без собственной обёртки в поток. При недоступности /
+        ошибке сети поднимает исключение — оно улетает наружу, к
+        вызывающей стороне (`probe()` не перехватывает ошибки fetch сам).
+        """
+        return await asyncio.to_thread(_ProbingMixin._probe_request, url)
+
+    @staticmethod
+    async def _default_probe_post(url: str, params: dict[str, str]) -> str:
+        """Реальный POST-загрузчик формы поиска (Шаг 18 плана рефакторинга).
+
+        Раньше этап формы в ``SearchUrlProber`` был заглушкой: он выполнял
+        обычный GET, но результат помечался как ``search_method='POST'``.
+        Теперь параметры уходят телом запроса
+        (``application/x-www-form-urlencoded``) — так ищут сайты, где поиск
+        реализован формой, а не query-строкой. Как и у GET-варианта,
+        блокирующий вызов уходит в отдельный поток.
+        """
+        return await asyncio.to_thread(
+            _ProbingMixin._probe_request,
+            url,
+            urlencode(params).encode('utf-8'),
+        )
+
+    @staticmethod
+    def _default_looks_like(html: str) -> bool:
+        """По умолчанию считаем любой непустой HTML похожим на выдачу.
+
+        Лучше попытаться спарсить страницу, чем бездумно уйти в fallback:
+        точная проверка «выдача ли это» зависит от конкретного сайта и
+        выполняется в самом парсере.
+        """
+        return bool(html and html.strip())
+
+    def bind_probe_fetch(
+        self,
+        fetch: Any,
+        looks_like: Any | None = None,
+        param_chain: tuple[str, ...] | None = None,
+        post: Any | None = None,
+    ) -> None:
+        """Заменяет fetch (и опционально looks_like/post) у проубера.
+
+        По умолчанию проубер использует ``_default_probe_fetch`` (реальный
+        HTTP-загрузчик через urllib). Метод позволяет подставить другой
+        загрузчик (браузер, httpx, мок в тестах) и/или свою проверку
+        «похоже ли на выдачу».
+
+        Подмена транспорта — «всё или ничего»: если ``post`` не передан
+        явно, этап POST-формы отключается (помечается
+        ``no_post_transport``), а не выполняется штатным urllib. Иначе
+        подмена GET-загрузчика на мок/браузер оставляла бы POST-запросы
+        ходить в реальную сеть мимо подставленного транспорта — тесты
+        неожиданно стучались бы на живые сайты, а браузерный сценарий
+        терял бы cookies/сессию на POST-этапе.
+        """
+        self._prober = SearchUrlProber(
+            fetch=fetch,
+            looks_like_search_results=looks_like,
+            param_chain=param_chain,
+            post=post,
+        )
+
+    def _build_fallback_url(self, source_name: str, search_param: str) -> str:
+        """Строит fallback URL поиска, если пробинг не дал результата.
+
+        Использует тот же per-source шаблон, что и базовый
+        ``build_search_url`` (``hh.ru -> /search/vacancy?text=``), чтобы
+        fallback не деградировал до универсального ``/search?q=`` для
+        источников с известным шаблоном поиска.
+        """
+        host = extract_host(source_name)
+        template = SearchUrlTemplateRegistry().resolve(source_name)
+        return f'https://{host}{template}'.replace(
+            '{q}', quote_plus(search_param)
+        )
+
+    async def _get_or_probe_url(
+        self,
+        source_name: str,
+        search_param: str,
+        target_name: str,
+        redis_client: Any,
+        classification: SourceClassification | None = None,
+    ) -> tuple[str, ProbedUrl | None, dict[str, Any] | None]:
+        """Возвращает ``(url, probed_url, probe_report)``: кэш -> пробинг ->
+        fallback.
+
+        1. Кэш: если probed URL для пары ``(источник, поисковый запрос)``
+           уже сохранён И реально подтверждён (``confidence > 0``) —
+           используем его (TTL 7 дней), пробинг не выполняем. Запись с
+           ``confidence == 0.0`` — это fallback, зафиксированный, когда
+           перебор не нашёл ни одного варианта (например, лёгкий fetch не
+           справился с антиботом до починки транспорта, см. design.md
+           эскалации) — она НЕ считается подтверждённым результатом и не
+           блокирует повторную попытку. Составной ключ (источник + хэш
+           запроса) гарантирует, что у разных конкурентов на одном
+           источнике будут независимые записи.
+        2. Пробинг: иначе пробуем ``SearchUrlProber.probe`` по базовому
+           шаблону источника (``{q}``) с таймаутом 10 с. Это ЕДИНСТВЕННЫЙ
+           прогон перебора на задачу (раньше `_execute_parsing_task` ещё
+           отдельно звал ``probe()`` только ради ``matched_variant`` — два
+           независимых прогона могли разойтись во мнениях о рабочем
+           параметре; теперь ``matched_variant`` берётся из этого же
+           прогона через ``ProbedUrl.matched_variant``).
+        3. Fallback: если пробинг не нашёл успешный вариант (или Redis
+           недоступен / fetch не подключён) — строим URL по шаблону
+           ``https://{host}{template}`` с percent-кодированным запросом.
+           Fallback также пишется в кэш (как ``ProbedUrl`` с
+           ``confidence=0.0``), чтобы повторные запуски той же пары не
+           делали бесполезный пробинг заново — но и не считался
+           подтверждённым результатом навсегда (см. п.1).
+
+        Возвращает ``(url, probed, probe_report)``: ``url`` — итоговый URL
+        для парсинга, ``probed`` — найденный/закэшированный ``ProbedUrl``
+        (или None), ``probe_report`` — полный отчёт перебора
+        (``ProbePlan.to_extra()``) для диагностики, или ``None``, если
+        перебор не выполнялся (кэш-хит/пробинг выключен). Итоговый URL
+        берётся из ``probed.search_url``, если он есть.
+        """
+        fallback_url = self._build_fallback_url(source_name, search_param)
+
+        try:
+            cached = await self._cache.get_probed_url(
+                source_name, search_param=search_param
+            )
+        except Exception as e:
+            self._logger.warning(
+                'Кэш probed URL недоступен (source=%s): %s',
+                source_name,
+                e,
+            )
+            cached = None
+        if cached is not None and cached.confidence > 0.0:
+            self._logger.info(
+                'Probed URL для %s (query=%r) взят из кэша: %s',
+                source_name,
+                search_param,
+                cached.search_url,
+            )
+            return cached.search_url, cached, None
+        if cached is not None:
+            self._logger.info(
+                'Закэширован неподтверждённый fallback для %s (query=%r) — '
+                'пробуем перебор заново',
+                source_name,
+                search_param,
+            )
+
+        if not self.use_probing:
+            self._logger.info(
+                'Пробинг выключен (use_probing=False), fallback для %s: %s',
+                source_name,
+                fallback_url,
+            )
+            return fallback_url, None, None
+
+        base_url = SearchUrlTemplateRegistry().build_base_url(source_name)
+        # Подсказка от регистрации источника (Шаг 19 плана рефакторинга):
+        # add-source проверяет поисковый эндпоинт и кэширует результат на
+        # уровне источника. Готовый URL оттуда переиспользовать нельзя (он
+        # искал нейтральный запрос, а не этого конкурента), но имя
+        # query-параметра — знание об источнике, а не о конкуренте: с ним
+        # первый боевой пробинг не перебирает цепочку с начала.
+        prefer_param = await self._preferred_param_from_registration(
+            source_name
+        )
+        # Снимок карточек последнего успешного пробинга ЛЮБОГО конкурента
+        # на этом источнике — дополнительный эталон для проверки
+        # причинности (см. SearchUrlProber.probe): совпадение с ним, как и
+        # с базовой лентой, отклоняет кандидата, который на самом деле не
+        # фильтрует выдачу.
+        try:
+            known_other_urls = await self._cache.get_probed_sample_urls(
+                source_name
+            )
+        except Exception as e:
+            self._logger.warning(
+                'Не удалось прочитать снимок пробинга %s: %s', source_name, e
+            )
+            known_other_urls = []
+        try:
+            plan = await self._prober.probe(
+                base_url,
+                search_param,
+                target_name=target_name,
+                prefer_param=prefer_param,
+                known_other_result_urls=(
+                    set(known_other_urls) if known_other_urls else None
+                ),
+                classification=classification,
+            )
+        except Exception as e:
+            self._logger.warning('Пробинг %s не выполнен: %s', source_name, e)
+            plan = None
+
+        probe_report = plan.to_extra() if plan is not None else None
+        probed = (
+            ProbedUrl(
+                source_name=target_name or search_param,
+                search_url=plan.winner.url,
+                search_method=plan.winner.method,
+                confidence=1.0 if plan.winner.target_found else 0.5,
+                sample_item_urls=list(
+                    plan.winner.result_urls[:_SAMPLE_ITEM_URLS_LIMIT]
+                ),
+                matched_variant=plan.winner.matched_variant,
+            )
+            if plan is not None and plan.winner is not None
+            else None
+        )
+
+        if probed is None:
+            self._logger.info(
+                'Пробинг %s (query=%r) не дал результата — fallback: %s',
+                source_name,
+                search_param,
+                fallback_url,
+            )
+            # Кэшируем fallback как ProbedUrl (без уверенности в результате),
+            # чтобы следующая задача той же пары не пробовала пробинг снова.
+            fallback_probed = ProbedUrl(
+                source_name=source_name,
+                search_url=fallback_url,
+                confidence=0.0,
+            )
+            try:
+                await self._cache.set_probed_url(
+                    source_name,
+                    fallback_probed,
+                    ttl=PROBED_URL_TTL_SECONDS,
+                    search_param=search_param,
+                )
+            except Exception as e:
+                self._logger.warning(
+                    'Не удалось сохранить fallback probed URL для %s: %s',
+                    source_name,
+                    e,
+                )
+            return fallback_url, None, probe_report
+
+        try:
+            await self._cache.set_probed_url(
+                source_name,
+                probed,
+                ttl=PROBED_URL_TTL_SECONDS,
+                search_param=search_param,
+            )
+        except Exception as e:
+            self._logger.warning(
+                'Не удалось сохранить probed URL для %s: %s',
+                source_name,
+                e,
+            )
+        if probed.sample_item_urls:
+            try:
+                await self._cache.set_probed_sample_urls(
+                    source_name, probed.sample_item_urls
+                )
+            except Exception as e:
+                self._logger.warning(
+                    'Не удалось сохранить снимок пробинга %s: %s',
+                    source_name,
+                    e,
+                )
+        return probed.search_url, probed, probe_report
+
+    async def _preferred_param_from_registration(
+        self, source_name: str
+    ) -> str | None:
+        """Имя query-параметра, найденное при регистрации источника.
+
+        Читает source-level запись пробинга (ключ без поискового запроса),
+        которую пишет ``SourceRegistrationService.register(probe_search=True)``,
+        и возвращает имя параметра из неё. Возвращает ``None``, если записи
+        нет, Redis недоступен или параметр не сохранён.
+        """
+        try:
+            registered = await self._cache.get_probed_url(source_name)
+        except Exception as e:
+            self._logger.warning(
+                'Не удалось прочитать probed URL источника %s: %s',
+                source_name,
+                e,
+            )
+            return None
+        if registered is None or not registered.search_params:
+            return None
+        return next(iter(registered.search_params), None)

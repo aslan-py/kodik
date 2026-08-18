@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote_plus, urlencode
 
+from src.bp1.network.ua_rotation import get_random_user_agent
+
 from ...core.cache import PROBED_URL_TTL_SECONDS
 from ...schemas import ProbedUrl
 from ...strategies.orchestrator import (
@@ -44,11 +46,7 @@ class _ProbingMixin:
             url,
             data=data,
             headers={
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/120.0 Safari/537.36'
-                ),
+                'User-Agent': get_random_user_agent(),
                 **(
                     {'Content-Type': 'application/x-www-form-urlencoded'}
                     if data is not None

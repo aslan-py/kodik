@@ -480,7 +480,10 @@ class ParsedResponse(BaseModel):
 - Извлечение структурированных данных: статус, дата регистрации, регион, руководитель
 - Сохранение отрендеренного HTML (Angular SPA)
 - Retry-логика (3 попытки с exponential backoff)
-- Поддержка прокси
+- Поддержка прокси — адрес автоматически подбирается из общего пула
+  `src/bp1/network/pool.py` при вызове через `AdaptiveRunner`
+  (`_get_parser_for_source`); при прямом вызове `FedresursAdapter`
+  передаётся явно через `proxy=ProxyConfig(...)`
 
 **Использование:**
 ```python

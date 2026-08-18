@@ -217,6 +217,11 @@ class StrategyResult(BaseModel):
     error: str | None = None
     elapsed_ms: int = 0
     used_cache: bool = False
+    # HTTP-статус ответа целевого источника, если доступен (RPA-стратегии
+    # с браузером/краулером). Используется оркестратором для решения о
+    # cooldown прокси, заблокированного источником (401/403/429) — см.
+    # openspec/changes/add-rpa-collection-proxying.
+    http_status: int | None = None
 
 
 # ============================================================================

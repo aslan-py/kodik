@@ -161,6 +161,47 @@ class TestApiErrorHandling:
         sleep_mock.assert_not_called()
 
 
+class TestNoRetryOn4xx:
+    """Любой 4xx (кроме 429) не ретраится — это не транзиентная ошибка,
+    повтор того же запроса результат не изменит. Реальный пример: sx.org
+    отдаёт 400 'Insufficient funds' на /v2/proxy/search при нулевом
+    балансе — не только 401/403."""
+
+    @pytest.mark.parametrize('status_code', [400, 401, 403, 404])
+    async def test_client_error_raises_without_retry(self, mocker, status_code):
+        sleep_mock = mocker.patch('src.bp1.network.provider.asyncio.sleep')
+        calls = {'n': 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls['n'] += 1
+            return httpx.Response(
+                status_code, json={'success': False, 'message': 'error'}
+            )
+
+        client = _client_with_handler(handler)
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_balance()
+
+        assert calls['n'] == 1
+        sleep_mock.assert_not_called()
+
+    async def test_429_still_retries(self, mocker):
+        mocker.patch('src.bp1.network.provider.asyncio.sleep')
+        calls = {'n': 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls['n'] += 1
+            if calls['n'] < 2:
+                return httpx.Response(429, json={'success': False})
+            return httpx.Response(200, json=_BALANCE_PAYLOAD)
+
+        client = _client_with_handler(handler)
+        balance = await client.get_balance()
+
+        assert calls['n'] == 2
+        assert balance.balance == 12.41
+
+
 class TestRetryOnHttpError:
     """Сетевая ошибка ретраится с экспоненциальным бэкоффом."""
 

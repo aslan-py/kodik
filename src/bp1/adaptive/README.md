@@ -270,6 +270,20 @@ orch.register_strategy(MyStrategy.strategy_type, MyStrategy())
 Настройки — блок `--- BP-1 ---` в `.env.example`
 (`SX_ORG_API_KEY`, `BP1_PROXY_*`, `BP1_RPA_REQUEST_DELAY_SECONDS`).
 
+**Проверка провайдера в начале прогона.** `AdaptiveRunner.run_all` перед
+диспетчеризацией задач один раз вызывает `ProxyPool.check_health()` —
+дешёвый авторизованный запрос к провайдеру. Если ключ невалиден/отозван
+или баланс исчерпан, в лог пишется ровно одно сообщение на весь прогон
+(«Прокси не работает: ... необходимо пополнить баланс сервиса»), и
+в Redis выставляется маркер `bp1:proxy:provider_down` — пока он жив,
+`acquire()` не делает повторных обращений к уже известному
+неработоспособным провайдеру. Реальная отправка уведомления
+(email/telegram) **не реализована** — только лог-заглушка;
+получатель для будущей интеграции уже определён (`settings.test_email`/
+`settings.test_tg`, те же настройки, что использует песочница алертов
+BP-5), подключение — `core.mail.send_email`/`core.telegram.send_telegram`
+(см. `openspec/changes/archive/.../add-proxy-provider-health-check`).
+
 ---
 
 ## Интеллектуальный парсинг

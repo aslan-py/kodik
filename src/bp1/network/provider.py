@@ -149,10 +149,16 @@ class SxOrgClient:
     ) -> dict[str, Any]:
         """Выполнить HTTP-запрос к API с ретраями при сетевых ошибках.
 
-        Ошибки сети/HTTP-статуса (``httpx.HTTPError``) — ретраятся с
-        экспоненциальным бэкоффом до ``max_retries``. Ошибка на уровне
-        полезной нагрузки ответа (``success: false``) — ``ValueError``,
-        не ретраится (повтор того же запроса ничего не изменит).
+        Ошибки сети/5xx/429 (``httpx.HTTPError``) — ретраятся с
+        экспоненциальным бэкоффом до ``max_retries``. Остальные 4xx (401,
+        403, 400 и т.п. — невалидный ключ, недостаточно средств на
+        балансе, некорректный запрос) и ошибка на уровне полезной нагрузки
+        ответа (``success: false``) не ретраятся: повтор того же запроса
+        результат не изменит — это не транзиентная ошибка, а
+        детерминированный отказ (см. реальный ответ sx.org на
+        ``/v2/proxy/search`` при нулевом балансе: HTTP 400
+        ``{"success": false, "message": "Insufficient funds..."}``, а не
+        только 401/403).
         """
         params = dict(params or {})
         params['apiKey'] = self._api_key
@@ -171,6 +177,9 @@ class SxOrgClient:
             return data
 
         except httpx.HTTPError as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status is not None and status != 429 and 400 <= status < 500:
+                raise
             if retry_count < self._max_retries:
                 wait_time = 2**retry_count
                 logger.warning(

@@ -71,6 +71,21 @@ class _FakeOrchestrator:
         )
 
 
+def test_bind_redis_cascades_to_orchestrator_proxy_pool():
+    """bind_redis() должен привязывать Redis не только к кэшу адаптеров,
+    но и к пулу прокси оркестратора (AgenticOrchestrator._proxy_pool) —
+    иначе circuit breaker check_health()/cooldown никогда не сохраняются
+    для RPA-стратегий (обнаружено на реальном прогоне: без этой привязки
+    acquire() каждой стратегии заново бил в провайдера)."""
+    parser = AdaptiveParser()
+    fake_redis = object()
+
+    parser.bind_redis(fake_redis)
+
+    assert parser._cache.redis is fake_redis
+    assert parser._orchestrator._proxy_pool.redis is fake_redis
+
+
 @pytest.mark.asyncio
 async def test_llm_analyze_structure():
     """LLMClient возвращает AdapterConfig со схемой."""

@@ -30,6 +30,10 @@ from .provider import SxOrgClient, format_proxy_string
 logger = logging.getLogger(__name__)
 
 _POOL_KEY = 'bp1:proxy:pool'
+# Общий (не по источнику) маркер: провайдер прокси недоступен. Ставится
+# check_health() в начале прогона (add-proxy-provider-health-check),
+# читается _get_pool() перед любым обращением к провайдеру.
+_PROVIDER_DOWN_KEY = 'bp1:proxy:provider_down'
 
 
 def canonical_host(source: str) -> str:
@@ -59,22 +63,29 @@ def _split_address(address: str) -> tuple[str, int] | None:
         return None
 
 
+_UNSET: Any = object()
+
+
 class ProxyPool:
     """Пул прокси-адресов с автовыбором стратегии и cooldown по источнику."""
 
     def __init__(
         self,
         redis_client: Any = None,
-        api_key: str | None = None,
-        base_url: str | None = None,
+        api_key: str | None = _UNSET,
+        base_url: str | None = _UNSET,
         client_factory: Callable[[], SxOrgClient] | None = None,
     ):
         self.redis = redis_client
+        # Сентинел, а не None по умолчанию: вызывающий код должен иметь
+        # возможность явно передать api_key=None («ключа нет»), отличимо
+        # от «параметр не передан вовсе» (тогда — из settings). None и
+        # «не передано» — разные вещи, в отличие от прежней реализации.
         self._api_key = (
-            api_key if api_key is not None else settings.sx_org_api_key
+            settings.sx_org_api_key if api_key is _UNSET else api_key
         )
         self._base_url = (
-            base_url if base_url is not None else settings.sx_org_base_url
+            settings.sx_org_base_url if base_url is _UNSET else base_url
         )
         self._client_factory = client_factory or self._default_client_factory
 
@@ -105,6 +116,67 @@ class ProxyPool:
             return address
         return None
 
+    async def check_health(self) -> bool:
+        """Один раз проверить работоспособность провайдера.
+
+        Вызывается в начале прогона сбора (``AdaptiveRunner.run_all``), не
+        на каждый запрос прокси. Выполняет ту же стратегию автовыбора, что
+        и реальный ``acquire()`` (``_select_pool()``) — не только
+        ``get_balance()``: реальный провайдер отдаёт "ключ валиден, баланс
+        читается" (200 OK), но при этом ветка ``search_proxies()``
+        (баланс ниже порога) может отдельно отказывать (см. реальный ответ
+        sx.org: HTTP 400 "Insufficient funds..." именно на этом
+        эндпоинте) — проверка только баланса такой отказ не поймала бы.
+        Не настроен ключ — нечего проверять, считается успехом. Не бросает
+        исключение — ошибка самой проверки не должна прерывать прогон.
+
+        Returns:
+            ``True`` — провайдер работает (или не настроен), ``False`` —
+            недоступен (сбор в этом прогоне пойдёт без прокси).
+        """
+        if not self._api_key:
+            return True
+
+        try:
+            addresses = await self._select_pool()
+        except Exception as e:
+            await self._mark_provider_down(e)
+            return False
+
+        await self._clear_provider_down()
+        # Пул уже получен реальным вызовом выше — кэшируем сразу, чтобы
+        # первый же acquire() в этом прогоне не повторял тот же запрос.
+        if self.redis is not None and addresses:
+            await self.redis.set(
+                _POOL_KEY,
+                json.dumps(addresses),
+                ex=settings.bp1_proxy_pool_ttl_seconds,
+            )
+        return True
+
+    async def _mark_provider_down(self, error: Exception) -> None:
+        # Ровно одно сообщение на прогон — check_health() вызывается один
+        # раз в начале run_all(), не на каждый acquire().
+        logger.warning(
+            'Прокси не работает: провайдер недоступен (%s) — необходимо '
+            'пополнить баланс сервиса или проверить ключ. Сбор '
+            'продолжается без прокси. TODO: получатель технического '
+            'уведомления — settings.test_email/settings.test_tg; реальная '
+            'отправка не реализована (заглушка-лог, см. design.md '
+            'изменения add-proxy-provider-health-check).',
+            error,
+        )
+        if self.redis is not None:
+            await self.redis.set(
+                _PROVIDER_DOWN_KEY,
+                str(error)[:200],
+                ex=settings.bp1_proxy_pool_ttl_seconds,
+            )
+
+    async def _clear_provider_down(self) -> None:
+        if self.redis is not None:
+            await self.redis.delete(_PROVIDER_DOWN_KEY)
+
     async def mark_blocked(
         self, source_url_or_host: str, proxy_address: str
     ) -> None:
@@ -133,6 +205,11 @@ class ProxyPool:
                     return json.loads(cached)
                 except (TypeError, ValueError):
                     logger.warning('Повреждён кэш пула прокси, обновляю')
+
+            if await self.redis.get(_PROVIDER_DOWN_KEY):
+                # Провайдер уже отмечен неработоспособным (check_health()
+                # в начале прогона) — не обращаемся к нему повторно.
+                return []
 
         addresses = await self._select_pool()
         if self.redis is not None and addresses:

@@ -33,12 +33,14 @@ class FakeSxOrgClient:
         created: list[ProxyPort] | None = None,
         free: list[str] | None = None,
         raise_on_balance: Exception | None = None,
+        raise_on_search: Exception | None = None,
     ):
         self._balance = balance
         self._ports = ports or []
         self._created = created or []
         self._free = free or []
         self._raise_on_balance = raise_on_balance
+        self._raise_on_search = raise_on_search
         self.create_port_calls: list[int] = []
         self.closed = False
 
@@ -66,6 +68,8 @@ class FakeSxOrgClient:
         return True
 
     async def search_proxies(self, **kwargs: Any) -> list[str]:
+        if self._raise_on_search:
+            raise self._raise_on_search
         return self._free
 
     async def aclose(self) -> None:
@@ -210,3 +214,115 @@ class TestCooldown:
         await pool.mark_blocked('lenta.ru', address)
 
         assert await pool.acquire('kommersant.ru') == address
+
+
+class TestCheckHealth:
+    """check_health() — один реальный чек провайдера в начале прогона."""
+
+    async def test_no_api_key_is_noop_success(self):
+        pool = ProxyPool(redis_client=FakeRedis(), api_key=None)
+
+        assert await pool.check_health() is True
+
+    async def test_healthy_provider_returns_true_no_marker(self):
+        fake = FakeSxOrgClient(balance=10.0)
+        redis = FakeRedis()
+        pool = ProxyPool(
+            redis_client=redis, api_key='k', client_factory=lambda: fake
+        )
+
+        assert await pool.check_health() is True
+        assert await redis.get('bp1:proxy:provider_down') is None
+        assert fake.closed is True
+
+    async def test_broken_provider_returns_false_and_sets_marker(self, caplog):
+        fake = FakeSxOrgClient(raise_on_balance=RuntimeError('invalid api key'))
+        redis = FakeRedis()
+        pool = ProxyPool(
+            redis_client=redis, api_key='k', client_factory=lambda: fake
+        )
+
+        with caplog.at_level('WARNING'):
+            result = await pool.check_health()
+
+        assert result is False
+        assert await redis.get('bp1:proxy:provider_down') is not None
+        assert (
+            sum('Прокси не работает' in r.message for r in caplog.records) == 1
+        )
+
+    async def test_search_proxies_failure_marks_unhealthy(self, caplog):
+        # Реальный случай: get_balance() успешен (ключ валиден), баланс
+        # ниже порога -> ветка search_proxies(), а она отдельно отказывает
+        # (sx.org: HTTP 400 "Insufficient funds..."). check_health() должен
+        # поймать и это, не только сбой get_balance().
+        fake = FakeSxOrgClient(
+            balance=0.0, raise_on_search=RuntimeError('insufficient funds')
+        )
+        redis = FakeRedis()
+        pool = ProxyPool(
+            redis_client=redis, api_key='k', client_factory=lambda: fake
+        )
+
+        with caplog.at_level('WARNING'):
+            result = await pool.check_health()
+
+        assert result is False
+        assert await redis.get('bp1:proxy:provider_down') is not None
+
+    async def test_healthy_check_pre_warms_pool_cache(self):
+        calls = {'n': 0}
+
+        def factory():
+            calls['n'] += 1
+            return FakeSxOrgClient(
+                balance=10.0, ports=[_port(1, '1.1.1.1:1111')]
+            )
+
+        redis = FakeRedis()
+        pool = ProxyPool(
+            redis_client=redis, api_key='k', client_factory=factory
+        )
+
+        assert await pool.check_health() is True
+        assert calls['n'] == 1
+
+        # acquire() сразу после check_health() не должен снова бить в
+        # провайдера — пул уже закэширован.
+        address = await pool.acquire('lenta.ru')
+        assert address == 'http://1.1.1.1:1111'
+        assert calls['n'] == 1
+
+    async def test_clears_marker_after_recovery(self):
+        redis = FakeRedis()
+        await redis.set('bp1:proxy:provider_down', 'invalid api key')
+        fake = FakeSxOrgClient(balance=10.0)
+        pool = ProxyPool(
+            redis_client=redis, api_key='k', client_factory=lambda: fake
+        )
+
+        assert await pool.check_health() is True
+        assert await redis.get('bp1:proxy:provider_down') is None
+
+    async def test_marked_down_provider_skips_further_provider_calls(self):
+        calls = {'n': 0}
+
+        def factory():
+            calls['n'] += 1
+            return FakeSxOrgClient(
+                raise_on_balance=RuntimeError('invalid api key')
+            )
+
+        redis = FakeRedis()
+        pool = ProxyPool(
+            redis_client=redis, api_key='k', client_factory=factory
+        )
+
+        await pool.check_health()
+        assert calls['n'] == 1
+
+        # acquire() в рамках того же прогона не должен снова обращаться
+        # к провайдеру — маркер уже стоит.
+        assert await pool.acquire('lenta.ru') is None
+        assert await pool.acquire('kommersant.ru') is None
+        assert calls['n'] == 1

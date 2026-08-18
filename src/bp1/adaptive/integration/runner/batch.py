@@ -81,6 +81,15 @@ class _BatchMixin:
 
         from src.bp1.models import SearchTask
 
+        # Один реальный чек провайдера прокси на весь прогон, до
+        # диспетчеризации задач (не на каждый запрос — см.
+        # network/pool.py::check_health и specs/bp1/rpa-network-controls).
+        # _bind_redis обычно вызывается внутри run_task на каждую задачу;
+        # здесь — заранее и один раз, чтобы check_health() уже мог писать
+        # в Redis. Идемпотентно (см. _bind_redis: if ...redis is None).
+        self._bind_redis(redis_client)
+        await self._proxy_pool.check_health()
+
         if task_ids:
             stmt = (
                 select(SearchTask)

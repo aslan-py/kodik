@@ -1,3 +1,5 @@
+"""Запросы к базе данных."""
+
 from sqlalchemy import and_, exists, func, not_, select
 
 from src.bp1.models import Competitor, Source
@@ -8,6 +10,7 @@ from src.bp7.models import SourceCandidate
 
 
 async def fetch_data():
+    """Загружает необработанные новости и справочники категорий и отделов."""
     async with AsyncSessionLocal() as session:
         stmt_items = select(NormalizedItem.id, NormalizedItem.text).where(
             and_(
@@ -37,6 +40,7 @@ async def fetch_data():
 
 
 async def fetch_news_stats():
+    """Считает число новостей и источников по каждому конкуренту."""
     async with AsyncSessionLocal() as session:
         stmt = (
             select(
@@ -78,6 +82,7 @@ async def fetch_news_stats():
 
 
 async def fetch_seed_urls():
+    """Загружает известные источники, домены и список конкурентов."""
     async with AsyncSessionLocal() as session:
         stmt_sources = select(func.distinct(Source.name)).where(
             Source.is_active.is_(True)

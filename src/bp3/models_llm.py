@@ -1,3 +1,5 @@
+"""Базовые классы и схемы данных для модулей пайплайна."""
+
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Literal
@@ -11,6 +13,9 @@ SYSTEM_PROMPT_PATH = Path(__file__).parent / 'prompts' / 'system_prompt.txt'
 
 # ========== Контекст проекта ==========
 class ProjectContext(BaseModel):
+    """Содержит контекст проекта — поля заполняются по
+    мере выполнения модулей в пайплайне."""
+
     # Входные данные
     news: list[dict] | None = None
     manual_cat: list[dict] | None = None
@@ -50,23 +55,26 @@ class ProjectContext(BaseModel):
 
 # ========== Базовые классы модулей ==========
 class BaseModule(ABC):
+    """Базовый класс для всех модулей пайплайна."""
+
     @abstractmethod
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Выполняет свой шаг и возвращает дополненные данные."""
         pass
 
 
 class LLMModule(BaseModule):
+    """Базовый класс для модулей, которые обращаются к LLM."""
+
     def __init__(self, llm: ChatOpenAI):
+        """Сохраняет клиент LLM."""
         self.llm = llm
 
     def invoke_llm(self, prompt: str, ctx: ProjectContext):
-        """Вызвать self.structured_llm с общим системным промптом (профиль
-        компании, общие правила, защита от prompt-инъекций) + пользова-
-        тельским содержимым конкретного шага.
+        """Отправляет запрос в LLM: общий системный промпт + промпт шага.
 
-        `ctx` сейчас не используется — задел под будущую подстановку
-        динамических данных (например, ctx.competitors) в системный
-        промпт без изменения сигнатуры вызовов в модулях-наследниках.
+        `ctx` пока не используется — оставлен на будущее, чтобы можно было
+        подставлять в системный промпт данные из контекста.
         """
         system_prompt = SYSTEM_PROMPT_PATH.read_text(encoding='utf-8')
         return self.structured_llm.invoke(
@@ -79,10 +87,14 @@ class LLMModule(BaseModule):
 
 # ========== Конвейер ==========
 class Pipeline:
+    """Запускает модули один за другим."""
+
     def __init__(self, modules: list[BaseModule]):
+        """Сохраняет список модулей в порядке выполнения."""
         self.modules = modules
 
     def run(self) -> ProjectContext:
+        """Прогоняет данные через все модули и возвращает результат."""
         ctx = ProjectContext()
         for module in self.modules:
             print(f'Запуск модуля: {module.__class__.__name__}')
@@ -92,11 +104,15 @@ class Pipeline:
 
 # ========== Pydantic‑схемы для structured output ==========
 class CategorizedItem(BaseModel):
+    """Определяет вид ответа с категорией для каждой новости."""
+
     id: int
     category: str | None = None
 
 
 class CategorizedResponse(BaseModel):
+    """Определяет вид ответа LLM: категории для всех новостей."""
+
     items: list[CategorizedItem] = Field(
         description='Результат категоризации: по элементу на каждую новость'
     )
@@ -106,17 +122,24 @@ ToneLevel = Literal['positive', 'negative', 'alarming', 'neutral', 'irrelevant']
 
 
 class ToneItem(BaseModel):
+    """Определяет вид ответа с тональностью для каждой новости."""
+
     id: int
     tone_of_news: ToneLevel
 
 
 class ToneResponse(BaseModel):
+    """Определяет вид ответа LLM: тональность для всех новостей."""
+
     items: list[ToneItem] = Field(
         description='Тональность: по одному элементу на каждую новость'
     )
 
 
 class CommentActionItem(BaseModel):
+    """Определяет вид ответа с комментарием и рекомендацией для каждой
+    новости."""
+
     id: int
     comments: str = Field(
         description='Краткий комментарий: что произошло и почему это важно'
@@ -125,12 +148,16 @@ class CommentActionItem(BaseModel):
 
 
 class CommentActionResponse(BaseModel):
+    """Определяет вид ответа LLM: комментарии и рекомендации."""
+
     items: list[CommentActionItem] = Field(
         description='Комментарии и рекомендации: по элементу на каждую новость'
     )
 
 
 class GenerationTaskItem(BaseModel):
+    """Определяет вид ответа со списком задач для каждой новости."""
+
     id: int
     tasks: list[str] = Field(
         ...,
@@ -143,12 +170,16 @@ class GenerationTaskItem(BaseModel):
 
 
 class GenerationTaskResponse(BaseModel):
+    """Определяет вид ответа LLM: задачи для всех новостей."""
+
     items: list[GenerationTaskItem] = Field(
         ..., description='Список элементов для каждой новости'
     )
 
 
 class ExpectedResultItem(BaseModel):
+    """Определяет вид ответа с ожидаемым результатом для каждой новости."""
+
     id: int
     expected_result: str = Field(
         description=(
@@ -159,6 +190,8 @@ class ExpectedResultItem(BaseModel):
 
 
 class ExpectedResultResponse(BaseModel):
+    """Определяет вид ответа LLM: ожидаемые результаты."""
+
     items: list[ExpectedResultItem] = Field(
         ..., description='Список элементов для каждой новости'
     )

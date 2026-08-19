@@ -1,3 +1,5 @@
+"""Загрузка исходных данных из базы."""
+
 import asyncio
 
 from src.bp3.fetch_data import fetch_data, fetch_news_stats, fetch_seed_urls
@@ -6,18 +8,16 @@ from src.bp3.utils import extract_domains
 
 
 class InputDataModule(BaseModule):
-    """Загружает из БД новости под категоризацию и справочники LLM-промптов.
+    """Загружает из базы новости и справочники для работы остальных модулей.
 
-    `fetch_data`/`fetch_news_stats`/`fetch_seed_urls` — `async def`
-    (AsyncSessionLocal), а `process()` синхронный (контракт BaseModule) —
-    мост через общий event loop потока (`asyncio.get_event_loop()`), НЕ
-    через `asyncio.run()` на каждый вызов: несколько отдельных
-    `asyncio.run()` в одном потоке рвут пул соединений `core.database.engine`
-    на Windows (см. докстринг `src/bp3/pipeline.py`). Loop создаётся один
-    раз на весь прогон в `_run_pipeline_in_thread` (`src/bp3/pipeline.py`).
+    Запросы к базе асинхронные, а модуль синхронный, поэтому они
+    выполняются в общем event loop потока. Свой event loop здесь
+    создавать нельзя — это рвёт пул соединений с базой (подробности в
+    `src/bp3/pipeline.py`).
     """
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Загружает новости, справочники, статистику и список доменов."""
         loop = asyncio.get_event_loop()
         try:
             news_list, cat_list, depart_list = loop.run_until_complete(

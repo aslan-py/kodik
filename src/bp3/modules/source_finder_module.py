@@ -1,3 +1,5 @@
+"""Поиск новых источников новостей."""
+
 import time
 from urllib.parse import urlparse
 
@@ -10,19 +12,17 @@ client = TavilyClient(api_key=settings.tavily_api_key)
 
 
 class SourceFinderModule(BaseModule):
-    """Ищет новые домены-источники по КАЖДОМУ конкуренту через Tavily.
+    """Ищет новые источники новостей по каждому конкуренту через Tavily.
 
-    Не зависит от текущей пачки новостей (`ctx.news`) — перебирает всех
-    конкурентов из справочника (`ctx.competitors`), независимо от того,
-    сколько новостей обработано в этом прогоне. Найденные домены попадают
-    в `ctx.domains_to_add` (`{competitor_id: {'sources': [...]}}`) —
-    дальше `SaveResultsModule` кладёт их в `source_candidate` (BP-7).
+    Перебирает всех конкурентов из справочника, независимо от того,
+    сколько новостей обработано в этом запуске.
     """
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
-        """На каждого конкурента — один поиск Tavily, исключая уже
-        известные домены (`ctx.domains`); сбой по одному конкуренту не
-        прерывает остальных."""
+        """Ищет источники по каждому конкуренту, пропуская известные домены.
+
+        Ошибка поиска по одному конкуренту не прерывает остальных.
+        """
         exclude_domains = ctx.domains or []
         companies = ctx.competitors or []
 

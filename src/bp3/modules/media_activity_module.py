@@ -1,8 +1,13 @@
+"""Расчёт индекса медиа-активности конкурентов."""
+
 from src.bp3.models_llm import BaseModule, ProjectContext
 
 
 class MediaActivityModule(BaseModule):
+    """Считает, насколько активно конкуренты упоминаются в новостях."""
+
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Считает индекс медиа-активности для каждого конкурента."""
         news_stats = ctx.news_stats
         unique_sources = ctx.count_sources
 

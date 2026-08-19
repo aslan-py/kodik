@@ -1,3 +1,5 @@
+"""Сохранение результатов работы пайплайна в базу."""
+
 import asyncio
 from datetime import timedelta
 
@@ -16,8 +18,7 @@ async def _save(
     index_by_competitor: dict,
     domains_to_add: dict,
 ) -> None:
-    """Записать CategorizedEvent на каждую новость и source_candidate за
-    весь прогон — асинхронно, через AsyncSessionLocal (см. process())."""
+    """Записывает в базу размеченные новости и найденные источники."""
     async with AsyncSessionLocal() as session:
         # Получаем даты новостей и идентификаторы конкурентов
         stmt_date = select(
@@ -117,21 +118,14 @@ async def _save(
 
 
 class SaveResultsModule(BaseModule):
-    """
-    Сохраняет результаты категоризации, приоритетов, тональности,
-    комментариев, действий, сроков, медиа-индекса и найденных источников
-    в соответствующие таблицы.
-    """
+    """Сохраняет в базу результаты работы всех модулей."""
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
-        """Собрать поля по всем модулям в одну строку `CategorizedEvent` на
-        новость, затем — отдельным проходом за весь прогон — сохранить
-        найденные `SourceFinderModule` домены в `source_candidate`.
+        """Собирает данные всех модулей по каждой новости и сохраняет их.
 
-        Запись — в `_save()` (`async def`, `AsyncSessionLocal`); мост через
-        общий event loop потока (`asyncio.get_event_loop()`), тот же, что
-        использует `input_data_module.py` — см. его докстринг про то,
-        почему не через `asyncio.run()` на каждый вызов."""
+        Отдельно сохраняет найденные новые источники. Как и
+        `InputDataModule`, использует общий event loop потока, а не свой.
+        """
         # 1. Собираем все поля из ctx по id новости
         data_by_id = {}
         for item in ctx.category_news or []:

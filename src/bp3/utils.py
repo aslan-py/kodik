@@ -1,12 +1,10 @@
+"""Вспомогательные функции: работа с доменами и очистка данных."""
+
 from urllib.parse import urlparse
 
 
 def extract_domains(url_list, domain_list):
-    """
-    Извлекает домены из URL-адресов с протоколом (убирая 'www.'),
-    остальные строки оставляет без изменений.
-    Возвращает объединённый список обработанных строк и domain_list.
-    """
+    """Извлекает домены из ссылок и объединяет их с готовым списком доменов."""
     extracted = []  # отдельный список для результатов
     for url in url_list:
         if url.startswith(('http://', 'https://')):
@@ -27,14 +25,7 @@ def extract_domains(url_list, domain_list):
 def clear_p4_comments_actions(
     comments: list[dict], actions: list[dict], priority_dict: dict[int, str]
 ) -> None:
-    """
-    Устанавливает comments и actions в None для записей с priority == "p4".
-
-    Args:
-        comments: список словарей с ключами 'id' и 'comments'
-        actions: список словарей с ключами 'id' и 'actions'
-        priority_dict: словарь {id: priority}
-    """
+    """Убирает комментарии и рекомендации у новостей с приоритетом p4."""
     for item in comments:
         if priority_dict.get(item.get('id')) == 'p4':
             item['comments'] = None

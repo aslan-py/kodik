@@ -70,6 +70,7 @@ class Category(Base, Mixin, ActiveMixin):
     )
 
     def __str__(self) -> str:
+        """Строковое представление для админки — название категории."""
         return self.name
 
     __table_args__ = (
@@ -96,6 +97,7 @@ class Department(Base, Mixin, ActiveMixin):
     )
 
     def __str__(self) -> str:
+        """Строковое представление для админки — название отдела."""
         return self.name
 
     __table_args__ = (
@@ -218,6 +220,7 @@ class CategorizedEvent(Base, Mixin):
     department: Mapped['Department | None'] = relationship('Department')
 
     def __str__(self) -> str:
+        """Строковое представление для админки — id и приоритет события."""
         return f'#{self.id} · {self.priority}'
 
     __table_args__ = (

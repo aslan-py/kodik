@@ -1,3 +1,5 @@
+"""Определение категории новости."""
+
 import json
 from pathlib import Path
 
@@ -7,11 +9,15 @@ PROMPT_PATH = Path(__file__).parent.parent / 'prompts' / 'categorize_prompt.txt'
 
 
 class CategorizedModule(LLMModule):
+    """Определяет категорию каждой новости из списка категорий в БД."""
+
     def __init__(self, llm):
+        """Настраивает формат ответа LLM."""
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(CategorizedResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
+        """Отправляет новости в LLM и сохраняет полученные категории."""
         news = ctx.news or []
         if not news:
             ctx.category_news = []
@@ -34,9 +40,6 @@ class CategorizedModule(LLMModule):
             ctx.category_news = [
                 {
                     'id': item['id'],
-                    # Текст уже есть во входных данных. Просить LLM вернуть
-                    # его повторно означает раздувать ответ до лимита токенов
-                    # на длинных статьях и обрывать категоризацию.
                     'text': item.get('text'),
                     'category': categories_by_id.get(item['id']),
                 }

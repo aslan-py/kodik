@@ -1,3 +1,5 @@
+"""Формирование задач по рекомендации."""
+
 import json
 from pathlib import Path
 
@@ -9,22 +11,19 @@ PROMPT_PATH = (
 
 
 class GenerationTaskModule(LLMModule):
-    """LLM-шаг: список из 1-3 конкретных задач по рекомендованному действию.
-
-    Заполняет `categorized_event.task` (см. capability
-    `bp3/categorized-event-tasks`).
-    """
+    """Формирует от 1 до 3 задач по рекомендации для каждой новости."""
 
     def __init__(self, llm):
-        """Обернуть LLM.
-
-        в structured output по схеме `GenerationTaskResponse`."""
+        """Настраивает формат ответа LLM."""
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(GenerationTaskResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
-        """Для новостей без действия (`action=None`) — `tasks=None` без
-        обращения к LLM; для остальных — один вызов LLM на всю пачку."""
+        """LLM формирует задачи из рекомендаций по каждой новости.
+
+        Новости без рекомендации пропускаются — задачи для них не
+        формируются.
+        """
         actions = ctx.actions or []
         if not actions:
             ctx.tasks = []

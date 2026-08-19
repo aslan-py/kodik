@@ -1,3 +1,5 @@
+"""Ожидаемый результат от выполнения задач."""
+
 import json
 from pathlib import Path
 
@@ -9,20 +11,21 @@ PROMPT_PATH = (
 
 
 class ExpectedResultModule(LLMModule):
-    """LLM-шаг: ожидаемый результат по событию (комментарий+действие+задачи).
+    """Формулирует ожидаемый результат по каждой новости.
 
-    Заполняет `categorized_event.expected_result` (см. capability
-    `bp3/categorized-event-expected-result`).
+    Опирается на комментарий, рекомендацию и список задач.
     """
 
     def __init__(self, llm):
-        """Обернуть LLM в structured output по схеме `ExpectedResultResponse`."""  # noqa
+        """Настраивает формат ответа LLM."""
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(ExpectedResultResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
-        """Для новостей без задач (`tasks` пуст/None) — `expected_result=None`
-        без обращения к LLM; для остальных — один вызов LLM на всю пачку."""
+        """Получает от LLM ожидаемый результат по каждой новости.
+
+        Новости без задач пропускаются — результат для них не формируется.
+        """
         # Берём все новости из category_news
         all_news = ctx.category_news or []
         if not all_news:

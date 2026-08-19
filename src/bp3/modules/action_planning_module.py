@@ -1,3 +1,5 @@
+"""Назначение приоритета, срока и отдела по категории новости."""
+
 from src.bp3.models_llm import BaseModule, ProjectContext
 
 ACTION_RULES = {
@@ -29,16 +31,14 @@ UNKNOWN_CATEGORY_RULE = (
 
 
 class ActionPlanningModule(BaseModule):
-    """Правило-based назначение приоритета/срока/отдела по категории события.
+    """Назначает приоритет, срок и отдел по категории новости.
 
-    Без LLM — чистый словарь `ACTION_RULES`, категория → (приоритет, срок,
-    отдел). Неизвестная или отсутствующая категория берёт
-    `UNKNOWN_CATEGORY_RULE`.
+    Работает по готовым правилам, без обращения к LLM. Если категория
+    неизвестна, применяются правила по умолчанию.
     """
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
-        """Для каждой категоризированной новости заполнить
-        priority/deadline/department."""
+        """Заполняет приоритет, срок и отдел для каждой новости."""
         categorized_news = ctx.category_news or []
 
         priority_list = []

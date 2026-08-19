@@ -1,3 +1,5 @@
+"""Комментарий и рекомендация по действию для новости."""
+
 import json
 from pathlib import Path
 
@@ -10,21 +12,19 @@ PROMPT_PATH = (
 
 
 class CommentActionModule(LLMModule):
-    """LLM-шаг: комментарий и рекомендация по действию для каждой новости.
+    """Составляет комментарий и рекомендацию по каждой новости.
 
-    Использует уже собранные категорию/приоритет/срок/отдел/тональность как
-    контекст промпта.
+    Учитывает уже определённые категорию, приоритет, срок, отдел и
+    тональность.
     """
 
     def __init__(self, llm):
-        """Обернуть LLM в structured output по схеме `CommentActionResponse`."""
+        """Настраивает формат ответа LLM."""
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(CommentActionResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
-        """Собрать контекст по каждой новости и одним вызовом LLM получить
-        комментарий+действие на всю пачку; при сбое LLM — заглушка вместо
-        падения пайплайна."""
+        """Получает от LLM комментарии и рекомендации по всем новостям."""
         categorized_news = ctx.category_news or []
         if not categorized_news:
             ctx.comments = []

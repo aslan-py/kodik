@@ -1,3 +1,5 @@
+"""Определение тональности новости."""
+
 import json
 from pathlib import Path
 
@@ -9,14 +11,19 @@ NOISE_CATEGORY = 'информационный шум'
 
 
 class ToneAnalysisModule(LLMModule):
+    """Определяет, как новость влияет на нашу компанию."""
+
     def __init__(self, llm):
+        """Настраивает формат ответа LLM."""
         super().__init__(llm)
         self.structured_llm = llm.with_structured_output(ToneResponse)
 
     def process(self, ctx: ProjectContext) -> ProjectContext:
-        """Для новостей категории «информационный шум» —
-        `tone_of_news='irrelevant'` без обращения к LLM;
-        для остальных — один вызов LLM на всю пачку."""
+        """Определяет тональность новостей.
+
+        Новостям из категории «информационный шум» сразу ставит
+        «irrelevant», не обращаясь к LLM.
+        """
         news = ctx.news or []
         if not news:
             ctx.tone_of_news = []

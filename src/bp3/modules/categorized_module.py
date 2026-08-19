@@ -27,7 +27,7 @@ class CategorizedModule(LLMModule):
         )
 
         try:
-            response: CategorizedResponse = self.structured_llm.invoke(prompt)
+            response: CategorizedResponse = self.invoke_llm(prompt, ctx)
             categories_by_id = {
                 item.id: item.category for item in response.items
             }

@@ -72,7 +72,7 @@ class CommentActionModule(LLMModule):
         )
 
         try:
-            response: CommentActionResponse = self.structured_llm.invoke(prompt)
+            response: CommentActionResponse = self.invoke_llm(prompt, ctx)
             ctx.comments = [
                 {'id': item.id, 'comments': item.comments}
                 for item in response.items

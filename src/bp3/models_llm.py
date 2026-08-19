@@ -1,8 +1,12 @@
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Literal
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
+
+SYSTEM_PROMPT_PATH = Path(__file__).parent / 'prompts' / 'system_prompt.txt'
 
 
 # ========== Контекст проекта ==========
@@ -54,6 +58,23 @@ class BaseModule(ABC):
 class LLMModule(BaseModule):
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
+
+    def invoke_llm(self, prompt: str, ctx: ProjectContext):
+        """Вызвать self.structured_llm с общим системным промптом (профиль
+        компании, общие правила, защита от prompt-инъекций) + пользова-
+        тельским содержимым конкретного шага.
+
+        `ctx` сейчас не используется — задел под будущую подстановку
+        динамических данных (например, ctx.competitors) в системный
+        промпт без изменения сигнатуры вызовов в модулях-наследниках.
+        """
+        system_prompt = SYSTEM_PROMPT_PATH.read_text(encoding='utf-8')
+        return self.structured_llm.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=prompt),
+            ]
+        )
 
 
 # ========== Конвейер ==========

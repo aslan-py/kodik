@@ -65,9 +65,7 @@ class GenerationTaskModule(LLMModule):
         )
 
         try:
-            response: GenerationTaskResponse = self.structured_llm.invoke(
-                prompt
-            )
+            response: GenerationTaskResponse = self.invoke_llm(prompt, ctx)
             # Сопоставляем id -> список задач из ответа LLM
             generated_tasks_map = {
                 item.id: item.tasks for item in response.items

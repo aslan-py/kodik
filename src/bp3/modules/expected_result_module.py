@@ -81,9 +81,7 @@ class ExpectedResultModule(LLMModule):
         )
 
         try:
-            response: ExpectedResultResponse = self.structured_llm.invoke(
-                prompt
-            )
+            response: ExpectedResultResponse = self.invoke_llm(prompt, ctx)
             generated_map = {
                 item.id: item.expected_result for item in response.items
             }

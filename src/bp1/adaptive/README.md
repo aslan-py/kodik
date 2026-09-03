@@ -76,6 +76,11 @@ docker compose up -d
 - **Пропуск по активности (`is_active`)** — если у конкурента или источника
   флаг `is_active = False`, поиск по задаче не выполняется, в JSON пишется
   `error: is_active=False`.
+- **RSS/Atom и sitemap.xml для новостных источников** — для
+  `SourceType.NEWS` перед HTML-лестницей пробуется RSS/Atom-фид или
+  `sitemap.xml`: дешевле (без браузера и LLM-подбора селекторов) и
+  устойчивее к смене вёрстки. При отсутствии/отказе фида — обычная
+  HTML-лестница без изменений (см. [«RSS/Atom и sitemap.xml»](#rssatom-и-sitemapxml-альтернатива-html-лестнице-для-новостных-источников)).
 
 ---
 
@@ -283,6 +288,59 @@ orch.register_strategy(MyStrategy.strategy_type, MyStrategy())
 `settings.test_tg`, те же настройки, что использует песочница алертов
 BP-5), подключение — `core.mail.send_email`/`core.telegram.send_telegram`
 (см. `openspec/changes/archive/.../add-proxy-provider-health-check`).
+
+---
+
+### RSS/Atom и sitemap.xml (альтернатива HTML-лестнице для новостных источников)
+
+Для источников, классифицированных как `SourceType.NEWS`, `AdaptiveParser.parse()`
+в начале (до HTML-лестницы деградации) пробует RSS/Atom-фид или
+`sitemap.xml` — стабильный, официально предназначенный для машинного
+чтения интерфейс, не требующий ни браузера, ни LLM-подбора селекторов.
+Реализация — [`processing/feed/`](processing/feed/):
+
+- `discovery.py` — обнаружение: разбор `<link rel="alternate"
+  type="application/rss+xml"|"application/atom+xml">` в `<head>` уже
+  полученного HTML (если он есть) + проба конвенциональных путей (`/rss`,
+  `/rss.xml`, `/feed`, `/feed.xml`, `/atom.xml`, `/sitemap.xml`,
+  `/sitemap_index.xml`). Кандидат принимается только по факту успешного
+  разбора (непустой список записей/URL), не по одному HTTP 200.
+- `rss.py` — разбор RSS/Atom через `feedparser`, прямое сопоставление
+  полей в материалы сбора (`title`/`link`/`summary` →
+  `ex_title`/`ex_url`/`ex_text`), без LLM и без CSS-селекторов.
+- `sitemap.py` — разбор `sitemap.xml`/`sitemap_index.xml` (список URL,
+  без заголовка/текста) — кандидаты докачиваются существующим
+  `AdaptiveParser._deep_fetch` (тот же каскад CSS→readability→LLM, что
+  и для HTML-пути), приоритет — записи со свежим `<lastmod>`.
+- `competitor_match.py` — разметка материалов по совпадению с
+  конкурентом: строковое совпадение нормализованного имени (без LLM —
+  тот же класс задачи, что BP-2 уже решает без LLM для чёрных
+  списков/стоп-слов), поле `relevance` (1.0/0.0). Не фильтрует —
+  материал без совпадения всё равно попадает в результат.
+
+Два кэша в `UnifiedCache` (см. «Кэширование» ниже): **обнаружение**
+(URL фида/sitemap на источник или отметка «фида нет», TTL
+`BP1_FEED_CACHE_TTL_SECONDS`, по умолчанию 7 дней) и **материалы** (уже
+распарсенные записи, TTL `BP1_FEED_ITEMS_CACHE_TTL_SECONDS`, по
+умолчанию 1 час) — второй кэш нужен потому, что фид общий на источник, а
+`parse()` вызывается на каждого конкурента: без него один и тот же фид
+скачивался бы заново на каждого конкурента источника. Самокоррекция —
+`BP1_FEED_FAIL_THRESHOLD` (по умолчанию 2) отказов закэшированного фида
+подряд сбрасывают запись обнаружения, следующий прогон пробует заново.
+
+Отсутствие/отказ фида не считается ошибкой источника (circuit breaker
+не срабатывает) — сбор просто продолжается по обычной HTML-лестнице.
+Материалы фида доступны в форме, идентичной HTML-пути
+(`items[0].extra.news[]`), поэтому `bridge.py` и весь конвейер после
+`parse()` не отличают их источник. Область не входит: `SourceType.REGISTRY`/
+`API`/`SPA`/`UNKNOWN` (обнаружение фида не пробуется вовсе), сетевой
+трафик-сниффинг и проба REST/OpenAPI-конвенций (отдельные, ещё не
+реализованные возможности — см. `openspec/changes/add-rss-sitemap-collection/design.md`,
+«Отложено на будущее»).
+
+Подробности решений и контракт поведения —
+`openspec/changes/add-rss-sitemap-collection/` (`design.md`,
+`specs/bp1/rss-sitemap-collection/spec.md`).
 
 ---
 
@@ -643,6 +701,11 @@ asyncio.run(main())
 
 - **Адаптеры** — Redis, TTL 7 дней.
 - **Классификации источников** — Redis, TTL 7 дней.
+- **Обнаружение RSS/Atom/sitemap** — Redis, TTL 7 дней (URL фида/sitemap
+  на источник или отметка «фида нет»).
+- **Материалы фида** — Redis, TTL 1 час (уже распарсенные записи —
+  избегает повторного скачивания одного фида на каждого конкурента
+  источника в рамках прогона).
 - **Профили браузеров** — диск (`cache_dir/profiles`).
 - **HTML-снапшоты** — диск (`cache_dir/snapshots`).
 
@@ -879,6 +942,7 @@ ruff format --check src/bp1/adaptive tests/bp1/adaptive
 - `openai>=1.0.0` — LLM-клиент (`AsyncOpenAI`).
 - `playwright>=1.40` — браузерная автоматизация (BROWSER/STEALTH/HITL).
 - `sqlalchemy>=2.0` — AsyncSession (runner, cli).
+- `feedparser>=6.0` — разбор RSS/Atom (`processing/feed/rss.py`).
 
 Внутренние модули репозитория, от которых зависит пакет:
 `src.bp1.base_parser`, `src.bp1.tasks`, `src.bp1.models`,

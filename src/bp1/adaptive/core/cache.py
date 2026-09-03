@@ -17,7 +17,12 @@ from typing import Any
 from core.config import settings
 
 from ..hostname import try_extract_host
-from ..schemas import AdapterState, ProbedUrl, SourceClassification
+from ..schemas import (
+    AdapterState,
+    FeedDiscovery,
+    ProbedUrl,
+    SourceClassification,
+)
 
 # TTL адаптера по умолчанию — 7 дней (в секундах).
 ADAPTER_TTL_SECONDS = settings.bp1_adapter_ttl_seconds
@@ -30,6 +35,16 @@ ARTICLE_TEXT_TTL_SECONDS = settings.bp1_article_text_ttl_seconds
 
 # TTL кэша пробинга поискового URL по умолчанию — 7 дней (в секундах).
 PROBED_URL_TTL_SECONDS = settings.bp1_probed_url_ttl_seconds
+
+# TTL кэша обнаружения RSS/Atom/sitemap (URL или отметка «фида нет») —
+# длинный, по аналогии с кэшем адаптера (design.md изменения
+# add-rss-sitemap-collection, D5).
+FEED_DISCOVERY_TTL_SECONDS = settings.bp1_feed_cache_ttl_seconds
+
+# TTL кэша уже распарсенных материалов фида — короткий, порядка интервала
+# прогона сбора: без него каждый конкурент источника заново скачивал бы
+# один и тот же фид (design.md D5).
+FEED_ITEMS_TTL_SECONDS = settings.bp1_feed_items_cache_ttl_seconds
 
 # Версия схемы кэша полного текста статьи. Меняется при несовместимых
 # изменениях каскада извлечения (adaptive/processing/parser.py) или формата
@@ -163,6 +178,87 @@ class UnifiedCache:
         if self.redis is None:
             return
         await self.redis.delete(self._classification_key(source_name))
+
+    # ========================================================================
+    # RSS/Atom/sitemap-фид (Redis) — design.md изменения
+    # add-rss-sitemap-collection, D5. Два разных кэша: обнаружение (URL
+    # фида или отметка «фида нет», долгий TTL) и материалы (уже
+    # распарсенные записи, короткий TTL) — разные объекты с разной ценой
+    # промаха, как и у остальных кэшей этого класса (см. комментарий у
+    # TTL-констант выше).
+    # ========================================================================
+
+    def _feed_discovery_key(self, source_name: str) -> str:
+        return f'bp1:feed:{_canonical_source_name(source_name)}'
+
+    def _feed_materials_key(self, source_name: str) -> str:
+        return f'bp1:feed_items:{_canonical_source_name(source_name)}'
+
+    async def get_feed_discovery(
+        self, source_name: str
+    ) -> FeedDiscovery | None:
+        """Получить закэшированный результат обнаружения фида источника."""
+        if self.redis is None:
+            return None
+        raw = await self.redis.get(self._feed_discovery_key(source_name))
+        if not raw:
+            return None
+        try:
+            return FeedDiscovery.model_validate_json(raw)
+        except Exception:
+            return None
+
+    async def set_feed_discovery(
+        self,
+        source_name: str,
+        discovery: FeedDiscovery,
+        ttl: int = FEED_DISCOVERY_TTL_SECONDS,
+    ) -> None:
+        """Сохранить результат обнаружения фида источника (TTL 7 дней)."""
+        if self.redis is None:
+            return
+        await self.redis.set(
+            self._feed_discovery_key(source_name),
+            discovery.model_dump_json(),
+            ex=ttl,
+        )
+
+    async def clear_feed_discovery(self, source_name: str) -> None:
+        """Удалить запись обнаружения фида источника (самокоррекция после
+        повторных отказов подряд)."""
+        if self.redis is None:
+            return
+        await self.redis.delete(self._feed_discovery_key(source_name))
+
+    async def get_feed_materials(
+        self, source_name: str
+    ) -> list[dict[str, Any]] | None:
+        """Получить закэшированные (уже распарсенные) материалы фида."""
+        if self.redis is None:
+            return None
+        raw = await self.redis.get(self._feed_materials_key(source_name))
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return None
+        return data if isinstance(data, list) else None
+
+    async def set_feed_materials(
+        self,
+        source_name: str,
+        materials: list[dict[str, Any]],
+        ttl: int = FEED_ITEMS_TTL_SECONDS,
+    ) -> None:
+        """Сохранить распарсенные материалы фида (TTL — интервал прогона)."""
+        if self.redis is None:
+            return
+        await self.redis.set(
+            self._feed_materials_key(source_name),
+            json.dumps(materials, ensure_ascii=False),
+            ex=ttl,
+        )
 
     # ========================================================================
     # Пробинг поискового URL (Redis)

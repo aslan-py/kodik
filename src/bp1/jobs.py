@@ -64,6 +64,7 @@ __all__ = [
     'collect_all',
     'collect_competitor',
     'collect_source',
+    'collect_source_competitor',
     'register_source',
 ]
 
@@ -387,6 +388,83 @@ async def collect_competitor(
                 competitor_created=created,
                 sources=len(source_ids),
             )
+    finally:
+        await redis_client_instance.close()
+
+
+async def collect_source_competitor(
+    source: str,
+    competitor: str,
+    inn: str | None = None,
+    headless: bool = True,
+    timeout: int | None = None,
+) -> dict[str, Any]:
+    """Собрать ровно одну пару источник + конкурент.
+
+    В отличие от :func:`collect_source`/:func:`collect_competitor` (которые
+    обходят всю матрицу активных связок), трогает ровно одну пару —
+    находит или создаёт ``Source``/``Competitor``/``SearchTask`` для неё
+    (без триггера) и запускает только эту задачу. Источник, которого нет
+    в БД, регистрируется сам (в отличие от :func:`collect_source`, где это
+    осознанное отдельное действие) — тот же приём, что уже использует
+    ``AdaptiveRunner.run_source_competitor``, на который этот job тонко
+    опирается.
+
+    Args:
+        source: Источник в любой форме (``lenta.ru``, ``https://lenta.ru/``).
+        competitor: Название компании (например, ``Сбербанк``).
+        inn: ИНН — нужен для поиска по гос. источникам (fedresurs и др.);
+            если конкурент уже есть в БД без ИНН, задание его дополнит.
+        headless: Запускать браузерные стратегии без окна.
+        timeout: Таймаут парсинга, мс (по умолчанию из настроек).
+
+    Returns:
+        Результат прогона одной задачи (JSON-сериализуемый) — та же форма,
+        что возвращает ``AdaptiveRunner.run_task``.
+    """
+    redis_client = await redis_client_instance.get_client()
+    try:
+        async with AsyncSessionLocal() as session:
+            name = (competitor or '').strip()
+            if not name:
+                return {
+                    'job': 'collect_source_competitor',
+                    'status': 'empty_competitor',
+                }
+
+            # Конкурент: найти или создать (с ИНН) — тот же приём, что
+            # collect_competitor. Делается здесь, а не полагается на
+            # AdaptiveRunner.run_source_competitor(): при создании нового
+            # конкурента тот метод ИНН вовсе не принимает.
+            stmt = select(Competitor).where(Competitor.name == name)
+            found = (await session.execute(stmt)).scalar_one_or_none()
+            if found is None:
+                found = Competitor(name=name, inn=inn or None)
+                session.add(found)
+                await session.flush()
+                await session.commit()
+                logger.info('Конкурент %s создан (id=%s)', name, found.id)
+            elif inn and not found.inn:
+                found.inn = inn
+                await session.commit()
+                logger.info('У конкурента %s проставлен ИНН', name)
+
+            runner = _make_runner(headless, timeout, max_concurrent=None)
+            result = await runner.run_source_competitor(
+                source=source,
+                competitor=name,
+                session=session,
+                redis_client=redis_client,
+            )
+            result['job'] = 'collect_source_competitor'
+            logger.info(
+                'collect_source_competitor: source=%s, competitor=%s, '
+                'status=%s',
+                source,
+                name,
+                result.get('status'),
+            )
+            return result
     finally:
         await redis_client_instance.close()
 

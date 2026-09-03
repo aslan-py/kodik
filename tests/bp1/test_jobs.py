@@ -312,6 +312,117 @@ async def test_collect_competitor_empty_name(monkeypatch):
 
 
 # ============================================================================
+# collect_source_competitor
+# ============================================================================
+
+
+def _patch_pair_runner(monkeypatch, result: dict) -> dict:
+    """Подменяет AdaptiveRunner.run_source_competitor: фиксирует аргументы
+    вызова вместо реального прогона."""
+    captured: dict = {}
+
+    class _FakeRunner:
+        async def run_source_competitor(
+            self, source, competitor, session, redis_client
+        ):
+            captured['source'] = source
+            captured['competitor'] = competitor
+            return dict(result)
+
+    monkeypatch.setattr(jobs, '_make_runner', lambda *a, **kw: _FakeRunner())
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_collect_source_competitor_creates_missing_competitor(
+    monkeypatch,
+):
+    """Конкурента, которого нет в БД, задание создаёт само (с ИНН)."""
+    session = _FakeSession([[]])  # поиск конкурента -> не найден
+    _patch_env(monkeypatch, session)
+    captured = _patch_pair_runner(monkeypatch, {'status': 'ok'})
+
+    result = await jobs.collect_source_competitor(
+        'lenta.ru', 'Сбербанк', inn='7707083893'
+    )
+
+    assert result['job'] == 'collect_source_competitor'
+    assert result['status'] == 'ok'
+    created = session.added[0]
+    assert created.name == 'Сбербанк'
+    assert created.inn == '7707083893'
+    # Раннер вызван ровно для этой пары, не для всей матрицы.
+    assert captured['source'] == 'lenta.ru'
+    assert captured['competitor'] == 'Сбербанк'
+
+
+@pytest.mark.asyncio
+async def test_collect_source_competitor_backfills_inn(monkeypatch):
+    """ИНН проставляется существующему конкуренту, если его не было."""
+    competitor = _Row(id=100, name='Сбербанк', inn=None, is_active=True)
+    session = _FakeSession([[competitor]])
+    _patch_env(monkeypatch, session)
+    _patch_pair_runner(monkeypatch, {'status': 'ok'})
+
+    await jobs.collect_source_competitor(
+        'lenta.ru', 'Сбербанк', inn='7707083893'
+    )
+
+    assert competitor.inn == '7707083893'
+    from src.bp1.models import Competitor
+
+    # Дубль не создан — переиспользован существующий.
+    assert [o for o in session.added if isinstance(o, Competitor)] == []
+
+
+@pytest.mark.asyncio
+async def test_collect_source_competitor_reuses_existing_with_inn(
+    monkeypatch,
+):
+    """Конкурент с уже проставленным ИНН не трогается лишний раз."""
+    competitor = _Row(id=100, name='Сбербанк', inn='7707083893', is_active=True)
+    session = _FakeSession([[competitor]])
+    _patch_env(monkeypatch, session)
+    _patch_pair_runner(monkeypatch, {'status': 'ok'})
+
+    result = await jobs.collect_source_competitor('lenta.ru', 'Сбербанк')
+
+    assert result['status'] == 'ok'
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_collect_source_competitor_empty_name(monkeypatch):
+    """Пустое название не создаёт мусорную запись и не запускает раннер."""
+    session = _FakeSession([])
+    _patch_env(monkeypatch, session)
+
+    result = await jobs.collect_source_competitor('lenta.ru', '   ')
+
+    assert result['status'] == 'empty_competitor'
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_collect_source_competitor_result_is_json_serializable(
+    monkeypatch,
+):
+    """Результат задания сериализуется в JSON — тот же контракт очереди."""
+    competitor = _Row(id=100, name='Сбербанк', inn='7707083893', is_active=True)
+    session = _FakeSession([[competitor]])
+    _patch_env(monkeypatch, session)
+    _patch_pair_runner(
+        monkeypatch,
+        {'status': 'ok', 'strategy': 'FEED', 'source_items': 1},
+    )
+
+    result = await jobs.collect_source_competitor('lenta.ru', 'Сбербанк')
+
+    encoded = json.dumps(result, ensure_ascii=False)
+    assert json.loads(encoded)['job'] == 'collect_source_competitor'
+
+
+# ============================================================================
 # collect_all
 # ============================================================================
 

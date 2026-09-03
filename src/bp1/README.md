@@ -537,6 +537,7 @@ response = await parser.parse(
 - **Пробинг поиска** — [`SearchUrlProber`](src/bp1/adaptive/integration/search_probe.py) перебирает имена query-параметров (`q`, `query`, `text`, …), пробует POST-форму и упрощает запрос (без кавычек / без ОПФ / первое значимое слово), проверяя, есть ли цель в выдаче.
 - **Параллельный сбор** — `AdaptiveRunner.run_all()` выполняет задачи одновременно (`max_concurrent`), каждая со своей сессией БД.
 - **Метрики прогона** — `run_bp1()` возвращает `success_rate`, разбивку по фактически сработавшим стратегиям, по уровням Quality Gate и список источников с низким качеством; отсутствие `crawl4ai`/`playwright` фиксируется предупреждением до прогона.
+- **RSS/Atom и sitemap.xml для новостных источников** — для `SourceType.NEWS` перед HTML-лестницей пробуется RSS/Atom-фид или `sitemap.xml` (дешевле, без браузера и LLM-подбора селекторов); при отсутствии/отказе — обычная HTML-лестница без изменений. Подробнее — [adaptive/README.md](src/bp1/adaptive/README.md#rssatom-и-sitemapxml-альтернатива-html-лестнице-для-новостных-источников).
 
 ### Адаптивный поиск (Adaptive Search)
 
@@ -973,6 +974,11 @@ BP1_ENRICHMENT_ENABLED=true
 # Circuit breaker источников
 SOURCE_CIRCUIT_TTL_SECONDS=86400
 SOURCE_DISABLE_THRESHOLD=3       # подряд отказов -> is_active=False
+
+# RSS/Atom/sitemap для новостных источников (SourceType.NEWS)
+BP1_FEED_CACHE_TTL_SECONDS=604800        # кэш обнаружения фида (URL/«фида нет»), 7 дней
+BP1_FEED_ITEMS_CACHE_TTL_SECONDS=3600    # кэш распарсенных материалов фида, 1 час
+BP1_FEED_FAIL_THRESHOLD=2                # подряд отказов фида до сброса кэша обнаружения
 ```
 
 `BP1_RELEVANCE_MODE=rank` (а не `filter`) — намеренный выбор по умолчанию:

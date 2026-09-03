@@ -205,6 +205,12 @@ class StrategyType(StrEnum):
     WAYBACK = 'WAYBACK'
     STEALTH = 'STEALTH'
     HITL = 'HITL'
+    # Материалы получены через RSS/Atom-фид или sitemap.xml — ранний выход
+    # из AdaptiveParser.parse() до HTML-лестницы (design.md изменения
+    # add-rss-sitemap-collection, D4). Не участвует в _DEGRADATION_ORDER
+    # AgenticOrchestrator — используется только для наблюдаемости
+    # (metrics.strategy_used, «по факту», Шаг 20 плана рефакторинга).
+    FEED = 'FEED'
 
 
 class StrategyResult(BaseModel):
@@ -288,6 +294,21 @@ class SourceRegistrationResult(BaseModel):
     # плана рефакторинга): None — проверка не выполнялась или эндпоинт не
     # ответил. Заполняется, когда register() вызван с probe_search=True.
     search_probe: ProbedUrl | None = None
+
+
+class FeedDiscovery(BaseModel):
+    """Результат обнаружения RSS/Atom/sitemap на источнике (кэш
+    обнаружения, design.md изменения add-rss-sitemap-collection, D5).
+
+    ``feed_url=None`` — явная отметка «обнаружение выполнялось, фида нет»
+    (отличается от отсутствия записи в кэше: отсутствие записи означает
+    «обнаружение ещё не выполнялось»).
+    """
+
+    source_name: str
+    feed_url: str | None = None
+    kind: Literal['rss', 'sitemap'] | None = None
+    fail_count: int = 0
 
 
 class ProbedUrl(BaseModel):

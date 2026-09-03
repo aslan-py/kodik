@@ -33,12 +33,24 @@ from ...logger import new_trace_id
 from ...schemas import (
     AdapterState,
     AdaptiveParseResult,
+    FeedDiscovery,
     SourceClassification,
+    SourceType,
     StrategyResult,
     StrategyType,
 )
 from ...strategies.classifier import SourceClassifier
 from ...strategies.orchestrator import AgenticOrchestrator
+from ..feed import (
+    annotate_materials,
+    discover_feed_async,
+    entries_to_materials,
+    fetch_feed_body_async,
+    parse_rss_entries,
+    parse_sitemap,
+)
+from ..feed.discovery import find_feed_link_in_html
+from ..feed.sitemap import SitemapUrl
 from ..html_cleaner import HtmlCleaner
 from ..llm import AIAgent, LLMClient
 from ..relevance import RelevanceFilter
@@ -116,6 +128,289 @@ class AdaptiveParser:
             self._cache.redis = redis_client
         self._orchestrator.bind_redis(redis_client)
 
+    # ------------------------------------------------------------------
+    # Ранний выход: RSS/Atom-фид и sitemap.xml (design.md изменения
+    # add-rss-sitemap-collection). Пробуется в начале parse(), до
+    # HTML-лестницы деградации — см. вызов в parse() и D4 в design.md.
+    # ------------------------------------------------------------------
+
+    async def _resolve_source_type_cheap(
+        self, source_name: str, url: str
+    ) -> SourceType:
+        """Определяет тип источника без HTTP-запроса.
+
+        Из кэша классификации, если он уже есть; иначе — слепая эвристика
+        по имени/URL (``SourceClassifier.classify`` без ``html``,
+        тот же вызов, что делает ``_resolve_start_strategy`` для холодного
+        старта). Достаточно дёшево, чтобы вызывать перед любым сетевым
+        запросом: не требует ни фетча, ни LLM.
+        """
+        cached = await self._cache.get_classification(source_name)
+        if cached is not None:
+            return cached.source_type
+        blind = await self._classifier.classify(
+            source_name=source_name, source_url=url
+        )
+        return blind.source_type
+
+    async def _try_feed_result(
+        self,
+        url: str,
+        source_name: str,
+        competitor: str,
+        trace_id: str,
+        start: float,
+    ) -> AdaptiveParseResult | None:
+        """Пытается собрать материалы через фид вместо HTML-лестницы.
+
+        Возвращает ``AdaptiveParseResult`` при успехе, иначе ``None`` —
+        вызывающий код (``parse()``) продолжает обычный путь без изменений.
+        """
+        source_type = await self._resolve_source_type_cheap(source_name, url)
+        if source_type != SourceType.NEWS:
+            return None
+
+        materials = await self._get_feed_materials(source_name, url)
+        if not materials:
+            return None
+
+        annotated = annotate_materials(materials, competitor)
+        return self._build_feed_parse_result(
+            url=url,
+            source_name=source_name,
+            materials=annotated,
+            trace_id=trace_id,
+            start=start,
+        )
+
+    async def _get_feed_materials(
+        self, source_name: str, url: str
+    ) -> list[dict[str, Any]] | None:
+        """Материалы фида: кэш материалов -> кэш обнаружения + фетч ->
+        обнаружение с нуля (design.md D5). ``None``, если фида нет или
+        использовать его не удалось.
+        """
+        cached_materials = await self._cache.get_feed_materials(source_name)
+        if cached_materials is not None:
+            return cached_materials
+
+        discovery = await self._cache.get_feed_discovery(source_name)
+
+        if discovery is not None and discovery.feed_url is None:
+            # Обнаружение уже выполнялось на этом источнике — фида нет.
+            # Не пере-пробуем конвенциональные пути при каждом прогоне.
+            return None
+
+        if discovery is not None and discovery.feed_url is not None:
+            return await self._use_known_feed(source_name, discovery)
+
+        return await self._discover_feed_from_scratch(source_name, url)
+
+    async def _use_known_feed(
+        self, source_name: str, discovery: FeedDiscovery
+    ) -> list[dict[str, Any]] | None:
+        """Скачивает и парсит уже известный (закэшированный) URL фида.
+
+        При провале — самокоррекция кэша обнаружения (счётчик отказов,
+        по аналогии с ``AdapterState.fail_count``, Шаг 21 плана
+        рефакторинга): один сбой не сбрасывает запись, повторный подряд —
+        сбрасывает, чтобы следующий прогон провёл обнаружение заново.
+        """
+        try:
+            body = await fetch_feed_body_async(discovery.feed_url)
+        except Exception as exc:
+            self._logger.warning(
+                'Не удалось скачать закэшированный фид %s источника %s: %s',
+                discovery.feed_url,
+                source_name,
+                exc,
+            )
+            body = ''
+
+        materials = (
+            await self._materials_from_body(body, discovery.kind, source_name)
+            if body
+            else []
+        )
+
+        if materials:
+            await self._cache.set_feed_materials(source_name, materials)
+            if discovery.fail_count:
+                await self._cache.set_feed_discovery(
+                    source_name, discovery.model_copy(update={'fail_count': 0})
+                )
+            return materials
+
+        fail_count = discovery.fail_count + 1
+        if fail_count >= constants.FEED_FAIL_THRESHOLD:
+            await self._cache.clear_feed_discovery(source_name)
+            self._logger.warning(
+                'Фид %s источника %s сброшен после %d провалов подряд',
+                discovery.feed_url,
+                source_name,
+                fail_count,
+            )
+        else:
+            await self._cache.set_feed_discovery(
+                source_name,
+                discovery.model_copy(update={'fail_count': fail_count}),
+            )
+        return None
+
+    async def _discover_feed_from_scratch(
+        self, source_name: str, url: str
+    ) -> list[dict[str, Any]] | None:
+        """Обнаружение фида с нуля (конвенциональные пути) + первый разбор.
+
+        Кэширует и положительный, и отрицательный результат (D5) — при
+        отрицательном следующий прогон источника не пере-пробует пути.
+        """
+        found = await discover_feed_async(url)
+        if found is None:
+            await self._cache.set_feed_discovery(
+                source_name, FeedDiscovery(source_name=source_name)
+            )
+            return None
+
+        materials = await self._materials_from_body(
+            found.raw_body, found.kind, source_name
+        )
+        if not materials:
+            await self._cache.set_feed_discovery(
+                source_name, FeedDiscovery(source_name=source_name)
+            )
+            return None
+
+        await self._cache.set_feed_discovery(
+            source_name,
+            FeedDiscovery(
+                source_name=source_name, feed_url=found.url, kind=found.kind
+            ),
+        )
+        await self._cache.set_feed_materials(source_name, materials)
+        return materials
+
+    async def _materials_from_body(
+        self, body: str, kind: str | None, source_name: str
+    ) -> list[dict[str, Any]]:
+        """Разбирает тело ответа фида/sitemap в материалы сбора."""
+        if kind == 'sitemap':
+            entries = parse_sitemap(body)
+            if not entries:
+                return []
+            return await self._sitemap_entries_to_materials(
+                entries, source_name
+            )
+        entries = parse_rss_entries(body)
+        return entries_to_materials(entries)
+
+    async def _sitemap_entries_to_materials(
+        self, entries: list[SitemapUrl], source_name: str
+    ) -> list[dict[str, Any]]:
+        """sitemap.xml не несёт заголовка/текста — только URL (design.md
+        D3), поэтому каждый кандидат докачивается уже существующим
+        ``_deep_fetch`` (тот же каскад CSS->readability->LLM, что и для
+        HTML-пути). Приоритет — записи с более свежим ``lastmod``, если он
+        указан (design.md Risks: sitemap большого сайта может содержать
+        тысячи URL).
+        """
+        ordered = sorted(entries, key=lambda e: e.lastmod or '', reverse=True)
+        limited = ordered[: constants.DEFAULT_MAX_NEWS]
+        # (title, url_abs, url_rel) — sitemap не даёт заголовка; URL как
+        # заголовок используется только сниппет-фолбэком внутри
+        # _deep_fetch, если извлечение полностью провалится.
+        candidates = [(entry.url, entry.url, entry.url) for entry in limited]
+        return await self._deep_fetch(candidates, source_name, selectors={})
+
+    def _build_feed_parse_result(
+        self,
+        url: str,
+        source_name: str,
+        materials: list[dict[str, Any]],
+        trace_id: str,
+        start: float,
+    ) -> AdaptiveParseResult:
+        """Собирает ``AdaptiveParseResult`` в форме, идентичной
+        ``_assemble_items`` (``extra.news`` с материалами) — совместимость
+        с ``bridge.py`` и остальным конвейером по форме данных, не по коду
+        (design.md D4).
+
+        Quality Gate (``_run_quality_gate``) для фид-материалов не
+        вызывается: он завязан на самокоррекцию CSS-адаптера
+        (``AdapterState``), которой у фида нет — фид уже структурирован,
+        отдельная проверка качества для него вне рамок этого изменения.
+        """
+        items = [
+            _make_search_page_item(
+                source_name=source_name, url=url, title=source_name
+            )
+        ]
+        for item in items:
+            extra = item.setdefault('extra', {})
+            extra['news'] = materials
+            extra['relevance_mode'] = 'feed_keyword_match'
+            extra['news_total'] = len(materials)
+            extra['relevance_filtered'] = 0
+            extra['file_saved'] = False
+
+        elapsed = int((time.monotonic() - start) * 1000)
+        return AdaptiveParseResult(
+            status='ok',
+            source_name=source_name,
+            url=url,
+            strategy_used=StrategyType.FEED,
+            items=items,
+            raw_text=None,
+            adapter_version=None,
+            elapsed_ms=elapsed,
+            trace_id=trace_id,
+        )
+
+    async def _maybe_discover_feed_from_html(
+        self, source_name: str, url: str, html: str
+    ) -> None:
+        """Оппортунистическое обнаружение фида по HTML, уже полученному
+        HTML-путём (design.md D1, п.2 — ``<link rel="alternate">``).
+
+        Вызывается только когда фид ещё НЕ пробовался на этом источнике
+        (``_try_feed_result`` уже отработал в начале ``parse()`` и либо не
+        применим (не NEWS), либо не нашёл фида раньше HTML-запроса) — если
+        запись обнаружения уже есть (успешная или нет), ничего не делает,
+        не переоткрывает уже решённый вопрос. Сбоя не бросает: диагностика
+        не должна ронять уже успешный HTML-сбор.
+        """
+        try:
+            source_type = await self._resolve_source_type_cheap(
+                source_name, url
+            )
+            if source_type != SourceType.NEWS:
+                return
+            if await self._cache.get_feed_discovery(source_name) is not None:
+                return
+            link = find_feed_link_in_html(html, url)
+            if link is None:
+                return
+            feed_url, kind = link
+            body = await fetch_feed_body_async(feed_url)
+            materials = await self._materials_from_body(body, kind, source_name)
+            if not materials:
+                return
+            await self._cache.set_feed_discovery(
+                source_name,
+                FeedDiscovery(
+                    source_name=source_name, feed_url=feed_url, kind=kind
+                ),
+            )
+            await self._cache.set_feed_materials(source_name, materials)
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - диагностика, не должна ронять сбор
+            self._logger.debug(
+                'Оппортунистическое обнаружение фида %s не удалось: %s',
+                source_name,
+                exc,
+            )
+
     async def parse(
         self,
         url: str,
@@ -138,6 +433,25 @@ class AdaptiveParser:
         """
         trace_id = new_trace_id()
         start = time.monotonic()
+
+        # 0. Ранний выход: RSS/Atom-фид или sitemap.xml для новостных
+        #    источников (design.md изменения add-rss-sitemap-collection,
+        #    D4). Пробуется ДО HTML-лестницы, не в её составе — фид живёт
+        #    на другом URL (корень источника, не зависит от конкурента) и
+        #    сразу отдаёт структурированные записи, а не HTML для разбора.
+        #    Возвращает None, если источник не новостной, фида нет или
+        #    его использование не удалось — в этом случае ниже выполняется
+        #    обычный HTML-путь без изменений (фид не считается отказом
+        #    источника, specs/bp1/rss-sitemap-collection/spec.md).
+        feed_result = await self._try_feed_result(
+            url=url,
+            source_name=source_name,
+            competitor=competitor,
+            trace_id=trace_id,
+            start=start,
+        )
+        if feed_result is not None:
+            return feed_result
 
         # 1. Проверка кэша адаптеров.
         adapter = await self._cache.get_adapter(source_name)
@@ -189,6 +503,16 @@ class AdaptiveParser:
             html=html,
             classification=classification,
             strategy_result=strategy_result,
+        )
+
+        # 2.2 Оппортунистическое обнаружение фида по уже полученному HTML
+        #     (design.md D1, п.2 — <link rel="alternate">). На этом прогоне
+        #     уже поздно переключаться на фид (HTML-путь уже пошёл), но
+        #     находка кэшируется для следующих прогонов того же источника.
+        #     Ничего не делает, если обнаружение уже когда-то выполнялось
+        #     (успешно или нет) — не переоткрывает то, что уже решено.
+        await self._maybe_discover_feed_from_html(
+            source_name=source_name, url=url, html=html
         )
 
         # 3. Если адаптера нет — анализируем структуру и генерируем адаптер.

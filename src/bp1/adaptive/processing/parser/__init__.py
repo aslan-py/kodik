@@ -14,6 +14,7 @@
 from .constants import (
     ADAPTER_FAIL_THRESHOLD,
     DEFAULT_MAX_NEWS,
+    FEED_FAIL_THRESHOLD,
     MAX_PAGINATION_PAGES,
     MIN_ARTICLE_TEXT_LENGTH,
     MIN_FULL_ARTICLE_TEXT_LENGTH,
@@ -31,6 +32,7 @@ from .url_utils import _is_ad_redirect_url, _is_noise_url, _to_absolute
 __all__ = [
     'ADAPTER_FAIL_THRESHOLD',
     'DEFAULT_MAX_NEWS',
+    'FEED_FAIL_THRESHOLD',
     'MAX_PAGINATION_PAGES',
     'MIN_ARTICLE_TEXT_LENGTH',
     'MIN_FULL_ARTICLE_TEXT_LENGTH',

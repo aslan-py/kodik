@@ -288,6 +288,19 @@ class Settings(BaseSettings):
     bp1_article_text_ttl_seconds: int = 86400 * 7
     bp1_probed_url_ttl_seconds: int = 86400 * 7
 
+    # ===== BP-1 Adaptive (RSS/Atom/sitemap-фид) =====
+    # Два разных кэша: обнаружение (URL фида или отметка "фида нет" — TTL
+    # длинный, как у адаптера) и материалы (уже распарсенные записи фида —
+    # TTL короткий, порядка интервала прогона сбора). Без второго кэша
+    # каждый конкурент источника заново скачивал бы один и тот же фид
+    # (design.md изменения add-rss-sitemap-collection, Decision D5).
+    bp1_feed_cache_ttl_seconds: int = 86400 * 7
+    bp1_feed_items_cache_ttl_seconds: int = 3600
+    # Порог самокоррекции кэша обнаружения — по аналогии с
+    # ADAPTER_FAIL_THRESHOLD (adaptive/processing/parser/constants.py):
+    # один случайный сбой не должен сразу выбрасывать рабочий фид.
+    bp1_feed_fail_threshold: int = 2
+
     # ===== BP-1 Adaptive (режим прогона AdaptiveRunner) =====
     bp1_adaptive_mode: str = 'adaptive'
     bp1_headless: bool = True

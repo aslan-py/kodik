@@ -19,11 +19,14 @@ run/classify/add-source/cache/profile/quality): рабочие сценарии 
     python -m src.bp1.cli competitor "Сбербанк"
     python -m src.bp1.cli competitor "Сбербанк" --inn 7707083893
 
-    # 3. Полный прогон: все источники x все конкуренты
+    # 3. Собрать ровно одну пару источник + конкурент (без всей матрицы)
+    python -m src.bp1.cli source-competitor lenta.ru "Сбербанк"
+
+    # 4. Полный прогон: все источники x все конкуренты
     python -m src.bp1.cli all
     python -m src.bp1.cli all --no-ensure-matrix   # только заведённые связки
 
-    # 4. Поставить новый источник на учёт (категоризация + БД + кэш)
+    # 5. Поставить новый источник на учёт (категоризация + БД + кэш)
     python -m src.bp1.cli add-source https://www.lenta.ru/news
 
 Диагностика (вспомогательные команды):
@@ -131,6 +134,38 @@ def _print_quality_failures(summary: dict[str, Any]) -> None:
         print(f'  низкое качество у источников: {", ".join(low_quality)}')
 
 
+def _print_pair_result(result: dict[str, Any]) -> None:
+    """Печатает результат прогона одной пары источник+конкурент
+    (:func:`~src.bp1.jobs.collect_source_competitor` — не сводка по
+    батчу задач, как :func:`_print_summary`, а один ``RawItem``)."""
+    print()
+    print(_SEPARATOR)
+    status = result.get('status', '?')
+    print(f'Статус: {status}')
+    for key, label in (
+        ('source', 'источник'),
+        ('reason', 'причина'),
+        ('raw_item_id', 'raw_item_id'),
+        ('hash', 'хэш'),
+        ('strategy', 'стратегия'),
+        ('source_items', 'элементов'),
+        ('empty_reason', 'причина пустоты'),
+    ):
+        if result.get(key) is not None:
+            print(f'  {label}: {result[key]}')
+    quality = result.get('quality_levels') or {}
+    failed = {
+        level: info
+        for level, info in quality.items()
+        if isinstance(info, dict) and info.get('failed')
+    }
+    if failed:
+        print('  контроль качества (провалы):')
+        for level, info in failed.items():
+            print(f'    {level:<12} не прошло: {info["failed"]}')
+    print(_SEPARATOR)
+
+
 def _print_summary(summary: dict[str, Any]) -> None:
     """Печатает сводку прогона в человекочитаемом виде."""
     print()
@@ -192,6 +227,21 @@ async def _cmd_all(args: argparse.Namespace) -> None:
         ensure_matrix=not args.no_ensure_matrix,
     )
     _print_summary(summary)
+
+
+async def _cmd_source_competitor(args: argparse.Namespace) -> None:
+    """Сбор по конкретной паре источник + конкурент (без обхода всей
+    матрицы связок)."""
+    from src.bp1.jobs import collect_source_competitor
+
+    result = await collect_source_competitor(
+        args.source,
+        args.competitor,
+        inn=args.inn,
+        headless=not args.no_headless,
+        timeout=args.timeout,
+    )
+    _print_pair_result(result)
 
 
 async def _cmd_add_source(args: argparse.Namespace) -> None:
@@ -404,6 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
 Примеры:
   python -m src.bp1.cli source lenta.ru
   python -m src.bp1.cli competitor "Сбербанк" --inn 7707083893
+  python -m src.bp1.cli source-competitor lenta.ru "Сбербанк"
   python -m src.bp1.cli all
   python -m src.bp1.cli add-source https://www.lenta.ru/news
         """,
@@ -436,6 +487,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_run_options(competitor_parser)
     competitor_parser.set_defaults(func=_cmd_competitor)
+
+    # 2.5. Сбор по конкретной паре источник + конкурент.
+    source_competitor_parser = subparsers.add_parser(
+        'source-competitor',
+        help='Собрать ровно одну пару источник + конкурент '
+        '(без обхода всей матрицы связок)',
+    )
+    source_competitor_parser.add_argument(
+        'source', help='Источник (lenta.ru | https://lenta.ru/)'
+    )
+    source_competitor_parser.add_argument(
+        'competitor', help='Название компании (например, Сбербанк)'
+    )
+    source_competitor_parser.add_argument(
+        '--inn',
+        default=None,
+        help='ИНН — нужен для поиска по гос. реестрам (fedresurs и др.)',
+    )
+    source_competitor_parser.add_argument(
+        '--no-headless',
+        action='store_true',
+        help='Показывать окно браузера (отладка браузерных стратегий)',
+    )
+    source_competitor_parser.add_argument(
+        '--timeout',
+        type=int,
+        default=None,
+        help='Таймаут парсинга, мс (по умолчанию из настроек)',
+    )
+    source_competitor_parser.set_defaults(func=_cmd_source_competitor)
 
     # 3. Полный прогон.
     all_parser = subparsers.add_parser(
